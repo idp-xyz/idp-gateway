@@ -1,12 +1,16 @@
-# DOCUMENTATION ONLY: not validated by agentgateway binary.
-# NOT SECURE FOR PUBLIC DEPLOYMENT. Only bind in an isolated test sandbox
-# with loopback-restricted ingress at network layer. Do not publish port 3000.
-# No real secrets. No authentication policy yet: adding real JWT/extAuthZ
-# is mandatory BEFORE exposing a listener to any untrusted traffic.
-# Based on official agentgateway standalone routing concept (1.7.x).
+# SYNTAX SAMPLE ONLY. Accepted by `agentgateway --validate-only` 1.6.0; never started.
+# NOT SECURE FOR ANY DEPLOYMENT: there is no authentication policy on this route.
+# agentgateway 1.6.0 has no bind-address field for a listener, so starting this file opens
+# the port on every interface of the machine. Do not start it outside an isolated sandbox.
+# No real secrets. For a route with JWT, ExtAuthZ and credential injection that has actually
+# been run, see poc/p1/agentgateway.poc.yaml.
+#
+# Ports: the project reserves 47610-47619 so that it never collides with the usual
+# 3000/8080 development ports. 47610 = this sample's listener, 47619 = its placeholder
+# upstream (nothing listens there), 47611-47617 = the P1 PoC (see poc/p1/README.md).
 gateways:
   demo:
-    port: 3000
+    port: 47610
     protocol: HTTP
 routes:
   - name: mockprovider-demo
@@ -16,5 +20,5 @@ routes:
       - path:
           pathPrefix: /providers/mockcarrier/
     backends:
-      - host: 127.0.0.1:18080
+      - host: 127.0.0.1:47619
         weight: 1
