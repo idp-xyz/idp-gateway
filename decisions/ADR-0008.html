@@ -10,7 +10,7 @@
 <li>需要按租户/账户选择凭证的出站路由采用<strong>模式 A</strong>：网关验证调用方 JWT 后调用 Gatekeeper 的 HTTP ExtAuthZ 端点；允许响应的 <code>Authorization</code> 头即本次请求的 Provider 凭证，网关只把这一个头写到上游请求。</li>
 <li><strong>凭证兑换只有这一条路</strong>。Gatekeeper 不提供"用句柄换凭证正文"的接口：<code>credentials/materialize</code> 不实现，<code>secure_binding_handle</code> 不签发。<code>credentials/prepare</code> 只返回计划，不返回秘密。</li>
 <li>可信上下文由网关从已验签 JWT 与路由常量构造；调用方只能提交账户<strong>申请</strong>（<code>X-Provider-Account</code>），由 PDP 对照授权复核。</li>
-<li>模式 A 用<strong>复制响应头</strong>（<code>includeResponseHeaders</code>）实现，不用 1.7.0 的 <code>backendAuth.key.expression</code>：两者实测结果相同，后者把配置绑在 1.7.0 上而没有换来安全上的好处。</li>
+<li>模式 A 用<strong>复制响应头</strong>（<code>includeResponseHeaders</code>）实现，不用 1.7.0 的 <code>backendAuth.key.expression</code>：两者实测结果相同，后者把配置绑在 1.7.0 上而没有换来安全上的好处。例外只有一种：Provider 要求凭证放在请求头以外的位置（如查询参数），复制响应头做不到，届时按路由单独评估并补测。</li>
 <li>网关到 Gatekeeper 用工作负载 mTLS：网关出示自己的证书并固定 CA 与对端名字，Gatekeeper 从客户端证书取调用方身份，只对网关身份下发凭证。</li>
 <li>模式 C（网关固定凭证）仅用于单账户固定路由；模式 B 暂不采用，保留为回退方案。</li>
 <li>线上契约见 <code>contracts/gatekeeper/openapi.yaml</code> 的 <code>/v1/extauthz/check</code>，网关侧必须配置的项见 <code>poc/p1/README.md</code> 的"默认配置不安全的地方"。</li>
@@ -35,5 +35,5 @@
 <li>PoC 的遗留问题（重复 <code>Host</code> 头被接受、请求头只能按黑名单删除、监听地址不可限制、PDP 不可用与拒绝不可区分）在批准前需要处置或接受。</li>
 </ul>
 <h2 id="h-7">变更与回退条件</h2>
-<p>需由架构负责人、对应产品 Owner、安全负责人及运行负责人具名复核；在相关 PoC、负向测试、容量与灾备验证未完成前保持 Proposed。若最终锁定的版本上同一 PoC 不通过，或真实 Gatekeeper 的延迟/可用性无法满足受批准目标，重新评估模式 B，而非自动维持本决策。</p>
+<p>需由架构负责人、对应产品 Owner、安全负责人及运行负责人具名复核；在相关 PoC、负向测试、容量与灾备验证未完成前保持 Proposed。若最终锁定的版本上同一 PoC 不通过，重新评估本决策。若真实 Gatekeeper 的延迟/可用性无法满足受批准目标，按以下顺序评估，而非自动维持本决策：先评估 gRPC ExtAuthZ 加短时效决策缓存（agentgateway 文档写明缓存只支持 gRPC 协议，HTTP 协议每个请求都会调用 PDP；缓存会让撤销最多延后一个 TTL；两者本 PoC 均未测），仍不满足再评估模式 B。</p>
 </article><div class="doc-footer-nav"><a href="../index.html">← 文档总览</a></div><div class="footer">IDP Gateway V1.0 · 设计候选 · 文件可离线阅读 · 正式验收 / 审批 / 生产验证尚未完成</div></main></div></body></html>
