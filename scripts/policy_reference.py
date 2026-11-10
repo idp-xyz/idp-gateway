@@ -13,7 +13,7 @@ from typing import Mapping, Any
 # encoded or double-encoded dot, slash or NUL), no empty, "." or ".." segment, no trailing
 # slash and no ";params". Anything else is denied rather than normalised: the PDP must not
 # guess how the gateway or the provider will decode it. The PoC gateway route applies the
-# same expression (poc/p1/agentgateway.poc.yaml); keep the two identical.
+# same expression (tests/acceptance/blackbox/agentgateway.poc.yaml); keep the two identical.
 CANONICAL_PATH = re.compile(r'(?:/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+')
 
 

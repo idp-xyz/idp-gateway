@@ -14,4 +14,4 @@
 | [ADR-0008](ADR-0008.md) | 出站凭证经 HTTP ExtAuthZ 响应头按请求注入 |
 | [ADR-0009](ADR-0009.md) | 进入开发阶段的仓库结构与 Go 技术基线 |
 
-ADR-0001 至 0007 随原始设计基线交付。ADR-0008 是其后依据 [P1 PoC 报告](../poc/p1/README.md) 的实测结果提出的。
+ADR-0001 至 0007 随原始设计基线交付。ADR-0008 是其后依据 [P1 PoC 报告](../../tests/acceptance/blackbox/README.md) 的实测结果提出的。

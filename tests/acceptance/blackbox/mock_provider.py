@@ -111,7 +111,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--port', type=int, required=True)
     ap.add_argument('--name', required=True)
-    ap.add_argument('--state', required=True, help='JSON written by run_poc.py')
+    ap.add_argument('--state', required=True, help='JSON written by run.py')
     a = ap.parse_args()
     state = json.loads(open(a.state, encoding='utf-8').read())
     CFG.update(name=a.name, admin_secret=state['admin_secret'], redirect_port=state['ports']['forbidden'],

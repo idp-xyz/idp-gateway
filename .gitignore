@@ -1,5 +1,21 @@
+# Go build and test outputs
+/bin/
+coverage.out
+*.test
+*.prof
+# `go build ./cmd/<name>` at the repository root writes the binary here under the command's
+# name. Keep the leading slash: unanchored, the pattern would also ignore cmd/<name>/.
+/gateway-*
+
+# Local multi-repository workspace only
+go.work
+go.work.sum
+
+# Python tooling (contract checks and the black-box runner)
 .venv/
 __pycache__/
 *.pyc
-# PoC runtime output: keys, rendered config and process logs are regenerated on every run.
-poc/p1/.run/
+
+# Black-box runtime output: keys, certificates, rendered config, the binary under test and
+# process logs are regenerated on every run.
+tests/acceptance/blackbox/.run/

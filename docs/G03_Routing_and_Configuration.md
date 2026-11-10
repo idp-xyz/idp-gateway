@@ -9,7 +9,7 @@
 
 **单一配置事实权威**：Gateway 的正式 Desired Snapshot 由受控 Gateway Config/Publisher 持有，引用 Fabric 的批准记录。运行时 agentgateway 的观察状态仅是 Applied/Observed Evidence，不是另一个可变批准源。Fabric API Catalog 的文档可见性不自动转换为运行时 Route 可用性。
 
-![受控发布链](../diagrams/04_publication_flow.svg)
+![受控发布链](diagrams/04_publication_flow.svg)
 
 ## 1. 配置资产模型
 
@@ -26,7 +26,7 @@
 | `DeploymentSnapshot` | 一次完整已批准配置制品 | Gateway Publisher | 只追加、不可变、带审批依据 |
 | `ObservedState` | 各运行副本真实摘要与健康 | Gateway Reconciler | 与批准状态不得混淆 |
 
-参考结构：`contracts/gateway/route-intent.schema.json` 和 `gateway/policies/egress-policy.example.json`。这些是我们的**中立意图模型**，不是 agentgateway 原生命令格式。
+参考结构：`contracts/gateway/route-intent.schema.json` 和 `contracts/gateway/policies/egress-policy.example.json`。这些是我们的**中立意图模型**，不是 agentgateway 原生命令格式。
 
 ## 2. 路由解析规则
 
@@ -95,9 +95,9 @@ ACTIVE → SUPERSEDED（被更新的 ACTIVE 发布取代，含回滚发布）
 
 ## 7. 示例资产与检查方式
 
-- `gateway/config/agentgateway.local.example.yaml`：基于官方路由形态的本地**占位样例**，仅使用 loopback upstream，已通过 agentgateway 1.6.0 与 1.7.0 的 `--validate-only` 语法检查但从未启动；实际运行过的配置见 `poc/p1/agentgateway.poc.yaml`。
+- `deploy/agentgateway/agentgateway.local.example.yaml`：基于官方路由形态的本地**占位样例**，仅使用 loopback upstream，已通过 agentgateway 1.6.0 与 1.7.0 的 `--validate-only` 语法检查但从未启动；实际运行过的配置见 `tests/acceptance/blackbox/agentgateway.poc.yaml`。
 - `contracts/gateway/route-intent.schema.json`：中立 RouteIntent JSON Schema。
-- `gateway/policies/egress-policy.example.json`：经过显式枚举的 Provider Operation 白名单示例。
+- `contracts/gateway/policies/egress-policy.example.json`：经过显式枚举的 Provider Operation 白名单示例。
 - `scripts/validate_baseline.py`：离线 JSON/YAML/Markdown 与示例静态检查，不代替官方配置 schema 或运行时验收。
 
 ## 8. 资料来源与证据界限
@@ -150,7 +150,7 @@ Routes 页面仅展示 RouteIntent/Observed Config 的差异与配置来源。Co
 
 ### 10.2 ProviderAccount 流量与健康策略（正式设计）
 
-`gateway/policies/traffic-policy.schema.json` 规定配额维度、协调方式、超时、并发、连接和熔断意图。运维应看到 `gateway_429` 与 `provider_429` 不同来源。
+`contracts/gateway/policies/traffic-policy.schema.json` 规定配额维度、协调方式、超时、并发、连接和熔断意图。运维应看到 `gateway_429` 与 `provider_429` 不同来源。
 
 - 单 ProviderAccount 的共享额度，应按账户硬上限与各租户/应用子配额同时判断；对全局一致性有要求的场景使用经验证的协调器。
 - 协调器不可用，必须按配置明确 `REJECT` 或保守本地上限，绝不无上限放行。
@@ -160,7 +160,7 @@ Routes 页面仅展示 RouteIntent/Observed Config 的差异与配置来源。Co
 
 ### 10.3 协议兼容矩阵
 
-参考 `tests/protocol-compatibility.csv`，各能力的执行状态初始为 `NOT_RUN`。对 gRPC 需测 HTTP/2、unary、client/server/bidi streams、metadata/trailer/status；对 HTTP 测 chunked、SSE、二进制、大包、HEAD/OPTIONS、路径规范化和编码；超时取消和连接清理亦需验证。支持清单应随 agentgateway 镜像 digest 固定。
+参考 `tests/acceptance/protocol-compatibility.csv`，各能力的执行状态初始为 `NOT_RUN`。对 gRPC 需测 HTTP/2、unary、client/server/bidi streams、metadata/trailer/status；对 HTTP 测 chunked、SSE、二进制、大包、HEAD/OPTIONS、路径规范化和编码；超时取消和连接清理亦需验证。支持清单应随 agentgateway 镜像 digest 固定。
 
 
 ## 请求 / 响应映射的证据和变更边界

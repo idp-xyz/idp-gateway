@@ -19,7 +19,7 @@ ROOT=Path(__file__).resolve().parents[1]
 # provider registry. In a deployment that registry is API Fabric's approved provider catalogue;
 # offline it defaults to the example below. The reserved-name lists that follow are kept as a
 # second, independent check and are not what makes a destination acceptable.
-DEFAULT_PROVIDER_REGISTRY=ROOT/'gateway/policies/egress-policy.example.json'
+DEFAULT_PROVIDER_REGISTRY=ROOT/'contracts/gateway/policies/egress-policy.example.json'
 RESERVED_SUFFIXES=('.internal','.local','.localhost','.test','.invalid','.onion','.home.arpa')
 RESERVED_HOSTS={'localhost','metadata.google.internal','169.254.169.254','metadata.aws.internal'}
 SENSITIVE_KEYS={'password','client_secret','secret_value','api_key','access_token','refresh_token','private_key','authorization','bearer_token'}

@@ -1,5 +1,5 @@
 # P1 PoC — one more route for agentgateway.poc.yaml. NOT a configuration file on its own:
-# run_poc.py appends the items under `routes` below to the `routes` of agentgateway.poc.yaml,
+# run.py appends the items under `routes` below to the `routes` of agentgateway.poc.yaml,
 # and only when the binary's validator accepts the result. 1.7.0 does; 1.6.0 rejects
 # backendAuth.key.expression, and the cases for this route are then reported as SKIP.
 # Keep `routes` the only key of this file.

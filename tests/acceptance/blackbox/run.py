@@ -9,9 +9,9 @@ meet its expectation is reported as FAIL, not adjusted. A case for a route the b
 own validator does not accept is reported as SKIP.
 
 Usage (from the repository root):
-    .venv/bin/python poc/p1/run_poc.py                              the agentgateway on PATH
-    .venv/bin/python poc/p1/run_poc.py --agentgateway /path/to/bin  another build of it
-Each agentgateway version writes its own evidence file, poc/p1/evidence/p1-run-agentgateway-<version>.json.
+    .venv/bin/python tests/acceptance/blackbox/run.py                              the agentgateway on PATH
+    .venv/bin/python tests/acceptance/blackbox/run.py --agentgateway /path/to/bin  another build of it
+Each agentgateway version writes its own evidence file, tests/acceptance/blackbox/evidence/p1-run-agentgateway-<version>.json.
 """
 from __future__ import annotations
 import argparse, base64, datetime, hashlib, hmac, http.client, json, os, platform, secrets, shutil, socket, subprocess, sys, threading, time
@@ -26,7 +26,7 @@ from jsonschema import Draft202012Validator
 import pki
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parents[1]
+ROOT = HERE.parents[2]
 RUN = HERE / '.run'
 TLS = RUN / 'tls'
 CONFIG = HERE / 'agentgateway.poc.yaml'
@@ -1110,7 +1110,7 @@ def _(c):
 def _(c):
     # Observation, not a check: what the same binary does when nobody supplies a session key.
     c.note('start_without_session_key_rewrites_config_file', S.default_start_rewrites)
-    c.note('reviewed_configuration', 'poc/p1/agentgateway.poc.yaml' + (' + poc/p1/agentgateway.poc.key-expression.yaml' if S.overlay_accepted else ''))
+    c.note('reviewed_configuration', 'tests/acceptance/blackbox/agentgateway.poc.yaml' + (' + tests/acceptance/blackbox/agentgateway.poc.key-expression.yaml' if S.overlay_accepted else ''))
     c.check('the file the gateway is running from is byte-identical to the reviewed configuration',
             RUN_CONFIG.read_bytes() == S.config_bytes and S.config_bytes.startswith(CONFIG.read_bytes()))
     c.check('the gateway is serving while this is checked', gw('GET', TRACKING + '/TRK-1', blue())['status'] == 200)
@@ -1286,20 +1286,20 @@ def main() -> int:
         'title': 'IDP Gateway P1 PoC: real agentgateway, mock Gatekeeper, mock provider',
         'started_at_utc': started.isoformat(), 'finished_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
         'operator': sh(['git', 'config', 'user.name']), 'host': platform.platform(), 'python': sys.version.split()[0],
-        'command': ' '.join(['.venv/bin/python', 'poc/p1/run_poc.py'] + sys.argv[1:]),
+        'command': ' '.join(['.venv/bin/python', 'tests/acceptance/blackbox/run.py'] + sys.argv[1:]),
         'repository_commit': sh(['git', 'rev-parse', 'HEAD']),
         # Evidence files are this runner's output, not its input: a run on a second version
         # must not count the first version's fresh evidence as a modified repository.
         # (A porcelain line is "XY path"; X may be a blank that sh() has stripped off the first line.)
         'repository_dirty_files': len([l for l in sh(['git', 'status', '--porcelain', '--untracked-files=all']).splitlines()
-                                       if l.strip() and not l.split(None, 1)[-1].strip('"').startswith('poc/p1/evidence/')]),
-        'repository_dirty_files_ignores': 'poc/p1/evidence/',
+                                       if l.strip() and not l.split(None, 1)[-1].strip('"').startswith('tests/acceptance/blackbox/evidence/')]),
+        'repository_dirty_files_ignores': 'tests/acceptance/blackbox/evidence/',
         'agentgateway': {'version': version,
                          'binary_sha256': hashlib.sha256(Path(binary).read_bytes()).hexdigest(),
-                         'config_file': 'poc/p1/agentgateway.poc.yaml',
+                         'config_file': 'tests/acceptance/blackbox/agentgateway.poc.yaml',
                          'config_sha256': hashlib.sha256(CONFIG.read_bytes()).hexdigest(),
                          'native_validation': validation['base_said'],
-                         'overlay_file': 'poc/p1/agentgateway.poc.key-expression.yaml',
+                         'overlay_file': 'tests/acceptance/blackbox/agentgateway.poc.key-expression.yaml',
                          'overlay_sha256': hashlib.sha256(OVERLAY.read_bytes()).hexdigest(),
                          'overlay_accepted_by_this_binary': S.overlay_accepted,
                          'overlay_native_validation': validation['overlay_said'],
@@ -1309,7 +1309,7 @@ def main() -> int:
         'policy_reference_sha256': hashlib.sha256((ROOT / 'scripts' / 'policy_reference.py').read_bytes()).hexdigest(),
         'mocks_sha256': {f: hashlib.sha256((HERE / f).read_bytes()).hexdigest()
                          for f in ('mock_gatekeeper.py', 'mock_broker.py', 'mock_provider.py', 'pki.py')},
-        'front_proxy': {'image': FRONT_IMAGE, 'version': front_version, 'config_file': 'poc/p1/front.nginx.conf',
+        'front_proxy': {'image': FRONT_IMAGE, 'version': front_version, 'config_file': 'tests/acceptance/blackbox/front.nginx.conf',
                         'config_sha256': hashlib.sha256(FRONT_CONF.read_bytes()).hexdigest(),
                         'runs_as': 'container on the host network, unprivileged user, read-only root, no capabilities'},
         'workload_identities': pki.ID,

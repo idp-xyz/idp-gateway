@@ -14,8 +14,8 @@ import diagnostic_reference
 from diagnostic_reference import authorize_capture
 from policy_reference import EgressRequest, TrustedPrincipal, evaluate
 
-POLICY = json.loads((R / 'gateway/policies/egress-policy.example.json').read_text(encoding='utf-8'))
-GRANT = json.loads((R / 'gateway/policies/diagnostic-capture.example.json').read_text(encoding='utf-8'))
+POLICY = json.loads((R / 'contracts/gateway/policies/egress-policy.example.json').read_text(encoding='utf-8'))
+GRANT = json.loads((R / 'contracts/gateway/policies/diagnostic-capture.example.json').read_text(encoding='utf-8'))
 PREFIX = '/providers/mockcarrier/v1/tracking'
 NOW = datetime.fromisoformat('2026-11-10T08:05:00+00:00')
 

@@ -13,7 +13,7 @@
 
 **禁止的捷径**：仅验证 IDP JWT 就放行全部 Provider；相信 `X-Account-ID` 或 `X-Tenant-ID` 作为授权事实；把内部 IDP JWT 原样传给 FedEx；把第三方 Secret 广泛下发给每个业务服务。
 
-![多租户安全与凭证链](../diagrams/02_egress_sequence.svg)
+![多租户安全与凭证链](diagrams/02_egress_sequence.svg)
 
 ## 1. 信任域与参与主体
 
@@ -76,7 +76,7 @@ ALLOW = TrustedCaller ∧ AudienceValid ∧ TenantBound ∧ ActiveGrant ∧
 - 模式 A：Gatekeeper 经可信 ExtAuthZ 返回受限 Header 注入信息（可能包含短期 Provider Token）。只允许 Gateway 授权通道处理，必须禁止日志泄密并验证缓存风险。
 - 模式 B：Gateway 通过受限本地 Broker/Sidecar 获取 Token 并注入，减少网络传播面，但增加独立部署和通信契约。
 - 模式 C：固定 Secret 引用通过 agentgateway BackendAuth；适合固定账户，不适合动态租户账户。
-- **P1 PoC 结果**（agentgateway 1.6.0 与 1.7.0 + Mock Gatekeeper/Provider，非正式验收）：模式 A 经 HTTP ExtAuthZ 响应头注入跑通并做到双租户账户隔离，网关到 PDP 为工作负载 mTLS；模式 B 用 Mock 本地 Broker 跑通，隔离相同，代价是多一个持有凭证的本地组件；模式 C 跑通，但所有租户共用同一账户。见 [P1 PoC 报告](../poc/p1/README.md) 与 [ADR-0008](../decisions/ADR-0008.md)。
+- **P1 PoC 结果**（agentgateway 1.6.0 与 1.7.0 + Mock Gatekeeper/Provider，非正式验收）：模式 A 经 HTTP ExtAuthZ 响应头注入跑通并做到双租户账户隔离，网关到 PDP 为工作负载 mTLS；模式 B 用 Mock 本地 Broker 跑通，隔离相同，代价是多一个持有凭证的本地组件；模式 C 跑通，但所有租户共用同一账户。见 [P1 PoC 报告](../tests/acceptance/blackbox/README.md) 与 [ADR-0008](adr/ADR-0008.md)。
 
 **最初版本不能假设动态凭证插入对所有协议都可原生实现**；必须以真实版本和 extAuthz 回包机制实测，必要时在受控 sidecar 实现，严禁因此开放任意 Header 注入。
 
@@ -172,7 +172,7 @@ Gateway 的内部授权与 Provider 认证**是两个不同的交易**。`Gateke
 | HMAC / 私有签名 | 签名确切的**最终外发**方法/路径/query/body/hash；必要时独立可信 Signer | 签名前后 Body 变更、时钟偏移、重放和密钥泄露 |
 | mTLS | 客户端证书/私钥仅存于受控工作负载/密钥设施 | 错误证书、链不受信、过期/撤销、跨租户复用 |
 
-`gateway/policies/credential-binding.schema.json` 是使用授权意图，绝不允许存真实 Token。**不应默认让 agentgateway 原生处理所有类型**；必须经选定版本的真实能力对照，必要时开发独立、只执行最小权限签名/注入的扩展。
+`contracts/gateway/policies/credential-binding.schema.json` 是使用授权意图，绝不允许存真实 Token。**不应默认让 agentgateway 原生处理所有类型**；必须经选定版本的真实能力对照，必要时开发独立、只执行最小权限签名/注入的扩展。
 
 **撤销**：账户禁用和 AccessGrant 撤销独立于慢速 Route 发布；必须保证新 CredentialUse 无法越过最新撤销代次。缓存必须绑定 PolicyVersion/RevocationEpoch 并有硬 TTL；对高风险请求默认实时 PDP 判断，PDP/Broker/Secret 不可用时拒绝新增凭证注入，不得自动 fail-open。
 
@@ -185,7 +185,7 @@ Gateway 的内部授权与 Provider 认证**是两个不同的交易**。`Gateke
 
 ### 11.2 安全按需诊断
 
-`gateway/policies/diagnostic-capture.schema.json` 与 `contracts/gateway/diagnostic-event.schema.json` 定义 CaptureGrant 与四阶段证据。默认只收集元数据；如需正文，CaptureGrant 必须具备 Route、Tenant、用途、审批人、开始/结束时间、保留期、消息大小上限和脱敏规则，并且**开始时刻严格早于到期时刻**（见离线语义校验及真实服务端验收）。
+`contracts/gateway/policies/diagnostic-capture.schema.json` 与 `contracts/gateway/diagnostic-event.schema.json` 定义 CaptureGrant 与四阶段证据。默认只收集元数据；如需正文，CaptureGrant 必须具备 Route、Tenant、用途、审批人、开始/结束时间、保留期、消息大小上限和脱敏规则，并且**开始时刻严格早于到期时刻**（见离线语义校验及真实服务端验收）。
 
 所有捕获和导出都需要后端 ABAC 与不可变审计；对二进制/gRPC Streaming 只记录有界元数据而不承诺完整正文。开发者无权借由 Agentgateway 原生 UI 或日志绕过这层保护。
 

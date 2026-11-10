@@ -3,14 +3,14 @@
 # Neither version has a bind-address field for a listener, so starting this file opens
 # the port on every interface of the machine. Do not start it outside an isolated sandbox.
 # Started without a SESSION_KEY in its environment, 1.7.0 also writes a generated key into
-# this file (see poc/p1/README.md).
+# this file (see tests/acceptance/blackbox/README.md).
 # No real secrets. For a route with JWT, ExtAuthZ and credential injection that has actually
-# been run, see poc/p1/agentgateway.poc.yaml.
+# been run, see tests/acceptance/blackbox/agentgateway.poc.yaml.
 #
 # Ports: the project reserves 27610-27620 so that it never collides with the usual
 # 3000/8080 development ports, and stays below the kernel's ephemeral port range
 # (Linux default 32768-60999). 27610 = this sample's listener, 27619 = its placeholder
-# upstream (nothing listens there), 27611-27618 and 27620 = the P1 PoC (see poc/p1/README.md).
+# upstream (nothing listens there), 27611-27618 and 27620 = the P1 PoC (see tests/acceptance/blackbox/README.md).
 gateways:
   demo:
     port: 27610

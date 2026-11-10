@@ -8,7 +8,7 @@
 
 本项目**不是自研通用代理引擎**，而是以 agentgateway 开源数据面为首选候选，为多个 IDP 产品建设可审计的 **Ingress / Egress / AI Gateway** 部署与配置能力。Gatekeeper 是内部身份、第三方账户授权和外部凭证治理权威；API Fabric 拥有 API 契约与治理发布权；Gateway 为访问策略执行点（PEP）；领域上下文保留对象级授权、业务状态、Port/ACL。
 
-![总体系统上下文](../diagrams/01_system_context.svg)
+![总体系统上下文](diagrams/01_system_context.svg)
 
 ### 0.1 价值目标
 
@@ -22,7 +22,7 @@
 
 ## 1. 使用者、边界与流程
 
-**使用者**：内部业务产品服务账户、外部 API 客户、开发者、平台运维、安全管理员、API Fabric 审批人与 Gatekeeper 凭证管理员。实际人工 UI 不在本期必交范围；同版增补的 Gateway Console 原型与 75 条 UX 用例已使 STD-CP4 适用（Manifest `user_interface=true`），其扩展在 P1 PoC 结论落地前冻结，见 `governance/README.md`。
+**使用者**：内部业务产品服务账户、外部 API 客户、开发者、平台运维、安全管理员、API Fabric 审批人与 Gatekeeper 凭证管理员。实际人工 UI 不在本期必交范围；同版增补的 Gateway Console 原型与 75 条 UX 用例已使 STD-CP4 适用（Manifest `user_interface=true`），其扩展在 P1 PoC 结论落地前冻结，见 `docs/governance/README.md`。
 
 **网络信任域**：公网入口、内部业务入口、内部第三方出口、AI 入口、控制面与密钥域独立定义。一个统一产品名称或配置标准不意味着单一公共故障域。内部服务间通信不默认强制经中心网关；如组织决定全部强制走 Internal Gateway，须另补服务拓扑、延迟预算、容灾和可用性 ADR。
 
@@ -32,7 +32,7 @@
 
 ## 2. 功能性需求（FR）
 
-需求状态均为 **PROPOSED**；用例和 PoC 检查映射见 G06 和 `tests/acceptance_matrix.csv`。
+需求状态均为 **PROPOSED**；用例和 PoC 检查映射见 G06 和 `tests/acceptance/acceptance_matrix.csv`。
 
 | ID | Must/Should | 需求 | 验收观察点 |
 |---|---|---|---|
@@ -134,7 +134,7 @@
 
 ## 5. 需求追溯
 
-`GW-FR-*`、`GW-NFR-*` 追溯到 `tests/acceptance_matrix.csv` 中的验收案例；正式实施前应将高风险 MUST 逐项补充负责人、环境、证据位置和实际结果。G02 负责系统边界，G03 路由发布，G04 安全，G05 工程执行，G06 测试门禁。**本版仅提供候选规范与部分可运行离线检查，不等于真实生产测试通过。**
+`GW-FR-*`、`GW-NFR-*` 追溯到 `tests/acceptance/acceptance_matrix.csv` 中的验收案例；正式实施前应将高风险 MUST 逐项补充负责人、环境、证据位置和实际结果。G02 负责系统边界，G03 路由发布，G04 安全，G05 工程执行，G06 测试门禁。**本版仅提供候选规范与部分可运行离线检查，不等于真实生产测试通过。**
 
 
 ## 6. Gateway Operations UI/UX 范围补充（G01 · V1.0 同版更新）
@@ -163,7 +163,7 @@ Gateway Operations 对外部第三方 API 不得只展示状态码与 Trace ID�
 
 ## 7. 生产阻断缺口的正式需求收敛（V1.0 同版）
 
-本次由原 `30 FR / 12 NFR` 扩充为 **50 FR / 19 NFR**。其中 `GW-FR-031..048` 为明确的 MUST；`GW-FR-049..050` 为 SHOULD。旧 ID 保留不重排，新增用例见 `tests/acceptance_matrix.csv`，均为 `NOT_RUN`。
+本次由原 `30 FR / 12 NFR` 扩充为 **50 FR / 19 NFR**。其中 `GW-FR-031..048` 为明确的 MUST；`GW-FR-049..050` 为 SHOULD。旧 ID 保留不重排，新增用例见 `tests/acceptance/acceptance_matrix.csv`，均为 `NOT_RUN`。
 
 **最小交付能力与非目标**：
 

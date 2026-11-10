@@ -33,7 +33,7 @@ V0 不包含企业级漏洞扫描、网关运行测试、服务认证性能或�
 9. **Provider 限流**：多租户与共享 Account 配额不互相挤占、可明确区分 Provider 429 与 Gateway 429。
 10. **运营审计**：能通过 Trace 和 Snapshot 信息重构授权事实、上游状态及发布责任；日志中没有 Secret/Token。
 
-`tests/acceptance_matrix.csv` 提供逐条 ID、FR 映射、前置条件、预期结果、状态与证据占位标记；没有运行过的行保持 `NOT_RUN`，不把自带 Mock 逻辑测试伪装成运行验证。
+`tests/acceptance/acceptance_matrix.csv` 提供逐条 ID、FR 映射、前置条件、预期结果、状态与证据占位标记；没有运行过的行保持 `NOT_RUN`，不把自带 Mock 逻辑测试伪装成运行验证。
 
 ## 3. 风险优先验证矩阵
 
@@ -76,7 +76,7 @@ V0 不包含企业级漏洞扫描、网关运行测试、服务认证性能或�
 - **文档**：G01–G06 Markdown + 对应 HTML，统一索引 `index.html`；每份文档需包含权威、约束、验证。
 - **ADR**：明确选型、Ingress/Egress/AI 分池、Gatekeeper 认证/凭证、Fabric 发布边界、BIP 取消、Runtime/失败策略、ACL。
 - **机器资产**：Gatekeeper OpenAPI、RouteIntent JSON Schema、AuthZ Decision Schema、Policy 样例、agentgateway 本地示例、Mock 数据。
-- **测试**：`tests/acceptance_matrix.csv`、安全与契约离线测试、真实测试证据目录 `tests/evidence/`。
+- **测试**：`tests/acceptance/acceptance_matrix.csv`、安全与契约离线测试、真实测试证据目录 `tests/evidence/`。
 - **Manifest**：技术 Profile 采用及六门禁的候选状态，**具名责任人与审批不得虚构**。
 - **引用资料**：官方文档来源、规范版本、依赖和技术适用性保留条件。
 
@@ -110,8 +110,8 @@ V0 不包含企业级漏洞扫描、网关运行测试、服务认证性能或�
 
 ## 11. 生产阻断缺口的新增追溯与准入规则
 
-- 功能总量：**50 FR + 19 NFR**。原 30 FR / 12 NFR 的编号不变，新增 `GW-FR-031..050`、`GW-NFR-13..19`，逐项追溯 `tests/acceptance_matrix.csv`；新增 **20+7** 个对应运行用例，全部 NOT_RUN。
-- 新增 `tests/protocol-compatibility.csv`、`tests/operational-exercises.csv` 和 `governance/gap-remediation-matrix.csv` 作为执行清单，不得把设计文本映射为 PASS。
+- 功能总量：**50 FR + 19 NFR**。原 30 FR / 12 NFR 的编号不变，新增 `GW-FR-031..050`、`GW-NFR-13..19`，逐项追溯 `tests/acceptance/acceptance_matrix.csv`；新增 **20+7** 个对应运行用例，全部 NOT_RUN。
+- 新增 `tests/acceptance/protocol-compatibility.csv`、`tests/acceptance/operational-exercises.csv` 和 `docs/governance/gap-remediation-matrix.csv` 作为执行清单，不得把设计文本映射为 PASS。
 - `tests/contracts/test_route_preflight.py` 的结果只能证明**离线配置意图语义**，不证明真实 Gateway Runtime、AuthZ、DNS/SSRF、Quota Coordinator、Capture 及 Snapshot 生效。
 - PoC 的唯一生产结论门槛：选定镜像 digest/配置版本，以真实 Gatekeeper、Gateway、Provider Mock/Sandbox 进行正反向安全测试。多租户账户隔离、凭证撤销、配额越界、DNS 重解析、非幂等 UNKNOWN、配置半失败和四阶段诊断应全部有可重复证据。
 - UI/UX 正式案例新增 `GW-UX-063..071`，涵盖账户配额、Upstream Health、配置漂移和诊断证据权限；其验证仍为 NOT_RUN，离线 Mock 只能证明界面行为。

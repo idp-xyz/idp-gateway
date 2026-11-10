@@ -5,7 +5,7 @@
 
 ## 0. 不可混淆的三个平面
 
-![系统全景图](../diagrams/01_system_context.svg)
+![系统全景图](diagrams/01_system_context.svg)
 
 - **Governance Plane — IDP API Fabric**：Provider/Consumer API Catalog、不可变契约版本、Release/PublicationSlot、审核与门户，**不参与正常 API 请求转发**。Fabric 的 `PublicationSlot = Target × APIAsset` 不等于 Gateway 的路由资源；必须通过明确的绑定关系和受控发布适配。
 - **Identity & Credential Control — Gatekeeper**：内部 IdP/信任、公私客户端身份、服务身份、账户授权、第三方凭证登记、Token Broker；Secret Manager/KMS 保护密钥。**凭证控制面不是业务转发数据面**。
@@ -23,7 +23,7 @@
 | Gatekeeper | 向 Gateway 提供 JWKS、ExtAuthZ、Credential Grant | 明确认证通信与信任链；Token Broker 不成为开放密钥接口 |
 | 外部 Provider | 接收 Gateway 代理调用 | Provider 自己签发/接受 Token；接收前必须移除 IDP 内部 Token |
 
-![出站调用与认证时序](../diagrams/02_egress_sequence.svg)
+![出站调用与认证时序](diagrams/02_egress_sequence.svg)
 
 ## 2. 模块边界（DDD 不等于全组件领域化）
 
@@ -77,7 +77,7 @@ ReconcileObservation(id, snapshot_id, instance_id, observed_digest, health, time
 
 ## 5. 部署拓扑、故障域和环境
 
-![部署故障域](../diagrams/03_deployment_pools.svg)
+![部署故障域](diagrams/03_deployment_pools.svg)
 
 - 独立 `ingress-prod`、`egress-prod`、`ai-prod` 以及相应 Test/Dev；每池多副本、独立凭证和网络访问规则。
 - 内部 Egress 仅开放受认证的内网入口；其出站网络设置应限制上游域名及目标 IP/端口。各区域采用各自负载均衡，非全局统一单实例。
@@ -106,7 +106,7 @@ agentgateway 1.7.x 官方提供 HTTP/TCP 路由、JWT/JWKS、ExtAuthZ、Backend 
 
 ## 8. 架构依赖治理与 ADR
 
-参照 `decisions/ADR-0001` 至 `ADR-0007`（均为 **Proposed**），由架构/安全/业务/运维具名批准后才能转为 Accepted。参考上游官方文档的 URL 见 G05 末尾。G02 为设计基线，不得被理解为已存在真正部署的 Gateway/Gatekeeper/Token Broker。
+参照 `docs/adr/ADR-0001` 至 `ADR-0007`（均为 **Proposed**），由架构/安全/业务/运维具名批准后才能转为 Accepted。参考上游官方文档的 URL 见 G05 末尾。G02 为设计基线，不得被理解为已存在真正部署的 Gateway/Gatekeeper/Token Broker。
 
 
 ## 9. Gateway Operations 管理界面架构补充（G02 · V1.0 同版更新）

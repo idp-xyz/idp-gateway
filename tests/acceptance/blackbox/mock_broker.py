@@ -136,7 +136,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--port', type=int, required=True)
-    ap.add_argument('--state', required=True, help='JSON written by run_poc.py')
+    ap.add_argument('--state', required=True, help='JSON written by run.py')
     ap.add_argument('--store', required=True, help='JSON: credential handle -> provider token')
     ap.add_argument('--local-key', required=True, help='file holding the key the gateway presents')
     a = ap.parse_args()

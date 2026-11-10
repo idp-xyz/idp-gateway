@@ -24,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'scripts'))
 from policy_reference import EgressRequest, TrustedPrincipal, evaluate  # noqa: E402
 import pki  # noqa: E402
 
@@ -217,7 +217,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--port', type=int, required=True)
     ap.add_argument('--policy', required=True)
-    ap.add_argument('--state', required=True, help='JSON written by run_poc.py')
+    ap.add_argument('--state', required=True, help='JSON written by run.py')
     a = ap.parse_args()
     state = json.loads(open(a.state, encoding='utf-8').read())
     CFG.update(admin_secret=state['admin_secret'], pdp_slow_seconds=state['pdp_slow_seconds'],

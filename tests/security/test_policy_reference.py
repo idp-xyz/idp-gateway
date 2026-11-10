@@ -6,7 +6,7 @@ R=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(R/'scripts'))
 from policy_reference import TrustedPrincipal,EgressRequest,evaluate
 
-P=json.loads((R/'gateway/policies/egress-policy.example.json').read_text())
+P=json.loads((R/'contracts/gateway/policies/egress-policy.example.json').read_text())
 
 def principal(tenant='tenant-blue', service='parcel-service', verified=True, env='TEST'):
  return TrustedPrincipal(service_id=service,tenant_id=tenant,verified=verified,environment=env)

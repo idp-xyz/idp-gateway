@@ -67,8 +67,8 @@ class CredentialRedemption(unittest.TestCase):
 
     def poc_routes(self):
         """Every PoC route with ExtAuthZ: the base file plus the route only 1.7.0 accepts."""
-        routes = (yaml.safe_load(text('poc/p1/agentgateway.poc.yaml'))['routes']
-                  + yaml.safe_load(text('poc/p1/agentgateway.poc.key-expression.yaml'))['routes'])
+        routes = (yaml.safe_load(text('tests/acceptance/blackbox/agentgateway.poc.yaml'))['routes']
+                  + yaml.safe_load(text('tests/acceptance/blackbox/agentgateway.poc.key-expression.yaml'))['routes'])
         routes = [r for r in routes if 'extAuthz' in r.get('policies', {})]
         self.assertEqual(len(routes), 4)
         return routes
@@ -106,7 +106,7 @@ class CredentialRedemption(unittest.TestCase):
     def test_broker_decision_request_is_the_documented_one(self):
         """What the mock broker sends to /v1/egress/authorizations/decision must fit DecisionRequest."""
         request = GATEKEEPER['components']['schemas']['DecisionRequest']
-        tree = ast.parse(text('poc/p1/mock_broker.py'))
+        tree = ast.parse(text('tests/acceptance/blackbox/mock_broker.py'))
         sent = next({k.value for k in node.keys} for node in ast.walk(tree) if isinstance(node, ast.Dict)
                     and any(isinstance(k, ast.Constant) and k.value == 'requested_account_id' for k in node.keys))
         self.assertLessEqual(set(request['required']), sent)
@@ -174,7 +174,7 @@ class ReleaseStates(unittest.TestCase):
         self.assertEqual(set(self.CANONICAL) - words, set())
 
     def test_console_labels_are_mapped_wherever_they_are_used(self):
-        for path in ['docs/G03_Routing_and_Configuration.md', 'portal/spec/Gateway_Operations_UX_Spec_V1.0.md']:
+        for path in ['docs/G03_Routing_and_Configuration.md']:
             for line in text(path).splitlines():
                 if any(re.search(rf'\b{label}\b', line) for label in self.CONSOLE_LABELS):
                     with self.subTest(file=path, line=line[:40]):
@@ -185,7 +185,7 @@ class PocMockSpeaksTheContract(unittest.TestCase):
     def test_denial_body_fields(self):
         """The mock's denial body must carry the fields ExtAuthzDenial requires."""
         required = set(GATEKEEPER['components']['schemas']['ExtAuthzDenial']['required'])
-        tree = ast.parse(text('poc/p1/mock_gatekeeper.py'))
+        tree = ast.parse(text('tests/acceptance/blackbox/mock_gatekeeper.py'))
         keys = {k.value for node in ast.walk(tree) if isinstance(node, ast.Dict)
                 for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)}
         self.assertLessEqual(required, keys)

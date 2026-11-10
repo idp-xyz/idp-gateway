@@ -167,7 +167,7 @@ UI 实施：单一 IDP Console 按协议能力模块化实现，后端使用 Gat
 
 ### 11.3 Runbook 与紧急响应
 
-参考 `operations/incident-runbook.md`：401/403 排查 Gatekeeper 信任与授权，429 区分本地与 Provider，502/504 分辨 DNS/TLS/连接超时和真实上游返回；504 写操作不可默认重放。
+参考 `docs/operations/incident-runbook.md`：401/403 排查 Gatekeeper 信任与授权，429 区分本地与 Provider，502/504 分辨 DNS/TLS/连接超时和真实上游返回；504 写操作不可默认重放。
 
 - 快照发布：固定二进制/镜像 digest、固定 schema、SBOM/签名、可回滚 artifact；预检→Canary→批量→回读→观察→ACTIVE。
 - 变更失败：按故障域停更、恢复上一个批准快照、核验 observed digest；安全撤销不能因配置回滚而逆向放行。

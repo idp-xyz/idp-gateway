@@ -24,10 +24,10 @@
     "p1_credential_injection": {
       "status": "RUN_WITH_OPEN_FINDINGS",
       "evidence": [
-        "poc/p1/evidence/p1-run-agentgateway-1.6.0.json",
-        "poc/p1/evidence/p1-run-agentgateway-1.7.0.json"
+        "tests/acceptance/blackbox/evidence/p1-run-agentgateway-1.6.0.json",
+        "tests/acceptance/blackbox/evidence/p1-run-agentgateway-1.7.0.json"
       ],
-      "report": "poc/p1/README.md",
+      "report": "tests/acceptance/blackbox/README.md",
       "agentgateway_versions_run": ["1.6.0", "1.7.0"],
       "agentgateway_version_targeted": "1.7.x (1.7.0 run; no version or image digest locked)",
       "gatekeeper": "MOCK (no Gatekeeper implementation was available; mutual TLS to the mock is real)",
@@ -35,7 +35,7 @@
       "provider": "MOCK",
       "credential_modes_run": ["A (response header)", "A (backendAuth.key.expression, 1.7.0 only)", "B (local broker)", "C (static)"],
       "counts_as_gate_or_acceptance_evidence": false,
-      "proposed_decision": "decisions/ADR-0008.md"
+      "proposed_decision": "docs/adr/ADR-0008.md"
     }
   },
   "scope_freeze": {
@@ -48,7 +48,7 @@
         "new console pages or UX cases"
       ],
       "lift_when": [
-        "open findings in poc/p1/README.md are resolved or explicitly accepted",
+        "open findings in tests/acceptance/blackbox/README.md are resolved or explicitly accepted",
         "ADR-0008 is approved by named owners",
         "a named product owner confirms whether the console is in delivery scope"
       ],

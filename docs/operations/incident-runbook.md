@@ -26,4 +26,4 @@
 
 ## 故障演练最低集合
 
-见 `tests/operational-exercises.csv`，在安全隔离环境验证单实例、单区域、PDP、Broker、DNS/TLS、Quota Coordinator、配置半发布及恢复。所有实际结果由测试环境自动写入不可变证据；不要手工把 `NOT_RUN` 改为 PASS。
+见 `tests/acceptance/operational-exercises.csv`，在安全隔离环境验证单实例、单区域、PDP、Broker、DNS/TLS、Quota Coordinator、配置半发布及恢复。所有实际结果由测试环境自动写入不可变证据；不要手工把 `NOT_RUN` 改为 PASS。

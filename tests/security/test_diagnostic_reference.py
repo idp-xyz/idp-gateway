@@ -3,7 +3,7 @@ from datetime import datetime,timezone
 from pathlib import Path
 R=Path(__file__).resolve().parents[2];sys.path.insert(0,str(R/'scripts'))
 from diagnostic_reference import authorize_capture,sanitized_evidence,sanitize_headers
-G=json.loads((R/'gateway/policies/diagnostic-capture.example.json').read_text())
+G=json.loads((R/'contracts/gateway/policies/diagnostic-capture.example.json').read_text())
 NOW=datetime.fromisoformat('2026-11-10T08:05:00+00:00')
 def approve(g):return authorize_capture(g,trusted_route='gwi-example-001',trusted_tenant='tenant-blue',trusted_environment='TEST',now=NOW)
 class DiagnosticReferenceTests(unittest.TestCase):

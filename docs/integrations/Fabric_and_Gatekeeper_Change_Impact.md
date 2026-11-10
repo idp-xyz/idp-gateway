@@ -35,7 +35,7 @@
 - **Fabric**：发布 Intent 的 `RouteIntent` 应引用统一 `contracts/gateway/route-intent.schema.json`；Ingress / Egress / AI 采用分支模型，不能要求所有接口具有 ProviderAccount。新增 `policy_bundle_ref`、编译产物摘要、期望 generation、Canary/Observed 的回读关联；Fabric 不负责直接编译 agentgateway 原生配置。
 - **Gatekeeper**：原 `credentials/materialize` 仅适合狭窄 Header 注入；新增候选 `/v1/egress/credentials/prepare` 类型化 CredentialUse（Header Injection / Trusted Request Signer / mTLS Identity Reference）。所有 API 仅为提案，必须完成真实 ExtAuthZ/BackendAuth 版本与协议兼容测试；不能将这份内部 OpenAPI 误当 agentgateway 原生 ExtAuthZ wire 协议。
 - **P1 PoC 之后的修正（同为提案，待目标系统 Owner 接收）**：
-  - Gatekeeper 需要提供的是一个 **HTTP ExtAuthZ 端点**（`contracts/gatekeeper/openapi.yaml` 的 `/v1/extauthz/check`）：允许时在响应头里按请求下发 Provider 凭证，只接受已认证的网关工作负载调用。`credentials/materialize` 不实现，`secure_binding_handle` 不签发；`credentials/prepare` 只返回计划、不返回秘密。依据与剩余风险见 `decisions/ADR-0008.md`，证据来自 Mock Gatekeeper，不是 Gatekeeper 的实现。
+  - Gatekeeper 需要提供的是一个 **HTTP ExtAuthZ 端点**（`contracts/gatekeeper/openapi.yaml` 的 `/v1/extauthz/check`）：允许时在响应头里按请求下发 Provider 凭证，只接受已认证的网关工作负载调用。`credentials/materialize` 不实现，`secure_binding_handle` 不签发；`credentials/prepare` 只返回计划、不返回秘密。依据与剩余风险见 `docs/adr/ADR-0008.md`，证据来自 Mock Gatekeeper，不是 Gatekeeper 的实现。
   - 决策结构新增必填 `revocation_epoch`，决策请求新增 `method`、`path`、`config_digest` 与可选 `delegated_subject`、`token_environment`（后者是模式 B 试跑时发现缺的：没有它，PDP 拒绝不了一个环境的 Token 用在另一个环境的池上）。
   - `/v1/extauthz/check` 的调用方身份取自 mTLS 客户端证书：Gatekeeper 需要能区分网关与其它工作负载，只对网关身份下发凭证。PoC 里这一点是用 Mock 和临时 CA 验证的。
   - Fabric 提交的请求体是 `RoutePublicationIntent` 信封（`idempotency_key`、`release_ref`、`target_id` + 内嵌 `intent`），发布状态以同一契约里的 `ReleaseState` 为唯一词表。

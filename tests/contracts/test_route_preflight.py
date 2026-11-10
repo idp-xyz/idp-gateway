@@ -27,11 +27,11 @@ class RoutePreflightTests(unittest.TestCase):
    with self.subTest(path=x):
     it=copy.deepcopy(self.e);it['logical_path']=x;self.assertNotEqual(evaluate([it])['issue_count'],0)
  def test_egress_quota_must_be_account_scoped(self):
-  p=load('gateway/policies/traffic-policy.example.json');p['quota_buckets'][0]['key_dimensions']=['tenant','operation']
-  self.assertNotEqual(errors_for_schema('gateway/policies/traffic-policy.schema.json',p),[])
+  p=load('contracts/gateway/policies/traffic-policy.example.json');p['quota_buckets'][0]['key_dimensions']=['tenant','operation']
+  self.assertNotEqual(errors_for_schema('contracts/gateway/policies/traffic-policy.schema.json',p),[])
  def test_distributed_quota_fallback_explicit(self):
-  p=load('gateway/policies/traffic-policy.example.json');p['quota_buckets'][0].pop('coordinator_failure')
-  self.assertNotEqual(errors_for_schema('gateway/policies/traffic-policy.schema.json',p),[])
+  p=load('contracts/gateway/policies/traffic-policy.example.json');p['quota_buckets'][0].pop('coordinator_failure')
+  self.assertNotEqual(errors_for_schema('contracts/gateway/policies/traffic-policy.schema.json',p),[])
  def test_sni_mismatch(self):
   x=copy.deepcopy(self.e);x['upstream_sni']='evil.example';self.assertIn('SNI_HOST_MISMATCH_REQUIRES_SIGNED_EXCEPTION',[i['reason'] for i in evaluate([x])['issues']])
  def test_conflict_env_isolated(self):
@@ -42,9 +42,9 @@ class RoutePreflightTests(unittest.TestCase):
  def test_head_options_valid(self):
   x=copy.deepcopy(self.i);x['allowed_methods']=['HEAD','OPTIONS'];self.assertEqual(evaluate([x])['issue_count'],0)
  def test_traffic_schema(self):
-  p=load('gateway/policies/traffic-policy.example.json');self.assertEqual(errors_for_schema('gateway/policies/traffic-policy.schema.json',p),[])
-  p['retry_mode']='RETRY_ALL';self.assertNotEqual(errors_for_schema('gateway/policies/traffic-policy.schema.json',p),[])
+  p=load('contracts/gateway/policies/traffic-policy.example.json');self.assertEqual(errors_for_schema('contracts/gateway/policies/traffic-policy.schema.json',p),[])
+  p['retry_mode']='RETRY_ALL';self.assertNotEqual(errors_for_schema('contracts/gateway/policies/traffic-policy.schema.json',p),[])
  def test_diagnostic_capture_and_event_schema(self):
-  for sch,ex in [('gateway/policies/diagnostic-capture.schema.json','gateway/policies/diagnostic-capture.example.json'),('contracts/gateway/diagnostic-event.schema.json','contracts/gateway/diagnostic-event.example.json'),('gateway/policies/credential-binding.schema.json','gateway/policies/credential-binding.example.json')]:
+  for sch,ex in [('contracts/gateway/policies/diagnostic-capture.schema.json','contracts/gateway/policies/diagnostic-capture.example.json'),('contracts/gateway/diagnostic-event.schema.json','contracts/gateway/diagnostic-event.example.json'),('contracts/gateway/policies/credential-binding.schema.json','contracts/gateway/policies/credential-binding.example.json')]:
    with self.subTest(schema=sch):self.assertEqual(errors_for_schema(sch,load(ex)),[])
 if __name__=='__main__':unittest.main()

@@ -1,6 +1,6 @@
 # P1 PoC — 真实 agentgateway 上的认证、授权与凭证注入
 
-> **性质**：技术可行性 PoC，不是验收。`tests/acceptance_matrix.csv` 的 95 条用例与六个 STD-CP 门禁保持 `NOT_RUN`。
+> **性质**：技术可行性 PoC，不是验收。`tests/acceptance/acceptance_matrix.csv` 的 95 条用例与六个 STD-CP 门禁保持 `NOT_RUN`。
 > **结果**：54 个用例。agentgateway 1.7.0 上 53 PASS、1 FAIL；1.6.0 上 50 PASS、1 FAIL、3 SKIP（那 3 个用例针对一条只有 1.7.0 的 Schema 才接受的路由）。两个版本的 FAIL 都是 `P1-SS-04`：网关自己仍然接受带两个 `Host` 头的请求，处置见"未解决"。证据：`evidence/p1-run-agentgateway-1.6.0.json`、`evidence/p1-run-agentgateway-1.7.0.json`。
 > **环境**：agentgateway **1.6.0** 与 **1.7.0**（官方发布的二进制，SHA-256 与发布页公布的一致并记在证据里；同一份配置不加修改在两个版本上运行）、Mock Gatekeeper、Mock 本地 Broker、Mock Provider，全部在本机回环地址。网关到 Gatekeeper、Broker 到 Gatekeeper 两段是双向 TLS，证书由每次运行临时生成的 CA 签发。
 > **Gatekeeper 始终是 Mock**。本机没有 Gatekeeper 的实现或仓库，它也不属于本项目；这里验证的是网关一侧对契约的实现，以及一个按契约写的 Mock。
@@ -54,7 +54,7 @@ G04 §4 要求用 PoC 比较三种凭证返回模式，G04 §9 列了 PoC 必须
 3. **PDP 放行但没给凭证时，请求照样转发**（不带任何凭证）。现在在 backend 上加了 `authorization` 规则，没有 `Authorization` 头就由网关拒绝。
 4. **Provider 的 `Location`、`Set-Cookie` 原样回给调用方**。网关不跟随 302，但会把跳转目标交给调用方。现在用 `responseHeaderModifier.remove` 去掉。
 5. **调用方的 `Cookie`、`X-Forwarded-*`、`Forwarded` 原样传给 Provider**。现在用 `requestHeaderModifier.remove` 去掉。
-6. **（仅 1.7.0）没有会话密钥时，网关启动会改写自己的配置文件**。`config.session.key` 未设置时，1.7.0 生成一个密钥并写回启动它的那个文件；1.6.0 不会。第一次在 1.7.0 上运行时，仓库里受版本管理的 `agentgateway.poc.yaml` 就这样被加了三行（已还原，没有提交）。对按摘要审批、部署后回读对账的配置发布（G03）来说，这意味着运行中的文件不再是批准的那个文件，而且里面多了一个密钥。处理：用环境变量 `SESSION_KEY` 提供密钥，实测可阻止改写；`run_poc.py` 另外只让网关从 `.run/` 下的副本启动，仓库里的文件它碰不到。`P1-CF-01` 检查网关运行时所用的文件与仓库里的逐字节一致；证据的 `start_without_session_key_rewrites_config_file` 记录了每个版本在不提供密钥时的实际行为（1.6.0 为 `false`，1.7.0 为 `true`）。另外两个单独试过、不在证据文件里的观察：配置文件只读时 1.7.0 只记一条警告然后照常启动；`session.key: disabled` 只有 1.7.0 接受，1.6.0 会拒绝整份配置，所以两个版本共用的文件里不能这样写。
+6. **（仅 1.7.0）没有会话密钥时，网关启动会改写自己的配置文件**。`config.session.key` 未设置时，1.7.0 生成一个密钥并写回启动它的那个文件；1.6.0 不会。第一次在 1.7.0 上运行时，仓库里受版本管理的 `agentgateway.poc.yaml` 就这样被加了三行（已还原，没有提交）。对按摘要审批、部署后回读对账的配置发布（G03）来说，这意味着运行中的文件不再是批准的那个文件，而且里面多了一个密钥。处理：用环境变量 `SESSION_KEY` 提供密钥，实测可阻止改写；`run.py` 另外只让网关从 `.run/` 下的副本启动，仓库里的文件它碰不到。`P1-CF-01` 检查网关运行时所用的文件与仓库里的逐字节一致；证据的 `start_without_session_key_rewrites_config_file` 记录了每个版本在不提供密钥时的实际行为（1.6.0 为 `false`，1.7.0 为 `true`）。另外两个单独试过、不在证据文件里的观察：配置文件只读时 1.7.0 只记一条警告然后照常启动；`session.key: disabled` 只有 1.7.0 接受，1.6.0 会拒绝整份配置，所以两个版本共用的文件里不能这样写。
 
 ## 未解决
 
@@ -75,13 +75,13 @@ Gatekeeper 是 Mock（没有真实身份源、授权库、Secret Manager、Provi
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
-.venv/bin/python poc/p1/run_poc.py                                   # PATH 上的 agentgateway；约 30 秒；没有 FAIL 才返回 0
-.venv/bin/python poc/p1/run_poc.py --agentgateway /path/to/agentgateway   # 换一个版本的二进制
+.venv/bin/python tests/acceptance/blackbox/run.py                                   # PATH 上的 agentgateway；约 30 秒；没有 FAIL 才返回 0
+.venv/bin/python tests/acceptance/blackbox/run.py --agentgateway /path/to/agentgateway   # 换一个版本的二进制
 ```
 
 每个 agentgateway 版本写各自的证据文件 `evidence/p1-run-agentgateway-<版本>.json`。本机的 1.6.0 在 `/usr/local/bin`；1.7.0 是从官方发布页下载、核对 SHA-256 后放在用户目录下的，没有替换系统里的 1.6.0。
 
-脚本先检查端口段是否空闲、用 `--validate-only` 校验配置，再启动五个进程和一个 nginx 容器，跑完全部停掉。nginx 需要本机有 docker：镜像是 nginx 官方的非特权版本，按摘要固定（见 `run_poc.py` 的 `FRONT_IMAGE`），本地没有时会拉取一次；容器以非 root、只读根文件系统、不带任何 capability 运行，用宿主机网络，只监听回环。docker 或镜像不可用时脚本拒绝运行，不会跳过那四个用例。`key.expression` 那条路由放在单独的 `agentgateway.poc.key-expression.yaml` 里：二进制自己的校验器接受时才拼进配置，不接受（1.6.0）时相应的 3 个用例记为 SKIP，原因写在证据里。网关从 `poc/p1/.run/` 下的配置副本启动，会话密钥经环境变量 `SESSION_KEY` 提供（原因见上面第 6 项）。每次运行生成新的 JWT 签名密钥、会话密钥、工作负载 CA 与证书、Mock 凭证，放在 `poc/p1/.run/`（已忽略），不写入证据。
+脚本先检查端口段是否空闲、用 `--validate-only` 校验配置，再启动五个进程和一个 nginx 容器，跑完全部停掉。nginx 需要本机有 docker：镜像是 nginx 官方的非特权版本，按摘要固定（见 `run.py` 的 `FRONT_IMAGE`），本地没有时会拉取一次；容器以非 root、只读根文件系统、不带任何 capability 运行，用宿主机网络，只监听回环。docker 或镜像不可用时脚本拒绝运行，不会跳过那四个用例。`key.expression` 那条路由放在单独的 `agentgateway.poc.key-expression.yaml` 里：二进制自己的校验器接受时才拼进配置，不接受（1.6.0）时相应的 3 个用例记为 SKIP，原因写在证据里。网关从 `tests/acceptance/blackbox/.run/` 下的配置副本启动，会话密钥经环境变量 `SESSION_KEY` 提供（原因见上面第 6 项）。每次运行生成新的 JWT 签名密钥、会话密钥、工作负载 CA 与证书、Mock 凭证，放在 `tests/acceptance/blackbox/.run/`（已忽略），不写入证据。
 
 | 端口 | 用途 |
 |---|---|
@@ -93,7 +93,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
 | 27618 | Mock 本地 Broker（模式 B） |
 | 27620 | 前置 nginx（仅回环），转发到 27611 |
 
-`27610`、`27619` 由 `gateway/config/agentgateway.local.example.yaml` 使用。
+`27610`、`27619` 由 `deploy/agentgateway/agentgateway.local.example.yaml` 使用。
 
 端口段选在 `27610-27620`，是因为它低于内核给出站连接分配源端口的临时端口范围（本机为 44620–48715，Linux 默认 32768–60999）。最初用的是 `47611-47617`，落在本机临时范围内：有一次运行中网关绑定就绪端口 47616 时报 `Address in use`、整轮没跑起来，而该端口在运行前后都是空闲的。占用者没有被直接抓到，最可能的解释是某个出站连接临时拿它做了源端口。脚本现在会在端口段与临时范围重叠时拒绝启动。
 
@@ -104,18 +104,18 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
 - `mock_broker.py`：Mock 本地 Broker。`pki.py`：每次运行的 CA、证书和 TLS 连接。
 - `mock_provider.py`：记录收到的每个请求；`policy.poc.json`：两租户两账户的授权数据。
 - `front.nginx.conf`：前置 nginx 的配置。`UPSTREAM_REPORT_duplicate_host.md`：给 agentgateway 上游的报告草稿（英文，含最小复现）。
-- `run_poc.py`：用例与期望。`evidence/p1-run-agentgateway-<版本>.json`：该版本最近一次运行的逐项检查与观察值，含二进制与配置的 SHA-256。
+- `run.py`：用例与期望。`evidence/p1-run-agentgateway-<版本>.json`：该版本最近一次运行的逐项检查与观察值，含二进制与配置的 SHA-256。
 
 ## 期望是怎么定的
 
-期望取自 G01/G03/G04，写在 `run_poc.py` 里，不达标记 FAIL，不改期望迁就结果。运行历史：
+期望取自 G01/G03/G04，写在 `run.py` 里，不达标记 FAIL，不改期望迁就结果。运行历史：
 
 1. 第一次运行 37/39。失败的是 Host 转发和路径绕过（上面第 1、2 项），据此改了网关配置和 PDP 参考实现。
 2. 随后对照 G03 §5 **收紧**了三处期望（无凭证时必须由网关拒绝、`Location` 不得回给调用方、`X-Forwarded-*` 不得传给 Provider），并新增 `P1-SS-04`。收紧后暴露出第 3、4 项和重复 `Host` 的问题；第 5 项的处理与检查是同时加上的。
 3. 在 1.6.0 上定格为 39/40。
 4. 把同一份配置和同一套用例原样拿到 1.7.0 上：同样是 39/40，失败的同样是 `P1-SS-04`。这次运行暴露了第 6 项，据此新增 `P1-CF-01`，并把网关改为从副本启动、经环境变量拿会话密钥。
 5. 两个版本定格为 40/41。
-6. 网关到 PDP 的共享密钥换成双向 TLS，`P1-AZ-11`、`P1-CR-03` 的期望随之收紧（原来查"没有密钥就 401"，现在查"没有证书连不上，证书身份不是网关就 401"），新增 `P1-TL-01`、`P1-CR-04`；加入模式 B（`P1-MB-01..04`）和 `key.expression` 路由（`P1-KX-01..03`）。新增的 9 个用例在 `run_poc.py` 里第一次运行就全部通过；在此之前，mTLS 和 `key.expression` 的配置写法已经在单独的试验里试过。当时 1.7.0 为 49/50，1.6.0 为 46/47 加 3 个 SKIP。
+6. 网关到 PDP 的共享密钥换成双向 TLS，`P1-AZ-11`、`P1-CR-03` 的期望随之收紧（原来查"没有密钥就 401"，现在查"没有证书连不上，证书身份不是网关就 401"），新增 `P1-TL-01`、`P1-CR-04`；加入模式 B（`P1-MB-01..04`）和 `key.expression` 路由（`P1-KX-01..03`）。新增的 9 个用例在 `run.py` 里第一次运行就全部通过；在此之前，mTLS 和 `key.expression` 的配置写法已经在单独的试验里试过。当时 1.7.0 为 49/50，1.6.0 为 46/47 加 3 个 SKIP。
 7. 为 `P1-SS-04` 加了前置 nginx 和 `P1-FP-01..04`。`P1-SS-04` 本身没有动，仍然 FAIL。新增的 4 个用例第一次运行就通过；之后只给 `P1-FP-01` 加了一条对照检查（单个 `Host` 的请求确实会在网关日志里留下记录），用来说明"网关日志没有新增"这条检查不是空的。当前 1.7.0 为 53/54，1.6.0 为 50/51 加 3 个 SKIP。
 
 没有任何期望被放宽过。

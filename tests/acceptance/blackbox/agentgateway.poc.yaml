@@ -7,16 +7,16 @@
 #        the provider (mock_provider.py). Certificates come from a CA made for each run.
 # Not covered: TLS towards callers or the provider, real Secret Manager, multi-replica, load.
 #
-# Run through run_poc.py: it creates the .run/ files referenced below and starts the
-# gateway with poc/p1 as working directory (relative paths resolve against the cwd).
+# Run through run.py: it creates the .run/ files referenced below and starts the
+# gateway with tests/acceptance/blackbox as working directory (relative paths resolve against the cwd).
 #
 # A second file, agentgateway.poc.key-expression.yaml, holds one more route that only the
-# 1.7.0 schema accepts. run_poc.py appends that route to the copy the gateway is started
+# 1.7.0 schema accepts. run.py appends that route to the copy the gateway is started
 # from when the binary's own validator accepts the result. Keep `routes` the last key of
 # this file.
 #
 # There is deliberately no config.session.key here. 1.7.0 started without one generates a
-# key and WRITES IT INTO THE CONFIG FILE it was started from. run_poc.py therefore starts
+# key and WRITES IT INTO THE CONFIG FILE it was started from. run.py therefore starts
 # the gateway from a copy in .run/ and passes a per-run key in the SESSION_KEY environment
 # variable, which stops the rewrite (case P1-CF-01). "key: disabled" is not usable in a
 # file shared by both versions: 1.7.0 accepts it, 1.6.0 rejects it.
