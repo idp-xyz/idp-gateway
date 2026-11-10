@@ -1,18 +1,18 @@
 {
   "title": "IDP Gateway V1.0 offline static validation",
-  "executed_at_utc": "2026-11-10T10:53:42.900135+00:00",
-  "python_version": "3.13.5",
+  "executed_at_utc": "2026-11-10T12:34:58.722324+00:00",
+  "python_version": "3.12.3",
   "scope": "offline files, schemas, example data, traceability only",
   "checks": [
     {
       "check": "required_files",
       "status": "PASS",
-      "detail": "16 required baseline files"
+      "detail": "17 required baseline files"
     },
     {
       "check": "markdown_relative_links",
       "status": "PASS",
-      "detail": "25 Markdown files, 40 local links"
+      "detail": "28 Markdown files, 41 local links"
     },
     {
       "check": "html_relative_links",
@@ -22,17 +22,17 @@
     {
       "check": "json_schema_and_examples",
       "status": "PASS",
-      "detail": "22 JSON files parsed; 6 additional example schemas and negative route samples validated"
+      "detail": "25 JSON files parsed; 6 additional example schemas and negative route samples validated"
     },
     {
       "check": "yaml_syntax_not_runtime",
       "status": "PASS",
-      "detail": "3 YAML syntax checks; no native agentgateway runtime/schema tests"
+      "detail": "4 YAML syntax checks; no native agentgateway runtime/schema tests"
     },
     {
       "check": "acceptance_coverage_not_run",
       "status": "PASS",
-      "detail": "95 NOT_RUN scenarios, all 50 FR and 19 NFR referenced"
+      "detail": "95 scenarios (95 NOT_RUN), all 50 FR and 19 NFR referenced"
     },
     {
       "check": "demo_policy_safety",
@@ -47,7 +47,7 @@
     {
       "check": "gateway_operations_ux_mock",
       "status": "PASS",
-      "detail": "18-page unified offline mock; 75 UX formal cases NOT_RUN; original 35 + additional 46 local browser checks PASS; 12 preview PNGs"
+      "detail": "18-page unified offline mock; 75 UX formal cases (75 NOT_RUN); browser-check transcripts present (35 + 46 checks claimed, generating scripts not in repository, not reproducible here); 13 preview PNGs"
     },
     {
       "check": "diagrams_exist",
@@ -58,10 +58,15 @@
       "check": "gap_remediation_offline_only",
       "status": "PASS",
       "detail": "15 gaps; 95 runtime cases; 12 protocol scenarios; 11 operational exercises, runtime NOT_RUN"
+    },
+    {
+      "check": "poc_p1_evidence_current",
+      "status": "PASS",
+      "detail": "PoC evidence matches current config/policy: 39/40 cases PASS on agentgateway 1.6.0; FAIL: P1-SS-04; not acceptance evidence"
     }
   ],
   "summary": {
-    "pass": 11,
+    "pass": 12,
     "fail": 0
   },
   "gatekeeper_runtime": "NOT_RUN",
