@@ -11,6 +11,26 @@ import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 
 R=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(R/'scripts'))
+# Not part of the baseline: the virtualenv, git internals, per-run PoC scratch files.
+SKIP_DIRS={'.venv','.git','.run','__pycache__','node_modules'}
+def files(pattern):
+ return sorted(f for f in R.rglob(pattern) if not SKIP_DIRS & set(f.relative_to(R).parts))
+def matrix_rows(path):
+ """A case may leave NOT_RUN only by pointing at evidence that exists in the repository."""
+ with (R/path).open(encoding='utf-8-sig',newline='') as f:rows=list(csv.DictReader(f))
+ for r in rows:
+  uri=r.get('evidence_uri','')
+  if r['status']=='NOT_RUN':
+   assert not uri,f"{r['case_id']}: NOT_RUN case carries evidence_uri"
+  else:
+   assert r['status'] in ('PASS','FAIL','BLOCKED'),f"{r['case_id']}: unknown status {r['status']}"
+   assert uri and '://' not in uri and (R/uri).is_file(),f"{r['case_id']}: status {r['status']} without evidence file in repository"
+ return rows
+def tally(rows):
+ n={}
+ for r in rows:n[r['status']]=n.get(r['status'],0)+1
+ return ', '.join(f'{v} {k}' for k,v in sorted(n.items()))
 checks=[]
 def check(key,fn):
  try:
@@ -21,28 +41,28 @@ def check(key,fn):
 def exists():
  expected=['README.md','governance/project-manifest.json','tests/acceptance_matrix.csv']
  expected += [f'docs/{t}' for t in ['G01_Requirements.md','G02_Architecture.md','G03_Routing_and_Configuration.md','G04_Identity_and_Security.md','G05_Engineering_and_Operations.md','G06_Testing_and_Acceptance.md']]
- expected += [f'decisions/ADR-{i:04d}.md' for i in range(1,8)]
+ expected += [f'decisions/ADR-{i:04d}.md' for i in range(1,9)]
  assert all((R/f).is_file() for f in expected),[f for f in expected if not(R/f).is_file()]
  return f'{len(expected)} required baseline files'
 check('required_files',exists)
 
 def markdown_links():
- files=list(R.rglob('*.md'));count=0
+ mds=files('*.md');count=0
  pat=re.compile(r'(?<!\!)\[[^\]]+\]\(([^\s)]+)\)|!\[[^\]]*\]\(([^\s)]+)\)')
- for f in files:
+ for f in mds:
   s=f.read_text(encoding='utf-8')
   for m in pat.finditer(s):
    u=m.group(1) or m.group(2)
    if u.startswith(('https://','http://','#','mailto:')):continue
    assert (f.parent/u.split('#',1)[0]).exists(),f'broken link {f} -> {u}'
    count+=1
- return f'{len(files)} Markdown files, {count} local links'
+ return f'{len(mds)} Markdown files, {count} local links'
 check('markdown_relative_links',markdown_links)
 
 def html_links():
  from bs4 import BeautifulSoup
- files=list(R.rglob('*.html'));count=0
- for f in files:
+ pages=files('*.html');count=0
+ for f in pages:
   soup=BeautifulSoup(f.read_text(encoding='utf-8'),'html.parser')
   for tag in soup.find_all(['a','img','link','script']):
    u=tag.get('href') or tag.get('src') or ''
@@ -50,12 +70,12 @@ def html_links():
    loc=u.split('#',1)[0].split('?',1)[0]
    assert (f.parent/loc).exists(),f'Broken HTML link {f.name}: {u}'
    count+=1
- return f'{len(files)} HTML pages, {count} local asset/href refs'
+ return f'{len(pages)} HTML pages, {count} local asset/href refs'
 check('html_relative_links',html_links)
 
 def json_and_schema():
  n=0
- for f in R.rglob('*.json'):
+ for f in files('*.json'):
   x=json.loads(f.read_text(encoding='utf-8'));n+=1
   if f.name.endswith('.schema.json'):Draft202012Validator.check_schema(x)
  route=json.loads((R/'contracts/gateway/route-intent.schema.json').read_text())
@@ -72,23 +92,22 @@ def json_and_schema():
 check('json_schema_and_examples',json_and_schema)
 
 def yaml_parse():
- fs=list(R.rglob('*.yaml'))+list(R.rglob('*.yml'))
+ fs=files('*.yaml')+files('*.yml')
  for f in fs:
   obj=yaml.safe_load(f.read_text(encoding='utf-8'));assert isinstance(obj,dict),f
- for f in R.rglob('*openapi.yaml'):
+ for f in files('*openapi.yaml'):
   o=yaml.safe_load(f.read_text(encoding='utf-8'));assert str(o.get('openapi')).startswith('3.1.')
  return f'{len(fs)} YAML syntax checks; no native agentgateway runtime/schema tests'
 check('yaml_syntax_not_runtime',yaml_parse)
 
 def matrix_coverage():
- with (R/'tests/acceptance_matrix.csv').open(encoding='utf-8-sig',newline='') as f:rows=list(csv.DictReader(f))
+ rows=matrix_rows('tests/acceptance_matrix.csv')
  ids=[r['case_id'] for r in rows];assert len(ids)==len(set(ids))
  coverage=set(r['requirement_id'] for r in rows)
  missing={f'GW-FR-{i:03d}' for i in range(1,51)}-coverage
  missing_nfr={f'GW-NFR-{i:02d}' for i in range(1,20)}-coverage
  assert not missing and not missing_nfr,(missing,missing_nfr)
- assert all(r['status']=='NOT_RUN' and not r['evidence_uri'] for r in rows)
- return f'{len(rows)} NOT_RUN scenarios, all 50 FR and 19 NFR referenced'
+ return f'{len(rows)} scenarios ({tally(rows)}), all 50 FR and 19 NFR referenced'
 check('acceptance_coverage_not_run',matrix_coverage)
 
 def safety_config():
@@ -125,11 +144,10 @@ def ux_artifacts():
   assert f'data-page="{name}"' in html, name
  assert 'DEMO DATA · NOT LIVE' in html
  assert not any(s in html for s in ['fetch(', 'XMLHttpRequest(', 'WebSocket(', 'navigator.sendBeacon('])
- with (R/'tests/ux/acceptance_matrix.csv').open(encoding='utf-8-sig',newline='') as f:rows=list(csv.DictReader(f))
+ rows=matrix_rows('tests/ux/acceptance_matrix.csv')
  assert len(rows)==75, len(rows)
  assert len({r['case_id'] for r in rows})==75
  assert {f'GW-UX-{i:03d}' for i in range(1,76)}=={r['requirement_id'] for r in rows}
- assert all(r['status']=='NOT_RUN' and not r['evidence_uri'] for r in rows)
  assert len(list(screen.glob('*.png')))>=10
  browser_evidence=(R/'tests/evidence/ux-prototype-browser-tests.txt').read_text(encoding='utf-8')
  assert '35 PASS, 0 FAIL' in browser_evidence
@@ -138,7 +156,11 @@ def ux_artifacts():
  assert 'Browser PASS: 504 UNKNOWN' in (R/'tests/evidence/message-inspector-browser-tests.txt').read_text(encoding='utf-8')
  assert 'Message Inspector' in html and 'diagnosticEvidence' in html
  assert 'trafficGovernancePanel' in html and 'data-governance=\"quota\"' in html
- return '18-page unified offline mock; 75 UX formal cases NOT_RUN; original 35 + additional 46 local browser checks PASS; 12 preview PNGs'
+ # The three browser-test texts above were produced by scripts that are not in this
+ # repository; this check only confirms the texts are present, it cannot re-run them.
+ return (f'18-page unified offline mock; 75 UX formal cases ({tally(rows)}); browser-check transcripts present '
+         f'(35 + 46 checks claimed, generating scripts not in repository, not reproducible here); '
+         f"{len(list(screen.glob('*.png')))} preview PNGs")
 check('gateway_operations_ux_mock',ux_artifacts)
 
 def diagram_evidence():
@@ -153,8 +175,8 @@ def gap_evidence():
  with (R/'governance/gap-remediation-matrix.csv').open(encoding='utf-8-sig',newline='') as f:gaps=list(csv.DictReader(f))
  assert len(gaps)==15 and all(g['status']=='NOT_RUN' for g in gaps)
  assert all(g['priority'] in ['P0','P1','P2'] for g in gaps)
- with (R/'tests/acceptance_matrix.csv').open(encoding='utf-8-sig',newline='') as f:r=list(csv.DictReader(f))
- assert len(r)==95 and all(x['status']=='NOT_RUN' for x in r)
+ r=matrix_rows('tests/acceptance_matrix.csv')
+ assert len(r)==95
  with (R/'tests/protocol-compatibility.csv').open(encoding='utf-8-sig',newline='') as f:proto=list(csv.DictReader(f))
  assert len(proto)>=10 and all(x['status']=='NOT_RUN' for x in proto)
  with (R/'tests/operational-exercises.csv').open(encoding='utf-8-sig',newline='') as f:exercises=list(csv.DictReader(f))
@@ -166,6 +188,24 @@ def gap_evidence():
  assert 'NOT_RUN' in (R/'operations/incident-runbook.md').read_text()
  return f'{len(gaps)} gaps; {len(r)} runtime cases; {len(proto)} protocol scenarios; {len(exercises)} operational exercises, runtime NOT_RUN'
 check('gap_remediation_offline_only',gap_evidence)
+
+def poc_p1_evidence():
+ """PoC evidence must describe the files that are in the repository now, and must not be
+ passed off as acceptance. It is read here, not re-run: run poc/p1/run_poc.py for that."""
+ ev=R/'poc/p1/evidence/p1-run.json'
+ if not ev.is_file():return 'no PoC evidence file (PoC not run)'
+ e=json.loads(ev.read_text(encoding='utf-8'))
+ sha=lambda p:hashlib.sha256((R/p).read_bytes()).hexdigest()
+ assert e['agentgateway']['config_sha256']==sha('poc/p1/agentgateway.poc.yaml'),'evidence is for another gateway config; re-run the PoC'
+ assert e['policy_sha256']==sha('poc/p1/policy.poc.json'),'evidence is for another PoC policy; re-run the PoC'
+ assert e['policy_reference_sha256']==sha('scripts/policy_reference.py'),'evidence is for another policy_reference.py; re-run the PoC'
+ assert str(e['formal_acceptance']).startswith('NOT_RUN')
+ s=e['summary'];results=[c['result'] for c in e['cases']]
+ assert s['cases']==len(results) and s['pass']==results.count('PASS') and s['fail']==results.count('FAIL')
+ failed=[c['id'] for c in e['cases'] if c['result']!='PASS']
+ return (f"PoC evidence matches current config/policy: {s['pass']}/{s['cases']} cases PASS on agentgateway "
+         f"{e['agentgateway']['version'].get('version')}; FAIL: {', '.join(failed) or 'none'}; not acceptance evidence")
+check('poc_p1_evidence_current',poc_p1_evidence)
 
 report={
  'title':'IDP Gateway V1.0 offline static validation',
