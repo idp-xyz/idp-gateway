@@ -7,22 +7,22 @@
 # Run through run_poc.py: it creates the .run/ files referenced below and starts the
 # gateway with poc/p1 as working directory (relative paths resolve against the cwd).
 #
-# Port block 47611-47617 is reserved for this PoC:
-#   47611 gateway listener   47612 mock provider      47613 mock Gatekeeper
-#   47614 gateway admin      47615 gateway stats      47616 gateway readiness
-#   47617 "forbidden" target that no route may ever reach
+# Port block 27611-27617 is reserved for this PoC:
+#   27611 gateway listener   27612 mock provider      27613 mock Gatekeeper
+#   27614 gateway admin      27615 gateway stats      27616 gateway readiness
+#   27617 "forbidden" target that no route may ever reach
 #
-# The 1.6.0 schema has no bind-address field for a gateway listener: 47611 listens on every
+# The 1.6.0 schema has no bind-address field for a gateway listener: 27611 listens on every
 # interface of the machine for as long as the PoC runs. Admin, stats and readiness are
 # pinned to loopback below.
 config:
-  adminAddr: 127.0.0.1:47614
-  statsAddr: 127.0.0.1:47615
-  readinessAddr: 127.0.0.1:47616
+  adminAddr: 127.0.0.1:27614
+  statsAddr: 127.0.0.1:27615
+  readinessAddr: 127.0.0.1:27616
 
 gateways:
   egress-test:
-    port: 47611
+    port: 27611
     protocol: HTTP
     # Caller authentication (G04 §0 item 1). Strict: a request without a valid token is rejected.
     # After validation the gateway removes the token from the request, so the caller's IDP JWT
@@ -54,7 +54,7 @@ routes:
       rules:
       - allow: 'request.path.matches("^(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$")'
     extAuthz:
-      host: 127.0.0.1:47613
+      host: 127.0.0.1:27613
       failureMode: deny
       # The only caller-supplied header the PDP sees. It is a *request* for an account,
       # never an authorization fact; the PDP re-checks it against the tenant's grants.
@@ -89,7 +89,7 @@ routes:
     urlRewrite:
       # G03 §5: Host/:authority must be the approved upstream, never what the caller sent.
       authority:
-        full: 127.0.0.1:47612
+        full: 127.0.0.1:27612
       path:
         prefix: /v1/tracking
     # G03 §5: provider redirects and cookies are not handed to the business client.
@@ -100,7 +100,7 @@ routes:
     timeout:
       requestTimeout: 2s
   backends:
-  - host: 127.0.0.1:47612
+  - host: 127.0.0.1:27612
     policies:
       # Fail closed if the PDP allowed but released no credential: the caller's token was
       # already removed, so an Authorization header here can only have come from the PDP.
@@ -131,7 +131,7 @@ routes:
       rules:
       - allow: 'request.path.matches("^(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$")'
     extAuthz:
-      host: 127.0.0.1:47613
+      host: 127.0.0.1:27613
       failureMode: deny
       includeRequestHeaders:
       - x-provider-account
@@ -158,7 +158,7 @@ routes:
           - authorization
     urlRewrite:
       authority:
-        full: 127.0.0.1:47612
+        full: 127.0.0.1:27612
       path:
         prefix: /v1/labels
     responseHeaderModifier:
@@ -169,7 +169,7 @@ routes:
     timeout:
       requestTimeout: 2s
   backends:
-  - host: 127.0.0.1:47612
+  - host: 127.0.0.1:27612
     policies:
       authorization:
         rules:
@@ -204,7 +204,7 @@ routes:
       - allow: 'request.path.matches("^(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$")'
     urlRewrite:
       authority:
-        full: 127.0.0.1:47612
+        full: 127.0.0.1:27612
       path:
         prefix: /v1/rates
     responseHeaderModifier:
@@ -214,7 +214,7 @@ routes:
     timeout:
       requestTimeout: 2s
   backends:
-  - host: 127.0.0.1:47612
+  - host: 127.0.0.1:27612
     policies:
       backendAuth:
         key:

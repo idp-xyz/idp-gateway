@@ -21,8 +21,8 @@ ROOT = HERE.parents[1]
 RUN = HERE / '.run'
 EVIDENCE = HERE / 'evidence' / 'p1-run.json'
 CONFIG = HERE / 'agentgateway.poc.yaml'
-PORTS = {'gateway': 47611, 'provider': 47612, 'gatekeeper': 47613, 'admin': 47614,
-         'stats': 47615, 'readiness': 47616, 'forbidden': 47617}
+PORTS = {'gateway': 27611, 'provider': 27612, 'gatekeeper': 27613, 'admin': 27614,
+         'stats': 27615, 'readiness': 27616, 'forbidden': 27617}
 ISSUER, AUDIENCE, LOGICAL_HOST, KID = 'https://gatekeeper.idp.test', 'idp-egress-gateway', 'egress-api.idp.test', 'poc-key-1'
 PROVIDER_SLOW_SECONDS, PDP_SLOW_SECONDS = 3.5, 2.5   # both longer than the gateway's 2s / 1s timeouts
 TRACKING = '/providers/mockcarrier/v1/tracking'
@@ -652,10 +652,25 @@ def prepare():
         os.chmod(f, 0o600)
 
 
+def ephemeral_range() -> tuple[int, int] | None:
+    """Range the kernel draws source ports for outgoing connections from (Linux only)."""
+    try:
+        lo, hi = Path('/proc/sys/net/ipv4/ip_local_port_range').read_text().split()
+        return int(lo), int(hi)
+    except (OSError, ValueError):
+        return None
+
+
 def main() -> int:
     busy = [f'{n}:{p}' for n, p in PORTS.items() if port_open(p)]
     if busy:
         print('ports already in use, refusing to start:', ', '.join(busy)); return 2
+    # A listener port inside the ephemeral range can be taken, for a moment, by any outgoing
+    # connection on the machine, and the listener then fails to bind. This happened once
+    # with the first port block (47611-47617) on a host whose range is 44620-48715.
+    eph = ephemeral_range()
+    if eph and any(eph[0] <= p <= eph[1] for p in PORTS.values()):
+        print(f'port block overlaps the ephemeral range {eph[0]}-{eph[1]} of this host, refusing to start'); return 2
     prepare()
     validate = subprocess.run(['agentgateway', '--validate-only', '-f', CONFIG.name], cwd=HERE, capture_output=True, text=True)
     print('native config validation:', (validate.stdout + validate.stderr).strip())
@@ -709,7 +724,8 @@ def main() -> int:
                          'native_validation': (validate.stdout + validate.stderr).strip()},
         'policy_sha256': hashlib.sha256((HERE / 'policy.poc.json').read_bytes()).hexdigest(),
         'policy_reference_sha256': hashlib.sha256((ROOT / 'scripts' / 'policy_reference.py').read_bytes()).hexdigest(),
-        'ports': PORTS, 'listen_addresses_observed': listeners, 'ports_left_open_after_run': still_open,
+        'ports': PORTS, 'host_ephemeral_port_range': ephemeral_range(),
+        'listen_addresses_observed': listeners, 'ports_left_open_after_run': still_open,
         'summary': {'cases': len(results), 'pass': passed, 'fail': len(results) - passed},
         'scope_limits': SCOPE_LIMITS,
         'formal_acceptance': 'NOT_RUN (unchanged by this PoC)',
