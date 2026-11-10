@@ -1,12 +1,18 @@
 # P1 PoC — native agentgateway configuration. The same file is accepted and run, unchanged,
 # by the 1.6.0 and the 1.7.0 binary.
 #
-# Real:  the agentgateway data plane (JWT validation, HTTP ExtAuthZ, header handling, routing).
-# Mock:  Gatekeeper PDP/Broker (mock_gatekeeper.py) and the provider (mock_provider.py).
-# Not covered: TLS/mTLS on any hop, real Secret Manager, multi-replica, load. Loopback only.
+# Real:  the agentgateway data plane (JWT validation, HTTP ExtAuthZ, header handling, routing,
+#        and its side of the mutual TLS session with the PDP).
+# Mock:  Gatekeeper PDP/Broker (mock_gatekeeper.py), the local broker (mock_broker.py) and
+#        the provider (mock_provider.py). Certificates come from a CA made for each run.
+# Not covered: TLS towards callers or the provider, real Secret Manager, multi-replica, load.
 #
 # Run through run_poc.py: it creates the .run/ files referenced below and starts the
 # gateway with poc/p1 as working directory (relative paths resolve against the cwd).
+#
+# A second file, agentgateway.poc.key-expression.yaml, holds one more route that only the
+# 1.7.0 schema accepts. run_poc.py appends it to the copy the gateway is started from when
+# the binary's own validator accepts the result. Keep `routes` the last key of this file.
 #
 # There is deliberately no config.session.key here. 1.7.0 started without one generates a
 # key and WRITES IT INTO THE CONFIG FILE it was started from. run_poc.py therefore starts
@@ -14,10 +20,11 @@
 # variable, which stops the rewrite (case P1-CF-01). "key: disabled" is not usable in a
 # file shared by both versions: 1.7.0 accepts it, 1.6.0 rejects it.
 #
-# Port block 27611-27617 is reserved for this PoC:
-#   27611 gateway listener   27612 mock provider      27613 mock Gatekeeper
+# Port block 27611-27618 is reserved for this PoC:
+#   27611 gateway listener   27612 mock provider      27613 mock Gatekeeper (TLS)
 #   27614 gateway admin      27615 gateway stats      27616 gateway readiness
 #   27617 "forbidden" target that no route may ever reach
+#   27618 mock local broker (Mode B)
 #
 # Neither schema has a bind-address field for a gateway listener: 27611 listens on every
 # interface of the machine for as long as the PoC runs. Admin, stats and readiness are
@@ -68,10 +75,14 @@ routes:
       includeRequestHeaders:
       - x-provider-account
       policies:
-        # Stand-in for workload mTLS: the gateway authenticates itself to the PDP.
-        backendAuth:
-          key:
-            file: .run/gateway-workload.key
+        # Workload mTLS on the gateway -> PDP hop. The gateway presents its own certificate
+        # and accepts only a PDP certificate issued by the workload CA for this name. The
+        # PDP reads the caller's identity from the certificate, not from a header.
+        backendTLS:
+          cert: .run/tls/gateway.crt
+          key: .run/tls/gateway.key
+          root: .run/tls/ca.crt
+          hostname: gatekeeper.idp.test
         http:
           requestTimeout: 1s
       protocol:
@@ -143,9 +154,11 @@ routes:
       includeRequestHeaders:
       - x-provider-account
       policies:
-        backendAuth:
-          key:
-            file: .run/gateway-workload.key
+        backendTLS:
+          cert: .run/tls/gateway.crt
+          key: .run/tls/gateway.key
+          root: .run/tls/ca.crt
+          hostname: gatekeeper.idp.test
         http:
           requestTimeout: 1s
       protocol:
@@ -173,6 +186,81 @@ routes:
       - location
       - set-cookie
     # No retry policy on purpose: a non-idempotent write must reach the provider at most once.
+    timeout:
+      requestTimeout: 2s
+  backends:
+  - host: 127.0.0.1:27612
+    policies:
+      authorization:
+        rules:
+        - allow: 'request.headers["authorization"].startsWith("Bearer ")'
+      requestHeaderModifier:
+        remove:
+        - x-provider-account
+        - cookie
+        - x-forwarded-host
+        - x-forwarded-for
+        - x-forwarded-proto
+        - forwarded
+        - x-idp-verified-subject
+        - x-idp-verified-tenant
+        - x-idp-verified-env
+
+# ---------------------------------------------------------------------------------------
+# Mode B (G04 §4): the credential comes from a broker running next to the gateway
+# (mock_broker.py). The broker asks Gatekeeper for a decision only, over its own mTLS
+# identity, and redeems the credential from a local store. Seen from the gateway this is
+# the same ExtAuthZ exchange as Mode A, pointed at a loopback port.
+# ---------------------------------------------------------------------------------------
+- name: mockcarrier-manifests-get-broker
+  gateways: [egress-test]
+  hostnames: ["egress-api.idp.test"]
+  matches:
+  - path:
+      pathPrefix: /providers/mockcarrier/v1/manifests
+    method: GET
+  policies:
+    authorization:
+      rules:
+      - allow: 'request.path.matches("^(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$")'
+    extAuthz:
+      host: 127.0.0.1:27618
+      failureMode: deny
+      includeRequestHeaders:
+      - x-provider-account
+      policies:
+        # Stand-in for whatever confines a sidecar to its own gateway (a Unix socket, a pod
+        # network namespace). On a shared host this key file is all that separates the
+        # broker from any other local process.
+        backendAuth:
+          key:
+            file: .run/broker-local.key
+        http:
+          requestTimeout: 1s
+      protocol:
+        http:
+          path: '"/v1/extauthz/check"'
+          addRequestHeaders:
+            x-idp-verified-subject: jwt.sub
+            x-idp-verified-tenant: jwt.tenant_id
+            x-idp-verified-env: jwt.env
+            x-idp-route-id: '"mockcarrier-manifests-get-broker"'
+            x-idp-provider-id: '"mockcarrier"'
+            x-idp-operation-id: '"manifests.get"'
+            x-idp-environment: '"TEST"'
+            x-idp-method: request.method
+            x-idp-path: request.path
+          includeResponseHeaders:
+          - authorization
+    urlRewrite:
+      authority:
+        full: 127.0.0.1:27612
+      path:
+        prefix: /v1/manifests
+    responseHeaderModifier:
+      remove:
+      - location
+      - set-cookie
     timeout:
       requestTimeout: 2s
   backends:

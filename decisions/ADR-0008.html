@@ -10,20 +10,27 @@
 <li>需要按租户/账户选择凭证的出站路由采用<strong>模式 A</strong>：网关验证调用方 JWT 后调用 Gatekeeper 的 HTTP ExtAuthZ 端点；允许响应的 <code>Authorization</code> 头即本次请求的 Provider 凭证，网关只把这一个头写到上游请求。</li>
 <li><strong>凭证兑换只有这一条路</strong>。Gatekeeper 不提供"用句柄换凭证正文"的接口：<code>credentials/materialize</code> 不实现，<code>secure_binding_handle</code> 不签发。<code>credentials/prepare</code> 只返回计划，不返回秘密。</li>
 <li>可信上下文由网关从已验签 JWT 与路由常量构造；调用方只能提交账户<strong>申请</strong>（<code>X-Provider-Account</code>），由 PDP 对照授权复核。</li>
-<li>模式 C（网关固定凭证）仅用于单账户固定路由；模式 B 暂不采用。</li>
+<li>模式 A 用<strong>复制响应头</strong>（<code>includeResponseHeaders</code>）实现，不用 1.7.0 的 <code>backendAuth.key.expression</code>：两者实测结果相同，后者把配置绑在 1.7.0 上而没有换来安全上的好处。</li>
+<li>网关到 Gatekeeper 用工作负载 mTLS：网关出示自己的证书并固定 CA 与对端名字，Gatekeeper 从客户端证书取调用方身份，只对网关身份下发凭证。</li>
+<li>模式 C（网关固定凭证）仅用于单账户固定路由；模式 B 暂不采用，保留为回退方案。</li>
 <li>线上契约见 <code>contracts/gatekeeper/openapi.yaml</code> 的 <code>/v1/extauthz/check</code>，网关侧必须配置的项见 <code>poc/p1/README.md</code> 的"默认配置不安全的地方"。</li>
 </ol>
 <h2 id="h-4">为什么这样决定</h2>
-<p><code>poc/p1</code> 在 agentgateway 1.6.0 和 1.7.0 上用同一份配置跑通了模式 A：双租户双账户隔离、撤销即时生效、伪造上下文无效、内部 JWT 不到第三方、PDP 故障默认拒绝、非幂等写不重放（两个版本都是 41 个用例 40 个通过，证据在 <code>poc/p1/evidence/</code>）。模式 C 同时跑通，但两个租户以同一账户到达 Provider，不满足多租户要求。一次往返同时完成授权与凭证下发，不需要第二个接口，也就没有可被重放或转交的句柄。</p>
+<p><code>poc/p1</code> 在 agentgateway 1.6.0 和 1.7.0 上用同一份配置跑通了模式 A：双租户双账户隔离、撤销即时生效、伪造上下文无效、内部 JWT 不到第三方、PDP 故障默认拒绝、非幂等写不重放（1.7.0 上 50 个用例 49 个通过；1.6.0 上跑了 47 个、46 个通过；证据在 <code>poc/p1/evidence/</code>）。模式 C 同时跑通，但两个租户以同一账户到达 Provider，不满足多租户要求。一次往返同时完成授权与凭证下发，不需要第二个接口，也就没有可被重放或转交的句柄。</p>
+<p>网关到 Gatekeeper 的 mTLS 在两个版本上都跑通：没有工作负载 CA 签发的证书连不上，同一信任域里不是网关的身份拿不到凭证，冒充 Gatekeeper 的服务收不到网关的请求。</p>
 <h2 id="h-5">被考虑的替代方案</h2>
-<p>模式 B（本地 Broker/Sidecar，未测，增加一个部署单元）；模式 C 作为默认（不能按租户选账户）；保留 <code>prepare</code> + 句柄兑换（多一次往返，且句柄的绑定与兑换语义从未定义）。</p>
+<ul>
+<li><strong>模式 B（本地 Broker/Sidecar）</strong>。已测，可行：隔离、撤销、默认拒绝与模式 A 相同，而且 Provider 凭证不出现在 Gatekeeper 的任何响应里。没有采用，是因为它多出一个进程、一份放着全部账户凭证的本地存储（下发、轮换、吊销都没有设计），以及一段只能靠部署环境来限制访问的本地通信；换来的"凭证不过网络"在网关与 Gatekeeper 之间已有 mTLS 的前提下收益有限。</li>
+<li><strong><code>backendAuth.key.expression</code></strong>。已测，可行，结果与复制响应头相同；只有 1.7.0 接受。</li>
+<li>模式 C 作为默认（不能按租户选账户）；保留 <code>prepare</code> + 句柄兑换（多一次往返，且句柄的绑定与兑换语义从未定义）。</li>
+</ul>
 <h2 id="h-6">成本与剩余风险</h2>
 <ul>
-<li>证据来自 Mock Gatekeeper、Mock Provider、无 TLS、单进程；真实 Gatekeeper、工作负载 mTLS、多副本、负载下的行为未验证。</li>
-<li>验证了 1.6.0 和 1.7.0，结果逐条相同；具体版本与镜像 digest 尚未锁定，换版本必须用同一套 PoC 重跑。1.7.0 在没有会话密钥时会改写自己的配置文件，部署时必须经 <code>SESSION_KEY</code> 提供密钥（见 <code>poc/p1/README.md</code>）。</li>
-<li>1.7.0 新增的 <code>backendAuth.key.expression</code>（后端凭证由 CEL 表达式取自外部授权的返回值）没有试；它是模式 A 的另一种实现方式，批准前应与响应头方式比较。</li>
+<li>证据来自 Mock Gatekeeper、Mock Provider、单进程。<strong>没有对接过任何 Gatekeeper 实现</strong>：验证的是网关一侧和一个按契约写的 Mock。mTLS 用的是每次运行临时生成的 CA，证书的签发、轮换、吊销未验证；多副本、负载下的行为未验证。</li>
+<li>验证了 1.6.0 和 1.7.0，两个版本都能跑的用例结果逐条相同；具体版本与镜像 digest 尚未锁定，换版本必须用同一套 PoC 重跑。1.7.0 在没有会话密钥时会改写自己的配置文件，部署时必须经 <code>SESSION_KEY</code> 提供密钥（见 <code>poc/p1/README.md</code>）。</li>
+<li>mTLS 让 Gatekeeper 确认对面是网关，但租户与服务身份仍是网关转述的；网关被攻破时这些声明可以伪造。</li>
 <li>每个请求同步依赖 PDP，延迟与可用性预算未测；决策缓存未启用也未测。</li>
-<li>Provider 凭证经过网关进程内存和 PDP 响应，日志与追踪的脱敏必须单独验证。</li>
+<li>Provider 凭证经过网关进程内存和 PDP 响应。PoC 里网关默认配置下的日志没有出现凭证、调用方 JWT 或密钥；追踪、指标以及改过日志字段之后的行为没有验证。</li>
 <li>只覆盖 Header 注入。HMAC 签名、mTLS 客户端身份、OAuth 授权码委托仍是设计提案。</li>
 <li>PoC 的遗留问题（重复 <code>Host</code> 头被接受、请求头只能按黑名单删除、监听地址不可限制、PDP 不可用与拒绝不可区分）在批准前需要处置或接受。</li>
 </ul>

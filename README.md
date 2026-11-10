@@ -2,7 +2,7 @@
 
 > **IDP Gateway** / agentgateway 首选候选 / Go Control & Gatekeeper 适配 / 2026-11-10  
 > **状态：设计候选（DESIGN_DRAFT）· NOT APPROVED · 正式验收与全部门禁 NOT_RUN**  
-> P1 PoC 已在 agentgateway 1.6.0 与 1.7.0 + Mock Gatekeeper/Provider 上运行（两个版本都是 41 个用例 40 个通过，有未解决项），见 [poc/p1/README.md](poc/p1/README.md)；它不是验收证据。
+> P1 PoC 已在 agentgateway 1.6.0 与 1.7.0 + Mock Gatekeeper/Provider 上运行（1.7.0：50 个用例 49 个通过；1.6.0：跑了 47 个、46 个通过；有未解决项），见 [poc/p1/README.md](poc/p1/README.md)；它不是验收证据。
 
 本包是按 **IDP-SCG-STD-001《供应链 DDD 产品与工程设计统一规范 V1.0》** 建立的第一版 **可审查、可追溯、可静态校验** 工程基线。不是部署好的网关，也不证明已通过 Gatekeeper/Provider 实际集成、安全或性能测试。
 

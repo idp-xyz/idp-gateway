@@ -30,8 +30,10 @@
       "report": "poc/p1/README.md",
       "agentgateway_versions_run": ["1.6.0", "1.7.0"],
       "agentgateway_version_targeted": "1.7.x (1.7.0 run; no version or image digest locked)",
-      "gatekeeper": "MOCK",
+      "gatekeeper": "MOCK (no Gatekeeper implementation was available; mutual TLS to the mock is real)",
+      "local_broker": "MOCK",
       "provider": "MOCK",
+      "credential_modes_run": ["A (response header)", "A (backendAuth.key.expression, 1.7.0 only)", "B (local broker)", "C (static)"],
       "counts_as_gate_or_acceptance_evidence": false,
       "proposed_decision": "decisions/ADR-0008.md"
     }

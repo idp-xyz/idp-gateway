@@ -63,18 +63,55 @@ class CredentialRedemption(unittest.TestCase):
         handle = GATEKEEPER['components']['schemas']['CredentialUseResponse']['properties']['secure_binding_handle']
         self.assertTrue(handle.get('deprecated'))
 
+    POC_PORTS = {'gatekeeper': '127.0.0.1:27613', 'broker': '127.0.0.1:27618'}
+
+    def poc_routes(self):
+        """Every PoC route with ExtAuthZ: the base file plus the route only 1.7.0 accepts."""
+        routes = (yaml.safe_load(text('poc/p1/agentgateway.poc.yaml'))['routes']
+                  + yaml.safe_load(text('poc/p1/agentgateway.poc.key-expression.yaml')))
+        routes = [r for r in routes if 'extAuthz' in r.get('policies', {})]
+        self.assertEqual(len(routes), 4)
+        return routes
+
     def test_poc_gateway_sends_exactly_the_documented_trusted_context(self):
         documented = {p['name'] for p in GATEKEEPER['paths']['/v1/extauthz/check']['get']['parameters']}
-        config = yaml.safe_load(text('poc/p1/agentgateway.poc.yaml'))
-        routes = [r for r in config['routes'] if 'extAuthz' in r.get('policies', {})]
-        self.assertTrue(routes)
-        for route in routes:
+        for route in self.poc_routes():
             ext = route['policies']['extAuthz']
-            sent = set(ext['protocol']['http']['addRequestHeaders']) | set(ext['includeRequestHeaders'])
+            http = ext['protocol']['http']
+            sent = set(http['addRequestHeaders']) | set(ext['includeRequestHeaders'])
             with self.subTest(route=route['name']):
                 self.assertEqual(sent, documented)
-                self.assertEqual(ext['protocol']['http']['includeResponseHeaders'], ['authorization'])
                 self.assertEqual(ext['failureMode'], 'deny')
+                # The credential leaves the PDP's answer in exactly one way per route.
+                copied, read = http.get('includeResponseHeaders'), http.get('metadata')
+                if route['name'].endswith('-expression'):
+                    self.assertIsNone(copied)
+                    self.assertEqual(read, {'credential': 'response.headers["authorization"]'})
+                else:
+                    self.assertEqual(copied, ['authorization'])
+                    self.assertIsNone(read)
+
+    def test_poc_gateway_reaches_gatekeeper_over_mutual_tls_only(self):
+        """WorkloadMTLS in the contract: a certificate, a pinned CA and a pinned name, and no bearer key."""
+        for route in self.poc_routes():
+            ext = route['policies']['extAuthz']
+            with self.subTest(route=route['name']):
+                if ext['host'] == self.POC_PORTS['gatekeeper']:
+                    tls = ext['policies']['backendTLS']
+                    self.assertEqual(set(tls), {'cert', 'key', 'root', 'hostname'})
+                    self.assertNotIn('backendAuth', ext['policies'])
+                else:
+                    self.assertEqual(ext['host'], self.POC_PORTS['broker'])
+
+    def test_broker_decision_request_is_the_documented_one(self):
+        """What the mock broker sends to /v1/egress/authorizations/decision must fit DecisionRequest."""
+        request = GATEKEEPER['components']['schemas']['DecisionRequest']
+        tree = ast.parse(text('poc/p1/mock_broker.py'))
+        sent = next({k.value for k in node.keys} for node in ast.walk(tree) if isinstance(node, ast.Dict)
+                    and any(isinstance(k, ast.Constant) and k.value == 'requested_account_id' for k in node.keys))
+        self.assertLessEqual(set(request['required']), sent)
+        self.assertLessEqual(sent, set(request['properties']))
+        self.assertIn('token_environment', sent)
 
 
 class PublicationEnvelope(unittest.TestCase):

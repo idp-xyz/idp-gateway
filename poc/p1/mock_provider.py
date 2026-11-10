@@ -89,6 +89,9 @@ class Handler(BaseHTTPRequestHandler):
                                     'body_sha256': hashlib.sha256(body).hexdigest()})
         if self.command == 'GET' and parts.path == '/v1/rates':
             return self._send(200, {'rate': '12.34', 'currency': 'USD', 'account': account})
+        for resource in ('manifests', 'pickups'):
+            if self.command == 'GET' and parts.path.startswith(f'/v1/{resource}/'):
+                return self._send(200, {'resource': resource, 'id': parts.path[len(f'/v1/{resource}/'):], 'account': account})
         return self._send(404, {'error': 'unknown_provider_operation'})
 
     def _admin(self, path: str):

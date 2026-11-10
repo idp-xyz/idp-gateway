@@ -215,16 +215,22 @@ def poc_p1_evidence():
   again=f're-run the PoC on agentgateway {ver}'
   assert ev.name==f'p1-run-agentgateway-{ver}.json',f'{ev.name} holds a run on {ver}'
   assert e['agentgateway']['config_sha256']==sha('poc/p1/agentgateway.poc.yaml'),f'{ev.name} is for another gateway config; {again}'
+  assert e['agentgateway']['overlay_sha256']==sha('poc/p1/agentgateway.poc.key-expression.yaml'),f'{ev.name} is for another key-expression route; {again}'
   assert e['policy_sha256']==sha('poc/p1/policy.poc.json'),f'{ev.name} is for another PoC policy; {again}'
   assert e['policy_reference_sha256']==sha('scripts/policy_reference.py'),f'{ev.name} is for another policy_reference.py; {again}'
+  for mock,digest in e['mocks_sha256'].items():
+   assert digest==sha(f'poc/p1/{mock}'),f'{ev.name} was produced with another {mock}; {again}'
   assert str(e['formal_acceptance']).startswith('NOT_RUN')
   s=e['summary'];results=[c['result'] for c in e['cases']]
-  assert s['cases']==len(results) and s['pass']==results.count('PASS') and s['fail']==results.count('FAIL')
-  failed=[c['id'] for c in e['cases'] if c['result']!='PASS']
+  assert s['cases']==len(results) and s['pass']==results.count('PASS') and s['fail']==results.count('FAIL') and s['skip']==results.count('SKIP')
+  assert s['run']==s['pass']+s['fail'] and set(results)<={'PASS','FAIL','SKIP'}
+  # A case may be skipped only because this binary rejects the extra route, never to hide a result.
+  assert (s['skip']==0)==e['agentgateway']['overlay_accepted_by_this_binary'],f'{ev.name}: skipped cases do not match the overlay verdict'
+  failed=[c['id'] for c in e['cases'] if c['result']=='FAIL']
   # index.html has no Markdown source, so the result it quotes is checked here.
-  quoted=f"{ver}：{s['pass']}/{s['cases']}"
+  quoted=f"{ver}：{s['pass']}/{s['run']}"
   assert quoted in index,f'index.html does not say "{quoted}"'
-  told.append(f"{ver}: {s['pass']}/{s['cases']} PASS, FAIL: {', '.join(failed) or 'none'}")
+  told.append(f"{ver}: {s['pass']}/{s['run']} PASS, FAIL: {', '.join(failed) or 'none'}, SKIP: {s['skip']}")
  return f"PoC evidence matches current config/policy on agentgateway {'; '.join(told)}; not acceptance evidence"
 check('poc_p1_evidence_current',poc_p1_evidence)
 

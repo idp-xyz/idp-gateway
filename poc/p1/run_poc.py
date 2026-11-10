@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """P1 PoC runner: a real agentgateway between a mock Gatekeeper and a mock provider.
 
-Starts the four processes, drives requests through the gateway, checks what the PDP and
-the provider actually received, and writes poc/p1/evidence/p1-run.json. Expectations are
+Starts the processes (gateway, mock Gatekeeper, mock local broker, mock provider and a
+target no route may reach), drives requests through the gateway, checks what the PDP, the
+broker and the provider actually received, and writes one evidence file. Expectations are
 taken from G01/G03/G04 and are fixed in this file before the run; a case that does not
-meet its expectation is reported as FAIL, not adjusted.
+meet its expectation is reported as FAIL, not adjusted. A case for a route the binary's
+own validator does not accept is reported as SKIP.
 
 Usage (from the repository root):
     .venv/bin/python poc/p1/run_poc.py                              the agentgateway on PATH
@@ -12,27 +14,36 @@ Usage (from the repository root):
 Each agentgateway version writes its own evidence file, poc/p1/evidence/p1-run-agentgateway-<version>.json.
 """
 from __future__ import annotations
-import argparse, base64, datetime, hashlib, hmac, http.client, json, os, platform, secrets, shutil, socket, subprocess, sys, time
+import argparse, base64, datetime, hashlib, hmac, http.client, json, os, platform, secrets, shutil, socket, subprocess, sys, threading, time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from jsonschema import Draft202012Validator
+
+import pki
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 RUN = HERE / '.run'
+TLS = RUN / 'tls'
 CONFIG = HERE / 'agentgateway.poc.yaml'
+# One more route, appended to the configuration when the binary accepts it (1.7.0 does).
+OVERLAY = HERE / 'agentgateway.poc.key-expression.yaml'
 # The gateway is started from a per-run copy: a gateway that writes to its own config file
 # (1.7.0 does, see P1-CF-01) must not be able to alter the reviewed file in the repository.
 RUN_CONFIG = RUN / 'agentgateway.yaml'
 PORTS = {'gateway': 27611, 'provider': 27612, 'gatekeeper': 27613, 'admin': 27614,
-         'stats': 27615, 'readiness': 27616, 'forbidden': 27617}
+         'stats': 27615, 'readiness': 27616, 'forbidden': 27617, 'broker': 27618}
 ISSUER, AUDIENCE, LOGICAL_HOST, KID = 'https://gatekeeper.idp.test', 'idp-egress-gateway', 'egress-api.idp.test', 'poc-key-1'
 PROVIDER_SLOW_SECONDS, PDP_SLOW_SECONDS = 3.5, 2.5   # both longer than the gateway's 2s / 1s timeouts
 TRACKING = '/providers/mockcarrier/v1/tracking'
 LABELS = '/providers/mockcarrier/v1/labels'
 RATES = '/providers/mockcarrier/v1/rates'
+MANIFESTS = '/providers/mockcarrier/v1/manifests'   # Mode B route
+PICKUPS = '/providers/mockcarrier/v1/pickups'       # backendAuth.key.expression route (overlay)
 
 # --------------------------------------------------------------------------------------
 # keys, tokens
@@ -79,10 +90,16 @@ def forge(header: dict, body: dict, sign=None) -> str:
 # --------------------------------------------------------------------------------------
 # http
 # --------------------------------------------------------------------------------------
-def send(port: int, method: str, target: str, headers=(), body: bytes | None = None, timeout: float = 10.0) -> dict:
-    """Raw-ish client: the request target and headers go on the wire exactly as given."""
-    conn = http.client.HTTPConnection('127.0.0.1', port, timeout=timeout)
+def send(port: int, method: str, target: str, headers=(), body: bytes | None = None, timeout: float = 10.0,
+         tls: tuple | None = None) -> dict:
+    """Raw-ish client: the request target and headers go on the wire exactly as given.
+    tls=(certificate name or None, CA name) speaks TLS to the Gatekeeper port instead."""
     started = time.monotonic()
+    try:
+        conn = (pki.GatekeeperConnection(port, pki.client_context(TLS, *tls), timeout) if tls
+                else http.client.HTTPConnection('127.0.0.1', port, timeout=timeout))
+    except Exception as e:
+        return {'status': None, 'headers': [], 'body': b'', 'error': f'{type(e).__name__}: {e}', 'seconds': 0.0}
     try:
         conn.putrequest(method, target, skip_host=True, skip_accept_encoding=True)
         for k, v in headers:
@@ -164,6 +181,56 @@ def start_gatekeeper():
                          '--policy', str(HERE / 'policy.poc.json'), '--state', str(RUN / 'state.json')], PORTS['gatekeeper'])
 
 
+def start_broker():
+    start('broker', [sys.executable, str(HERE / 'mock_broker.py'), '--port', str(PORTS['broker']),
+                     '--state', str(RUN / 'state.json'), '--store', str(RUN / 'broker-store.json'),
+                     '--local-key', str(RUN / 'broker-local.key')], PORTS['broker'])
+
+
+class Impostor:
+    """A server on the Gatekeeper port that is not Gatekeeper: its certificate carries the
+    right names but comes from a CA the gateway was not told to trust. It asks for no client
+    certificate and would allow everything, with a credential of its own."""
+
+    def __init__(self):
+        self.requests, impostor = [], self
+        ctx = pki.server_context(TLS, 'rogue-gatekeeper', client_ca=None)
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = 'HTTP/1.1'
+
+            def log_message(self, *a):
+                pass
+
+            def setup(self):
+                self.request = ctx.wrap_socket(self.request, server_side=True)
+                super().setup()
+
+            def _handle(self):
+                impostor.requests.append(self.path)
+                self.send_response(200)
+                self.send_header('Content-Length', '2')
+                self.send_header('Authorization', 'Bearer ' + S.impostor_token)
+                self.end_headers()
+                self.wfile.write(b'{}')
+
+            do_GET = do_POST = _handle
+
+        class Server(ThreadingHTTPServer):
+            daemon_threads = True
+
+            def handle_error(self, request, client_address):
+                pass
+
+        self.server = Server(('127.0.0.1', PORTS['gatekeeper']), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+        wait_port(PORTS['gatekeeper'], up=False)
+
+
 def gateway_env(session_key: str | None) -> dict:
     env = {k: v for k, v in os.environ.items() if k != 'SESSION_KEY'}
     if session_key:
@@ -196,17 +263,20 @@ def sh(argv: list[str]) -> str:
 # --------------------------------------------------------------------------------------
 class S:  # per-run secrets; never written to the evidence file
     signing = attacker = None
-    admin = workload = static_token = session_key = ''
+    admin = broker_key = static_token = session_key = impostor_token = ''
     token = {}  # account -> provider token
-    default_start_rewrites = None  # not a secret: what default_start_rewrites_config() observed
+    # not secrets: what the runner observed about the binary before the cases
+    default_start_rewrites = None  # default_start_rewrites_config()
+    overlay_accepted = False       # does the binary's validator accept the key-expression route?
+    config_bytes = b''             # what the gateway is started from
 
 
 CASES: list[tuple] = []
 
 
-def case(cid: str, title: str, expectation: str, maps_to: tuple = ()):
+def case(cid: str, title: str, expectation: str, maps_to: tuple = (), needs_overlay: bool = False):
     def deco(fn):
-        CASES.append((cid, title, expectation, maps_to, fn))
+        CASES.append((cid, title, expectation, maps_to, fn, needs_overlay))
         return fn
     return deco
 
@@ -226,14 +296,24 @@ class Ctx:
 ADMIN = lambda: [('X-Poc-Admin', S.admin)]
 provider_hits = lambda: body_json(send(PORTS['provider'], 'GET', '/admin/hits', ADMIN())).get('hits', [])
 forbidden_hits = lambda: body_json(send(PORTS['forbidden'], 'GET', '/admin/hits', ADMIN())).get('hits', [])
-pdp_log = lambda: body_json(send(PORTS['gatekeeper'], 'GET', '/admin/log', ADMIN())).get('log', [])
-pdp_admin = lambda path: body_json(send(PORTS['gatekeeper'], 'POST', path, ADMIN(), b''))
+broker_log = lambda: body_json(send(PORTS['broker'], 'GET', '/admin/log', ADMIN())).get('log', [])
+
+
+def pdp(method: str, target: str, headers=(), body: bytes | None = None, cert: str | None = 'operator', ca: str = 'ca') -> dict:
+    """A direct call to the Gatekeeper port, presenting the named certificate (None: no certificate)."""
+    return send(PORTS['gatekeeper'], method, target, headers, body, tls=(cert, ca))
+
+
+pdp_state = lambda: body_json(pdp('GET', '/admin/log', ADMIN()))
+pdp_log = lambda: pdp_state().get('log', [])
+pdp_admin = lambda path: body_json(pdp('POST', path, ADMIN(), b''))
 
 
 def reset_all():
     send(PORTS['provider'], 'POST', '/admin/reset', ADMIN(), b'')
     send(PORTS['forbidden'], 'POST', '/admin/reset', ADMIN(), b'')
-    send(PORTS['gatekeeper'], 'POST', '/admin/reset', ADMIN(), b'')
+    send(PORTS['broker'], 'POST', '/admin/reset', ADMIN(), b'')
+    pdp('POST', '/admin/reset', ADMIN(), b'')
 
 
 def nothing_forwarded(c: Ctx, also_pdp: bool = True):
@@ -363,18 +443,41 @@ denied_by_pdp('P1-AZ-09', 'service granted tracking.get but not labels.create', 
 denied_by_pdp('P1-AZ-10', 'tenant with no grant at all', lambda: blue(tenant_id='tenant-red'), maps=('GW-AT-004', 'GW-NAT-001'))
 
 
-@case('P1-AZ-11', 'business app calls the PDP/Broker directly, without the gateway',
-      '401 and no provider credential in the answer', ('GW-ST-018', 'GW-AT-021', 'GW-FR-021'))
+def trusted_context(route: str, operation: str, path: str) -> list:
+    """The headers a gateway would send, written by something that is not the gateway."""
+    return [('X-Idp-Verified-Subject', 'parcel-service'), ('X-Idp-Verified-Tenant', 'tenant-blue'), ('X-Idp-Verified-Env', 'TEST'),
+            ('X-Idp-Route-Id', route), ('X-Idp-Provider-Id', 'mockcarrier'), ('X-Idp-Operation-Id', operation),
+            ('X-Idp-Environment', 'TEST'), ('X-Idp-Method', 'GET'), ('X-Idp-Path', path)]
+
+
+def carries_credential(r: dict) -> bool:
+    return any(t in (r['body'].decode(errors='replace') + json.dumps(r['headers'])) for t in S.token.values())
+
+
+@case('P1-AZ-11', 'something other than the gateway calls the PDP/Broker directly',
+      'without a certificate from the workload CA there is no TLS session; with one, 401 and no provider credential '
+      'unless the certificate is the gateway\'s', ('GW-ST-018', 'GW-AT-021', 'GW-FR-021'))
 def _(c):
-    ctx = [('X-Idp-Verified-Subject', 'parcel-service'), ('X-Idp-Verified-Tenant', 'tenant-blue'), ('X-Idp-Verified-Env', 'TEST'),
-           ('X-Idp-Provider-Id', 'mockcarrier'), ('X-Idp-Operation-Id', 'tracking.get'), ('X-Idp-Environment', 'TEST'),
-           ('X-Idp-Method', 'GET'), ('X-Idp-Path', TRACKING + '/TRK-1')]
-    for label, auth in [('no credential', []), ('wrong credential', [('Authorization', 'Bearer not-the-gateway')]),
-                        ('a valid caller JWT instead of the workload key', [('Authorization', 'Bearer ' + blue())])]:
-        r = send(PORTS['gatekeeper'], 'GET', '/v1/extauthz/check', ctx + auth)
-        leaked = any(t in (r['body'].decode(errors='replace') + json.dumps(r['headers'])) for t in S.token.values())
+    ctx = trusted_context('mockcarrier-tracking-get', 'tracking.get', TRACKING + '/TRK-1')
+    jwt_too = ctx + [('Authorization', 'Bearer ' + blue())]
+    for label, cert in [('no client certificate', None),
+                        ('a certificate with the gateway\'s identity from another CA', 'rogue-gateway')]:
+        r = pdp('GET', '/v1/extauthz/check', jwt_too, cert=cert)
+        c.check(f'{label}: no HTTP response', r['status'] is None)
+        c.check(f'{label}: no provider credential returned', not carries_credential(r))
+    state = pdp_state()
+    c.note('tls_handshakes_refused_by_the_pdp', state.get('tls_handshakes_refused'))
+    c.check('the PDP refused both TLS handshakes', len(state.get('tls_handshakes_refused', [])) == 2)
+    c.check('...and handled no request from either', len(state.get('log', [])) == 0)
+    # Workloads of the same trust domain that are not the gateway.
+    for label, cert in [('a business app\'s own workload certificate, with a valid caller JWT', 'business-app'),
+                        ('the local broker\'s certificate', 'broker')]:
+        r = pdp('GET', '/v1/extauthz/check', jwt_too, cert=cert)
         c.check(f'{label}: 401', r['status'] == 401)
-        c.check(f'{label}: no provider credential returned', not leaked)
+        c.check(f'{label}: no provider credential returned', not carries_credential(r))
+    # Control: the refusals above are about who is calling, not about the request.
+    r = pdp('GET', '/v1/extauthz/check', ctx, cert='gateway')
+    c.check('control: the same request under the gateway\'s certificate is allowed', r['status'] == 200 and carries_credential(r))
 
 
 @case('P1-AZ-12', 'paths and methods with no registered route', '404 from the gateway; nothing consulted or forwarded',
@@ -422,10 +525,12 @@ def _(c):
     c.note('response_header_names', sorted({k.lower() for k, _ in r['headers']}))
     c.check('status is 200', r['status'] == 200)
     c.check('no provider credential in response headers or body', not any(t in blob for t in S.token.values()))
-    c.check('no workload key in response', S.workload not in blob)
+    c.check('no broker key in response', S.broker_key not in blob)
 
 
-@case('P1-CR-03', 'what the PDP receives', 'the gateway workload key, not the caller\'s JWT', ('GW-AT-021', 'GW-FR-021'))
+@case('P1-CR-03', 'what the PDP receives',
+      'the gateway\'s workload identity, from its client certificate; not the caller\'s JWT, and no bearer credential of any kind',
+      ('GW-AT-021', 'GW-FR-021'))
 def _(c):
     tok = blue()
     gw('GET', TRACKING + '/TRK-1', tok)
@@ -434,8 +539,11 @@ def _(c):
         return
     hs = log[0]['headers']
     c.note('pdp_saw_header_names', sorted({k.lower() for k, _ in hs}))
+    c.note('pdp_saw_peer', {'identity': log[0].get('peer_identity'), 'tls_version': log[0].get('tls_version')})
     c.check('caller JWT appears in no header value', all(tok not in v for _, v in hs))
-    c.check('Authorization is the gateway workload key', header(hs, 'authorization') == ['Bearer ' + S.workload])
+    c.check('no Authorization header at all', header(hs, 'authorization') == [])
+    c.check('the caller is the gateway workload, by its verified client certificate', log[0].get('peer_identity') == pki.ID['gateway'])
+    c.check('the session is TLS 1.2 or later', log[0].get('tls_version') in ('TLSv1.2', 'TLSv1.3'))
 
 
 # ---- revocation -------------------------------------------------------------------------------
@@ -484,6 +592,29 @@ def _(c):
     finally:
         start_gatekeeper()
     c.check('after restart: allowed again', gw('GET', TRACKING + '/TRK-1', blue())['status'] == 200)
+
+
+@case('P1-TL-01', 'a server on the PDP port that is not Gatekeeper',
+      'the gateway does not accept its certificate: it is sent no request, nothing reaches the provider, and service resumes with the real PDP',
+      ('GW-ST-018', 'GW-ST-008', 'GW-FR-021', 'GW-FR-047'))
+def _(c):
+    stop('gatekeeper', PORTS['gatekeeper'])
+    impostor = Impostor()
+    try:
+        r = gw('GET', TRACKING + '/TRK-1', blue())
+        w = gw('POST', LABELS, blue(), JSON_CT, LABEL_BODY)
+        c.note('statuses_while_impersonated', [r['status'], w['status']])
+        c.check('neither request succeeds', all(x['status'] is not None and x['status'] >= 400 for x in (r, w)))
+        c.check('the impostor was sent no request by the gateway', impostor.requests == [])
+        c.check('provider received nothing', len(provider_hits()) == 0)
+        # Control: a client that does trust the other CA is answered, with a credential.
+        told = pdp('GET', '/v1/extauthz/check', cert=None, ca='rogue-ca')
+        c.check('control: the impostor allows whoever accepts its certificate',
+                told['status'] == 200 and header(told, 'authorization') == ['Bearer ' + S.impostor_token])
+    finally:
+        impostor.close()
+        start_gatekeeper()
+    c.check('after the real PDP is back: allowed again', gw('GET', TRACKING + '/TRK-1', blue())['status'] == 200)
 
 
 @case('P1-FC-04', 'PDP allows but the Broker returns no credential',
@@ -644,6 +775,173 @@ def _(c):
     c.check('caller JWT still not forwarded', all('eyJ' not in v for h in hits for _, v in h['headers']))
 
 
+# ---- Mode B -----------------------------------------------------------------------------------------
+def all_provider_credentials() -> list:
+    return list(S.token.values()) + [S.static_token]
+
+
+@case('P1-MB-01', 'local broker (Mode B): each tenant leaves with its own account',
+      'the same isolation as Mode A, while Gatekeeper is asked for a decision only and nothing it sends contains a provider credential',
+      ('GW-AT-006', 'GW-NAT-001', 'GW-AT-033', 'GW-FR-006', 'GW-FR-033'))
+def _(c):
+    expect_account(c, gw('GET', MANIFESTS + '/MAN-1', blue()), 'account-blue', '/v1/manifests/MAN-1')
+    send(PORTS['provider'], 'POST', '/admin/reset', ADMIN(), b'')
+    expect_account(c, gw('GET', MANIFESTS + '/MAN-2', green()), 'account-green', '/v1/manifests/MAN-2')
+    log = pdp_log()
+    answers = [e['gatekeeper'] for e in broker_log() if e.get('gatekeeper')]
+    c.note('gatekeeper_was_asked', [{'target': e['raw_target'], 'by': e.get('peer_identity')} for e in log])
+    c.check('Gatekeeper was asked once per request, on the decision endpoint only',
+            [e['raw_target'] for e in log] == ['/v1/egress/authorizations/decision'] * 2)
+    c.check('...by the broker workload, not the gateway', all(e.get('peer_identity') == pki.ID['broker'] for e in log))
+    c.check('the broker recorded both answers', len(answers) == 2)
+    c.check('no provider credential in the headers or body of anything Gatekeeper sent',
+            not any(t in json.dumps(answers) for t in all_provider_credentials()))
+    decisions = [body_json({'body': a.get('body', '')}) for a in answers]
+    schema = json.loads((ROOT / 'contracts/gatekeeper/authz-decision.schema.json').read_text(encoding='utf-8'))
+    c.check('both answers are valid DecisionResponse documents (contracts/gatekeeper/authz-decision.schema.json)',
+            bool(decisions) and all(not list(Draft202012Validator(schema).iter_errors(d)) for d in decisions))
+    c.note('credential_handles', [d.get('credential_handle') for d in decisions])
+
+
+@case('P1-MB-02', 'Mode B: denial and revocation are still Gatekeeper\'s',
+      'another tenant\'s account, a token for another environment and a revoked account are each refused on that request; nothing is forwarded',
+      ('GW-AT-004', 'GW-AT-026', 'GW-AT-028', 'GW-ST-026', 'GW-FR-004', 'GW-FR-026', 'GW-FR-028'))
+def _(c):
+    def refused(label, r, reason):
+        c.note(label, {'status': r['status'], 'reason_code': body_json(r).get('reason_code')})
+        c.check(f'{label}: 403 {reason}', r['status'] == 403 and body_json(r).get('reason_code') == reason)
+        c.check(f'{label}: provider received nothing', len(provider_hits()) == 0)
+
+    refused('tenant-blue asks for account-green',
+            gw('GET', MANIFESTS + '/MAN-1', blue(), [('X-Provider-Account', 'account-green')]), 'ACCOUNT_NOT_GRANTED')
+    refused('token issued for PROD on the TEST pool', gw('GET', MANIFESTS + '/MAN-1', blue(env='PROD')), 'ENVIRONMENT_MISMATCH')
+    pdp_admin('/admin/revoke?account=account-blue')
+    refused('first blue request after account-blue is revoked', gw('GET', MANIFESTS + '/MAN-1', blue()), 'ACCOUNT_REVOKED')
+    g = gw('GET', MANIFESTS + '/MAN-2', green())
+    c.check('green still allowed with its own account', g['status'] == 200 and body_json(g).get('account') == 'account-green')
+    pdp_admin('/admin/restore?account=account-blue')
+    c.check('after restore: blue allowed again', gw('GET', MANIFESTS + '/MAN-1', blue())['status'] == 200)
+
+
+@case('P1-MB-03', 'Mode B: Gatekeeper or the broker unavailable',
+      'every such request is rejected and never reaches the provider (fail closed); service resumes when both are back',
+      ('GW-ST-008', 'GW-NAT-006', 'GW-AT-047', 'GW-FR-047'))
+def _(c):
+    def refused(label):
+        r = gw('GET', MANIFESTS + '/MAN-1', blue())
+        c.note(label, {'status': r['status'], 'seconds': r['seconds']})
+        c.check(f'{label}: not a success status', r['status'] is not None and r['status'] >= 400)
+        c.check(f'{label}: provider received nothing', len(provider_hits()) == 0)
+
+    pdp_admin('/admin/mode?value=error500')
+    refused('Gatekeeper answers 500')
+    pdp_admin('/admin/mode?value=slow')
+    refused('Gatekeeper slower than the broker waits')
+    stop('gatekeeper', PORTS['gatekeeper'])
+    try:
+        refused('Gatekeeper down')
+    finally:
+        start_gatekeeper()
+    stop('broker', PORTS['broker'])
+    try:
+        refused('broker down')
+    finally:
+        start_broker()
+    c.check('after both are back: allowed again', gw('GET', MANIFESTS + '/MAN-1', blue())['status'] == 200)
+
+
+@case('P1-MB-04', 'another local process calls the broker directly',
+      'without the gateway\'s local key: 401, no provider credential, and Gatekeeper is not even asked',
+      ('GW-ST-018', 'GW-AT-021', 'GW-FR-021'))
+def _(c):
+    ctx = trusted_context('mockcarrier-manifests-get-broker', 'manifests.get', MANIFESTS + '/MAN-1')
+    for label, auth in [('no key', []), ('wrong key', [('Authorization', 'Bearer not-the-gateway')]),
+                        ('a valid caller JWT instead of the key', [('Authorization', 'Bearer ' + blue())])]:
+        r = send(PORTS['broker'], 'GET', '/v1/extauthz/check', ctx + auth)
+        c.check(f'{label}: 401', r['status'] == 401)
+        c.check(f'{label}: no provider credential returned', not carries_credential(r))
+    c.check('Gatekeeper was not asked', len(pdp_log()) == 0)
+    # Control, and the limit of this stand-in: the key file is the only thing in the way.
+    r = send(PORTS['broker'], 'GET', '/v1/extauthz/check', ctx + [('Authorization', 'Bearer ' + S.broker_key)])
+    c.check('control: whoever presents the content of the key file is given a credential',
+            r['status'] == 200 and carries_credential(r))
+
+
+# ---- backendAuth.key.expression (route from the overlay; needs a binary that accepts it) ---------------
+@case('P1-KX-01', 'credential placed by backendAuth.key.expression instead of header copying',
+      'the same result as on the Mode A routes: each tenant leaves with exactly its own account\'s credential',
+      ('GW-AT-006', 'GW-NAT-001', 'GW-AT-008', 'GW-FR-006', 'GW-FR-008'), needs_overlay=True)
+def _(c):
+    tok = blue()
+    r = gw('GET', PICKUPS + '/PCK-1', tok, [('Cookie', 'session=caller-session'), ('X-Provider-Account', 'account-blue')])
+    expect_account(c, r, 'account-blue', '/v1/pickups/PCK-1')
+    for h in provider_hits():
+        names = sorted({k.lower() for k, _ in h['headers']})
+        c.note('provider_saw_header_names', names)
+        c.check('IDP JWT appears in no header value', all(tok not in v for _, v in h['headers']))
+        c.check('no x-idp-*, x-provider-account or cookie header',
+                not any(n.startswith('x-idp-') or n in ('x-provider-account', 'cookie') for n in names))
+    c.check('no provider credential in what the caller received',
+            not any(t in r['body'].decode(errors='replace') + json.dumps(r['headers']) for t in all_provider_credentials()))
+    send(PORTS['provider'], 'POST', '/admin/reset', ADMIN(), b'')
+    expect_account(c, gw('GET', PICKUPS + '/PCK-2', green()), 'account-green', '/v1/pickups/PCK-2')
+    log = pdp_log()
+    c.check('PDP consulted once per request, by the gateway workload',
+            len(log) == 2 and all(e.get('peer_identity') == pki.ID['gateway'] for e in log))
+
+
+@case('P1-KX-02', 'key.expression route: PDP allows but releases no credential',
+      'the gateway itself refuses to forward; no Authorization header of any kind reaches the provider',
+      ('GW-ST-009', 'GW-AT-043', 'GW-FR-006', 'GW-FR-043'), needs_overlay=True)
+def _(c):
+    pdp_admin('/admin/mode?value=allow_without_credential')
+    tok = blue()
+    r = gw('GET', PICKUPS + '/PCK-1', tok)
+    hits = provider_hits()
+    c.note('status', r['status']); c.note('provider_hits', len(hits))
+    c.note('rejected_by', 'provider' if header(r, 'x-mock-provider') else 'gateway')
+    c.check('caller does not get a success', r['status'] is not None and r['status'] >= 400)
+    c.check('caller JWT did not reach the provider', all(tok not in v for h in hits for _, v in h['headers']))
+    c.check('no Authorization header reached the provider', all(header(h['headers'], 'authorization') == [] for h in hits))
+    c.check('provider received nothing (rejected at the gateway)', len(hits) == 0)
+
+
+@case('P1-KX-03', 'key.expression route: denial and revocation',
+      'another tenant\'s account and a revoked account are each refused on that request; nothing is forwarded',
+      ('GW-AT-004', 'GW-AT-026', 'GW-FR-004', 'GW-FR-026'), needs_overlay=True)
+def _(c):
+    r = gw('GET', PICKUPS + '/PCK-1', blue(), [('X-Provider-Account', 'account-green')])
+    c.check('tenant-blue asks for account-green: 403', r['status'] == 403)
+    pdp_admin('/admin/revoke?account=account-blue')
+    r = gw('GET', PICKUPS + '/PCK-1', blue())
+    c.note('first_request_after_revoke', {'status': r['status'], 'reason_code': body_json(r).get('reason_code')})
+    c.check('first blue request after revocation: 403', r['status'] == 403)
+    c.check('provider received nothing in either case', len(provider_hits()) == 0)
+    pdp_admin('/admin/restore?account=account-blue')
+    c.check('after restore: blue allowed again', gw('GET', PICKUPS + '/PCK-1', blue())['status'] == 200)
+
+
+# ---- the gateway's own log ----------------------------------------------------------------------------
+@case('P1-CR-04', 'what the gateway has written to its log during this run',
+      'no provider credential, caller JWT, broker key or session key in any line, including the lines for failed credential handling',
+      ('GW-AT-007', 'GW-FR-007', 'GW-NFR-05'))
+def _(c):
+    tok = blue()
+    routes = [TRACKING + '/TRK-1', MANIFESTS + '/MAN-1', RATES] + ([PICKUPS + '/PCK-1'] if S.overlay_accepted else [])
+    ok = [gw('GET', t, tok)['status'] for t in routes]
+    pdp_admin('/admin/mode?value=allow_without_credential')   # makes the gateway log its own credential-handling failures
+    for t in routes:
+        gw('GET', t, tok)
+    time.sleep(0.5)
+    log = (RUN / 'agentgateway.log').read_text(encoding='utf-8', errors='replace')
+    c.note('log_lines', len(log.splitlines())); c.note('routes_exercised', len(routes))
+    c.check('every route answered 200 just before the log was read', ok == [200] * len(routes))
+    c.check('the log covers the run (more lines than there are cases)', len(log.splitlines()) > len(CASES))
+    c.check('no provider credential', not any(t in log for t in all_provider_credentials()))
+    c.check('no caller JWT', tok not in log and 'eyJ' not in log)
+    c.check('no broker key and no session key', S.broker_key not in log and S.session_key not in log)
+
+
 # ---- configuration integrity --------------------------------------------------------------------------
 @case('P1-CF-01', 'the gateway and its own configuration file',
       'given its session key through the environment, the gateway leaves the file it was started from byte-identical to the reviewed configuration',
@@ -651,8 +949,9 @@ def _(c):
 def _(c):
     # Observation, not a check: what the same binary does when nobody supplies a session key.
     c.note('start_without_session_key_rewrites_config_file', S.default_start_rewrites)
-    c.check('the file the gateway is running from is byte-identical to poc/p1/agentgateway.poc.yaml',
-            RUN_CONFIG.read_bytes() == CONFIG.read_bytes())
+    c.note('reviewed_configuration', 'poc/p1/agentgateway.poc.yaml' + (' + poc/p1/agentgateway.poc.key-expression.yaml' if S.overlay_accepted else ''))
+    c.check('the file the gateway is running from is byte-identical to the reviewed configuration',
+            RUN_CONFIG.read_bytes() == S.config_bytes and S.config_bytes.startswith(CONFIG.read_bytes()))
     c.check('the gateway is serving while this is checked', gw('GET', TRACKING + '/TRK-1', blue())['status'] == 200)
 
 
@@ -660,12 +959,16 @@ def _(c):
 # main
 # --------------------------------------------------------------------------------------
 SCOPE_LIMITS = [
-    'Gatekeeper is a mock: no real identity provider, grants store, Secret Manager or provider token endpoint.',
+    'Gatekeeper is a mock written for this PoC: no real identity provider, grants store, Secret Manager or provider token '
+    'endpoint. No Gatekeeper implementation was available to test against; what is exercised is the gateway\'s side of the contract.',
     'The provider is a loopback mock; no carrier sandbox was called.',
-    'No TLS or mTLS on any hop. The gateway-to-PDP channel is authenticated by a shared key standing in for workload mTLS.',
+    'Mutual TLS is real on the gateway-to-PDP and broker-to-PDP hops only, with a CA and certificates made for the run: '
+    'no SPIFFE Workload API, no rotation, no certificate revocation. Caller-to-gateway and gateway-to-provider are plain HTTP.',
+    'The local broker (Mode B) is a mock with a JSON file as its store. The gateway reaches it over loopback HTTP and proves '
+    'itself with a key file, standing in for a Unix socket or pod-local restriction; that restriction itself is untested.',
     'Single gateway process: nothing here speaks to multi-replica behaviour, config rollout, quotas or load.',
     'The result holds for the agentgateway build named in this file only; each version tested has its own evidence file.',
-    'HTTP ExtAuthZ only. gRPC ExtAuthZ, decision caching, CONNECT, gRPC upstreams, HMAC signing and mTLS client identities are untested.',
+    'HTTP ExtAuthZ only. gRPC ExtAuthZ, decision caching, CONNECT, gRPC upstreams, HMAC signing and mTLS towards providers are untested.',
     'DNS rebinding and network-layer egress ACLs are untested: the upstream is a fixed loopback address.',
     'This is PoC evidence. It does not change any NOT_RUN acceptance case or STD-CP gate.',
 ]
@@ -676,20 +979,46 @@ def prepare():
     for f in RUN.glob('*.log'):
         f.unlink()
     S.signing, S.attacker = new_key(), new_key()
-    S.admin, S.workload = secrets.token_urlsafe(24), 'gw-workload-' + secrets.token_urlsafe(24)
+    S.admin, S.broker_key = secrets.token_urlsafe(24), 'broker-local-' + secrets.token_urlsafe(24)
     S.token = {a: f'mock-{a}-' + secrets.token_urlsafe(24) for a in ('account-blue', 'account-green')}
     S.static_token = 'mock-account-shared-' + secrets.token_urlsafe(24)
+    S.impostor_token = 'impostor-' + secrets.token_urlsafe(24)
     S.session_key = secrets.token_hex(32)
-    shutil.copyfile(CONFIG, RUN_CONFIG)
+    pki.issue(TLS)
+    os.chmod(TLS, 0o700)
     (RUN / 'jwks.json').write_text(json.dumps({'keys': [jwk(S.signing, KID)]}), encoding='utf-8')
-    (RUN / 'gateway-workload.key').write_text(S.workload, encoding='utf-8')
+    (RUN / 'broker-local.key').write_text(S.broker_key, encoding='utf-8')
     (RUN / 'static-provider.key').write_text(S.static_token, encoding='utf-8')
-    state = {'admin_secret': S.admin, 'workload_key': S.workload, 'ports': PORTS,
+    # The broker's own store: handle (credential binding / account) -> provider token.
+    binding = json.loads((HERE / 'policy.poc.json').read_text(encoding='utf-8'))['registered_operations'][0]['credential_binding_ref']
+    (RUN / 'broker-store.json').write_text(json.dumps({f'{binding}/{a}': t for a, t in S.token.items()}), encoding='utf-8')
+    for f in RUN.iterdir():
+        if f.is_file():
+            os.chmod(f, 0o600)
+
+
+def compose_config(binary: str) -> dict:
+    """Decide what the gateway is started from: the base file, plus the key-expression route
+    when this binary's validator accepts the two together. Then tell the mocks."""
+    def validate(data: bytes):
+        RUN_CONFIG.write_bytes(data)
+        v = subprocess.run([binary, '--validate-only', '-f', str(RUN_CONFIG.relative_to(HERE))], cwd=HERE, capture_output=True, text=True)
+        return v.returncode == 0, (v.stdout + v.stderr).strip()
+
+    base = CONFIG.read_bytes()
+    base_ok, base_said = validate(base)
+    overlay_ok, overlay_said = validate(base + b'\n' + OVERLAY.read_bytes()) if base_ok else (False, 'not tried')
+    S.overlay_accepted = overlay_ok
+    S.config_bytes = base + b'\n' + OVERLAY.read_bytes() if overlay_ok else base
+    RUN_CONFIG.write_bytes(S.config_bytes)
+    state = {'admin_secret': S.admin, 'ports': PORTS, 'tls_dir': str(TLS),
+             'config_digest': 'sha256:' + hashlib.sha256(S.config_bytes).hexdigest(),
              'provider_slow_seconds': PROVIDER_SLOW_SECONDS, 'pdp_slow_seconds': PDP_SLOW_SECONDS,
              'provider_tokens': {**{t: a for a, t in S.token.items()}, S.static_token: 'account-shared'}}
     (RUN / 'state.json').write_text(json.dumps(state), encoding='utf-8')
-    for f in RUN.iterdir():
+    for f in (RUN_CONFIG, RUN / 'state.json'):
         os.chmod(f, 0o600)
+    return {'base_ok': base_ok, 'base_said': base_said, 'overlay_said': ' '.join(overlay_said.split())[:400]}
 
 
 def ephemeral_range() -> tuple[int, int] | None:
@@ -726,10 +1055,11 @@ def main() -> int:
     if eph and any(eph[0] <= p <= eph[1] for p in PORTS.values()):
         print(f'port block overlaps the ephemeral range {eph[0]}-{eph[1]} of this host, refusing to start'); return 2
     prepare()
-    validate = subprocess.run([binary, '--validate-only', '-f', CONFIG.name], cwd=HERE, capture_output=True, text=True)
-    print('native config validation:', (validate.stdout + validate.stderr).strip())
-    if validate.returncode != 0:
+    validation = compose_config(binary)
+    print('native config validation:', validation['base_said'])
+    if not validation['base_ok']:
         return 2
+    print('key-expression route:', 'accepted' if S.overlay_accepted else f"not accepted by this binary ({validation['overlay_said'][:160]})")
 
     started = datetime.datetime.now(datetime.timezone.utc)
     results, listeners = [], ''
@@ -740,11 +1070,18 @@ def main() -> int:
         mock('mockcarrier', PORTS['provider'])
         mock('forbidden', PORTS['forbidden'])
         start_gatekeeper()
+        start_broker()
         start('agentgateway', [binary, '-f', str(RUN_CONFIG.relative_to(HERE))], PORTS['gateway'], env=gateway_env(S.session_key))
         listeners = sh(['ss', '-ltnH'])
         listeners = sorted(l.split()[3] for l in listeners.splitlines() if any(f':{p}' in l for p in PORTS.values()))
 
-        for cid, title, expectation, maps_to, fn in CASES:
+        for cid, title, expectation, maps_to, fn, needs_overlay in CASES:
+            record = {'id': cid, 'title': title, 'expectation': expectation}
+            if needs_overlay and not S.overlay_accepted:
+                results.append({**record, 'result': 'SKIP', 'checks': [], 'indicative_for': list(maps_to),
+                                'observed': {'skipped_because': f"this binary's validator does not accept {OVERLAY.name}"}})
+                print(f'SKIP  {cid}  {title}')
+                continue
             reset_all()
             c = Ctx()
             try:
@@ -752,7 +1089,7 @@ def main() -> int:
             except Exception as e:
                 c.check(f'case raised {type(e).__name__}: {e}', False)
             ok = bool(c.checks) and all(x['ok'] for x in c.checks)
-            results.append({'id': cid, 'title': title, 'expectation': expectation, 'result': 'PASS' if ok else 'FAIL',
+            results.append({**record, 'result': 'PASS' if ok else 'FAIL',
                             'checks': c.checks, 'observed': c.observed, 'indicative_for': list(maps_to)})
             print(f"{'PASS' if ok else 'FAIL'}  {cid}  {title}")
             for x in c.checks:
@@ -765,6 +1102,7 @@ def main() -> int:
         still_open = [p for p in PORTS.values() if port_open(p)]
 
     passed = sum(r['result'] == 'PASS' for r in results)
+    skipped = sum(r['result'] == 'SKIP' for r in results)
     evidence = {
         'title': 'IDP Gateway P1 PoC: real agentgateway, mock Gatekeeper, mock provider',
         'started_at_utc': started.isoformat(), 'finished_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -780,22 +1118,31 @@ def main() -> int:
                          'binary_sha256': hashlib.sha256(Path(binary).read_bytes()).hexdigest(),
                          'config_file': 'poc/p1/agentgateway.poc.yaml',
                          'config_sha256': hashlib.sha256(CONFIG.read_bytes()).hexdigest(),
-                         'native_validation': (validate.stdout + validate.stderr).strip(),
+                         'native_validation': validation['base_said'],
+                         'overlay_file': 'poc/p1/agentgateway.poc.key-expression.yaml',
+                         'overlay_sha256': hashlib.sha256(OVERLAY.read_bytes()).hexdigest(),
+                         'overlay_accepted_by_this_binary': S.overlay_accepted,
+                         'overlay_native_validation': validation['overlay_said'],
                          'session_key_supplied_by': 'SESSION_KEY environment variable, generated per run, not recorded',
                          'start_without_session_key_rewrites_config_file': S.default_start_rewrites},
         'policy_sha256': hashlib.sha256((HERE / 'policy.poc.json').read_bytes()).hexdigest(),
         'policy_reference_sha256': hashlib.sha256((ROOT / 'scripts' / 'policy_reference.py').read_bytes()).hexdigest(),
+        'mocks_sha256': {f: hashlib.sha256((HERE / f).read_bytes()).hexdigest()
+                         for f in ('mock_gatekeeper.py', 'mock_broker.py', 'mock_provider.py', 'pki.py')},
+        'workload_identities': pki.ID,
         'ports': PORTS, 'host_ephemeral_port_range': ephemeral_range(),
         'listen_addresses_observed': listeners, 'ports_left_open_after_run': still_open,
-        'summary': {'cases': len(results), 'pass': passed, 'fail': len(results) - passed},
+        'summary': {'cases': len(results), 'run': len(results) - skipped, 'pass': passed,
+                    'fail': len(results) - skipped - passed, 'skip': skipped},
         'scope_limits': SCOPE_LIMITS,
         'formal_acceptance': 'NOT_RUN (unchanged by this PoC)',
         'cases': results,
     }
     evidence_file.parent.mkdir(exist_ok=True)
     evidence_file.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-    print(f"\n{passed}/{len(results)} cases passed; evidence: {evidence_file.relative_to(ROOT)}; ports left open: {still_open or 'none'}")
-    return 0 if passed == len(results) else 1
+    print(f"\n{passed}/{len(results) - skipped} cases passed, {skipped} skipped; evidence: {evidence_file.relative_to(ROOT)}; "
+          f"ports left open: {still_open or 'none'}")
+    return 0 if passed == len(results) - skipped else 1
 
 
 if __name__ == '__main__':

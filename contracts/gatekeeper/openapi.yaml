@@ -9,14 +9,15 @@ info:
 
     Two kinds of path live here. /v1/extauthz/check is the HTTP ExtAuthZ exchange between agentgateway and the
     PDP: its shape is dictated by the gateway, and it is the one exercised by poc/p1 on agentgateway 1.6.0 and 1.7.0 (with
-    a mock Gatekeeper). The /v1/egress/... paths are IDP''s neutral control API and are NOT an ExtAuthZ wire
-    protocol; nothing has run them.
+    a mock Gatekeeper, over mutual TLS). The /v1/egress/... paths are IDP''s neutral control API and are NOT an
+    ExtAuthZ wire protocol. Of these, poc/p1 runs /v1/egress/authorizations/decision against the same mock, called
+    by a mock local broker (Mode B); nothing has run the other two.
 
 
     How a provider credential reaches the gateway (credential redemption): for header injection it is delivered
     only in the allow response of /v1/extauthz/check, to the authenticated gateway workload, for the one request
     being authorised. No endpoint in this API returns credential material in a response body, and no handle
-    issued here can be exchanged for one. See decisions/ADR-0008.md.
+    issued here can be exchanged for one through this API. See decisions/ADR-0008.md.
 
     '
 servers:
@@ -255,6 +256,11 @@ components:
         tenant_id:
           type: string
           description: Candidate only; server MUST derive/verify trusted tenant binding
+        token_environment:
+          $ref: '#/components/schemas/Environment'
+          description: Candidate only; environment the caller's validated token was issued for (x-idp-verified-env
+            on the ExtAuthZ path). Without it the PDP cannot refuse a token of one environment used on a pool of
+            another. Added after the Mode B run in poc/p1, where the broker had no field to pass it in.
         delegated_subject:
           type: string
           description: Candidate only, present when the service acts for a user; server MUST verify the delegation

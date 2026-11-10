@@ -35,6 +35,40 @@
         "tenant-green": ["account-green"]
       },
       "allowed_service_ids": ["parcel-service"]
+    },
+    {
+      "route_id": "mockcarrier-manifests-get-broker",
+      "provider_id": "mockcarrier",
+      "operation_id": "manifests.get",
+      "environment": "TEST",
+      "method": "GET",
+      "path_prefix": "/providers/mockcarrier/v1/manifests",
+      "upstream_hostname": "mockcarrier.example",
+      "port": 443,
+      "credential_binding_ref": "gatekeeper:mockcarrier-test",
+      "allowed_tenants": ["tenant-blue", "tenant-green"],
+      "accounts_by_tenant": {
+        "tenant-blue": ["account-blue"],
+        "tenant-green": ["account-green"]
+      },
+      "allowed_service_ids": ["parcel-service", "cargo-service"]
+    },
+    {
+      "route_id": "mockcarrier-pickups-get-expression",
+      "provider_id": "mockcarrier",
+      "operation_id": "pickups.get",
+      "environment": "TEST",
+      "method": "GET",
+      "path_prefix": "/providers/mockcarrier/v1/pickups",
+      "upstream_hostname": "mockcarrier.example",
+      "port": 443,
+      "credential_binding_ref": "gatekeeper:mockcarrier-test",
+      "allowed_tenants": ["tenant-blue", "tenant-green"],
+      "accounts_by_tenant": {
+        "tenant-blue": ["account-blue"],
+        "tenant-green": ["account-green"]
+      },
+      "allowed_service_ids": ["parcel-service", "cargo-service"]
     }
   ],
   "allow_request_redirects": false,

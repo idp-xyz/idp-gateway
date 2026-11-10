@@ -76,7 +76,7 @@ ALLOW = TrustedCaller ∧ AudienceValid ∧ TenantBound ∧ ActiveGrant ∧
 - 模式 A：Gatekeeper 经可信 ExtAuthZ 返回受限 Header 注入信息（可能包含短期 Provider Token）。只允许 Gateway 授权通道处理，必须禁止日志泄密并验证缓存风险。
 - 模式 B：Gateway 通过受限本地 Broker/Sidecar 获取 Token 并注入，减少网络传播面，但增加独立部署和通信契约。
 - 模式 C：固定 Secret 引用通过 agentgateway BackendAuth；适合固定账户，不适合动态租户账户。
-- **P1 PoC 结果**（agentgateway 1.6.0 与 1.7.0 + Mock Gatekeeper/Provider，非正式验收）：模式 A 经 HTTP ExtAuthZ 响应头注入跑通并做到双租户账户隔离；模式 C 跑通，但所有租户共用同一账户；模式 B 未测。见 [P1 PoC 报告](../poc/p1/README.md) 与 [ADR-0008](../decisions/ADR-0008.md)。
+- **P1 PoC 结果**（agentgateway 1.6.0 与 1.7.0 + Mock Gatekeeper/Provider，非正式验收）：模式 A 经 HTTP ExtAuthZ 响应头注入跑通并做到双租户账户隔离，网关到 PDP 为工作负载 mTLS；模式 B 用 Mock 本地 Broker 跑通，隔离相同，代价是多一个持有凭证的本地组件；模式 C 跑通，但所有租户共用同一账户。见 [P1 PoC 报告](../poc/p1/README.md) 与 [ADR-0008](../decisions/ADR-0008.md)。
 
 **最初版本不能假设动态凭证插入对所有协议都可原生实现**；必须以真实版本和 extAuthz 回包机制实测，必要时在受控 sidecar 实现，严禁因此开放任意 Header 注入。
 
