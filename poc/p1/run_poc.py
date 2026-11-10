@@ -771,7 +771,11 @@ def main() -> int:
         'operator': sh(['git', 'config', 'user.name']), 'host': platform.platform(), 'python': sys.version.split()[0],
         'command': ' '.join(['.venv/bin/python', 'poc/p1/run_poc.py'] + sys.argv[1:]),
         'repository_commit': sh(['git', 'rev-parse', 'HEAD']),
-        'repository_dirty_files': len([l for l in sh(['git', 'status', '--porcelain']).splitlines() if l.strip()]),
+        # Evidence files are this runner's output, not its input: a run on a second version
+        # must not count the first version's fresh evidence as a modified repository.
+        'repository_dirty_files': len([l for l in sh(['git', 'status', '--porcelain', '--untracked-files=all']).splitlines()
+                                       if l.strip() and not l[3:].strip('"').startswith('poc/p1/evidence/')]),
+        'repository_dirty_files_ignores': 'poc/p1/evidence/',
         'agentgateway': {'version': version,
                          'binary_sha256': hashlib.sha256(Path(binary).read_bytes()).hexdigest(),
                          'config_file': 'poc/p1/agentgateway.poc.yaml',
