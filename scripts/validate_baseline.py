@@ -220,6 +220,7 @@ def poc_p1_evidence():
   assert e['policy_reference_sha256']==sha('scripts/policy_reference.py'),f'{ev.name} is for another policy_reference.py; {again}'
   for mock,digest in e['mocks_sha256'].items():
    assert digest==sha(f'poc/p1/{mock}'),f'{ev.name} was produced with another {mock}; {again}'
+  assert e.get('front_proxy',{}).get('config_sha256')==sha('poc/p1/front.nginx.conf'),f'{ev.name} was produced with another front proxy config; {again}'
   assert str(e['formal_acceptance']).startswith('NOT_RUN')
   s=e['summary'];results=[c['result'] for c in e['cases']]
   assert s['cases']==len(results) and s['pass']==results.count('PASS') and s['fail']==results.count('FAIL') and s['skip']==results.count('SKIP')

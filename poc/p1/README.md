@@ -1,7 +1,7 @@
 # P1 PoC — 真实 agentgateway 上的认证、授权与凭证注入
 
 > **性质**：技术可行性 PoC，不是验收。`tests/acceptance_matrix.csv` 的 95 条用例与六个 STD-CP 门禁保持 `NOT_RUN`。
-> **结果**：50 个用例。agentgateway 1.7.0 上 49 PASS、1 FAIL；1.6.0 上 46 PASS、1 FAIL、3 SKIP（那 3 个用例针对一条只有 1.7.0 的 Schema 才接受的路由）。两个版本的 FAIL 都是 `P1-SS-04`，见"未解决"。证据：`evidence/p1-run-agentgateway-1.6.0.json`、`evidence/p1-run-agentgateway-1.7.0.json`。
+> **结果**：54 个用例。agentgateway 1.7.0 上 53 PASS、1 FAIL；1.6.0 上 50 PASS、1 FAIL、3 SKIP（那 3 个用例针对一条只有 1.7.0 的 Schema 才接受的路由）。两个版本的 FAIL 都是 `P1-SS-04`：网关自己仍然接受带两个 `Host` 头的请求，处置见"未解决"。证据：`evidence/p1-run-agentgateway-1.6.0.json`、`evidence/p1-run-agentgateway-1.7.0.json`。
 > **环境**：agentgateway **1.6.0** 与 **1.7.0**（官方发布的二进制，SHA-256 与发布页公布的一致并记在证据里；同一份配置不加修改在两个版本上运行）、Mock Gatekeeper、Mock 本地 Broker、Mock Provider，全部在本机回环地址。网关到 Gatekeeper、Broker 到 Gatekeeper 两段是双向 TLS，证书由每次运行临时生成的 CA 签发。
 > **Gatekeeper 始终是 Mock**。本机没有 Gatekeeper 的实现或仓库，它也不属于本项目；这里验证的是网关一侧对契约的实现，以及一个按契约写的 Mock。
 
@@ -58,7 +58,9 @@ G04 §4 要求用 PoC 比较三种凭证返回模式，G04 §9 列了 PoC 必须
 
 ## 未解决
 
-- **`P1-SS-04` FAIL：带两个 `Host` 头的请求被接受**（RFC 9112 §3.2 要求 400）。1.6.0 与 1.7.0 行为相同。网关用第一个做路由，第二个不会到达上游；上游 `Host` 已被第 1 项改写，所以没有形成越权，但请求本身应当被拒。配置层面没有办法：两个版本的配置 Schema 里都没有相关开关；CEL 规则里也识别不出来，`request.headers["host"]` 取不到值，`request.host` 只反映第一个（这是在两个版本上单独试验的结果，不在证据文件里）。需要在入口前置组件处理，或向上游提出。
+- **`P1-SS-04` FAIL：带两个 `Host` 头的请求被接受**（RFC 9112 §3.2 要求 400）。1.6.0 与 1.7.0 行为相同。网关用第一个做路由，第二个不会到达上游；上游 `Host` 已被第 1 项改写，所以没有形成越权，但请求本身应当被拒。配置层面没有办法：两个版本的配置 Schema 里都没有相关开关；CEL 规则里也识别不出来，`request.headers["host"]` 取不到值，`request.host` 只反映第一个（这是在两个版本上单独试验的结果，不在证据文件里）。这个用例保留为 FAIL，因为它记录的是网关自身的行为。处置分两头：
+  - **前置组件**。在网关前面放了一个 nginx 1.30.6（`front.nginx.conf`，监听 `127.0.0.1:27620`，转发到 `27611`）。经它发送时，两个 `Host`（顺序正反、两个相同、写请求）和没有 `Host` 的请求都由 nginx 自己答 400，网关日志里没有新增记录，PDP 和 Provider 什么也没收到（`P1-FP-01`）。另外三个用例确认加了这一跳之后原有性质不变：租户隔离、Provider 收到的头和请求体、401/403/404（`P1-FP-02`）；Provider 变慢或断连时写请求只到达一次，nginx 没有重放（`P1-FP-03`）；指定上游和路径变形仍然到不了 Provider，nginx 把路径原样交给网关，拒绝它们的仍是网关和 PDP，只有 `%00` 是 nginx 直接拒的（`P1-FP-04`）。**限制**：其余 50 个用例仍直接打网关端口，这个端口也仍然谁都能连；前置组件只有在调用方到不了网关端口时才算数，这要靠网络层。这里验证的是这一个 nginx 版本加这份配置，正式的入口组件要重新跑。
+  - **上游**。在只有两条路由、没有任何策略的最小配置上单独复现过，1.6.0 与 1.7.0 结果相同：网关按第一个 `Host` 路由，后端只收到第一个，第二个被丢弃；没有 `Host` 的请求网关会答 400。也就是说网关自己前后一致，风险出在它前面有一个按另一个 `Host` 做判断的组件时。报告草稿在 `UPSTREAM_REPORT_duplicate_host.md`，**尚未提交**；agentgateway 的 `SECURITY.md` 要求拿不准是否属于安全问题时走私下报告，所以草稿是按私下报告写的。
 - **请求头是"删黑名单"而不是"放白名单"**。G03 §5 要求只传播 Provider 允许的头。本 PoC 只做到了按名字删除，调用方的任意自定义头（如 `X-Client-Trace`）仍会到达 Provider。
 - **监听地址无法限制**。1.6.0 和 1.7.0 的配置 Schema 都没有监听器的绑定地址字段，`27611` 对本机所有网卡开放（两份证据里都记录为 `*:27611`）。管理、指标、就绪端口可以也已经绑到 `127.0.0.1`。
 - **PDP 不可用与策略拒绝无法区分**。PDP 超时或不在时调用方得到 403，与正常拒绝相同；PDP 返回 500 时调用方得到 500。PDP 证书不被信任、网关自己的证书不被接受时同样是 403。G01 的失败来源区分（`GW-FR-043`）在这一点上没有满足。
@@ -79,7 +81,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
 
 每个 agentgateway 版本写各自的证据文件 `evidence/p1-run-agentgateway-<版本>.json`。本机的 1.6.0 在 `/usr/local/bin`；1.7.0 是从官方发布页下载、核对 SHA-256 后放在用户目录下的，没有替换系统里的 1.6.0。
 
-脚本先检查端口段是否空闲、用 `--validate-only` 校验配置，再启动五个进程，跑完全部停掉。`key.expression` 那条路由放在单独的 `agentgateway.poc.key-expression.yaml` 里：二进制自己的校验器接受时才拼进配置，不接受（1.6.0）时相应的 3 个用例记为 SKIP，原因写在证据里。网关从 `poc/p1/.run/` 下的配置副本启动，会话密钥经环境变量 `SESSION_KEY` 提供（原因见上面第 6 项）。每次运行生成新的 JWT 签名密钥、会话密钥、工作负载 CA 与证书、Mock 凭证，放在 `poc/p1/.run/`（已忽略），不写入证据。
+脚本先检查端口段是否空闲、用 `--validate-only` 校验配置，再启动五个进程和一个 nginx 容器，跑完全部停掉。nginx 需要本机有 docker：镜像是 nginx 官方的非特权版本，按摘要固定（见 `run_poc.py` 的 `FRONT_IMAGE`），本地没有时会拉取一次；容器以非 root、只读根文件系统、不带任何 capability 运行，用宿主机网络，只监听回环。docker 或镜像不可用时脚本拒绝运行，不会跳过那四个用例。`key.expression` 那条路由放在单独的 `agentgateway.poc.key-expression.yaml` 里：二进制自己的校验器接受时才拼进配置，不接受（1.6.0）时相应的 3 个用例记为 SKIP，原因写在证据里。网关从 `poc/p1/.run/` 下的配置副本启动，会话密钥经环境变量 `SESSION_KEY` 提供（原因见上面第 6 项）。每次运行生成新的 JWT 签名密钥、会话密钥、工作负载 CA 与证书、Mock 凭证，放在 `poc/p1/.run/`（已忽略），不写入证据。
 
 | 端口 | 用途 |
 |---|---|
@@ -89,10 +91,11 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
 | 27614 / 27615 / 27616 | 网关管理 / 指标 / 就绪（仅回环） |
 | 27617 | "禁止目标"：任何路由都不该到达，用来证明没有越权出站 |
 | 27618 | Mock 本地 Broker（模式 B） |
+| 27620 | 前置 nginx（仅回环），转发到 27611 |
 
 `27610`、`27619` 由 `gateway/config/agentgateway.local.example.yaml` 使用。
 
-端口段选在 `27610-27619`，是因为它低于内核给出站连接分配源端口的临时端口范围（本机为 44620–48715，Linux 默认 32768–60999）。最初用的是 `47611-47617`，落在本机临时范围内：有一次运行中网关绑定就绪端口 47616 时报 `Address in use`、整轮没跑起来，而该端口在运行前后都是空闲的。占用者没有被直接抓到，最可能的解释是某个出站连接临时拿它做了源端口。脚本现在会在端口段与临时范围重叠时拒绝启动。
+端口段选在 `27610-27620`，是因为它低于内核给出站连接分配源端口的临时端口范围（本机为 44620–48715，Linux 默认 32768–60999）。最初用的是 `47611-47617`，落在本机临时范围内：有一次运行中网关绑定就绪端口 47616 时报 `Address in use`、整轮没跑起来，而该端口在运行前后都是空闲的。占用者没有被直接抓到，最可能的解释是某个出站连接临时拿它做了源端口。脚本现在会在端口段与临时范围重叠时拒绝启动。
 
 ## 文件
 
@@ -100,6 +103,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
 - `mock_gatekeeper.py`：Mock Gatekeeper，双向 TLS，按客户端证书里的身份决定谁能调哪个端点；实现了 `contracts/gatekeeper/openapi.yaml` 的 `/v1/extauthz/check`（模式 A）和 `/v1/egress/authorizations/decision`（模式 B）。决策用 `scripts/policy_reference.py`。
 - `mock_broker.py`：Mock 本地 Broker。`pki.py`：每次运行的 CA、证书和 TLS 连接。
 - `mock_provider.py`：记录收到的每个请求；`policy.poc.json`：两租户两账户的授权数据。
+- `front.nginx.conf`：前置 nginx 的配置。`UPSTREAM_REPORT_duplicate_host.md`：给 agentgateway 上游的报告草稿（英文，含最小复现）。
 - `run_poc.py`：用例与期望。`evidence/p1-run-agentgateway-<版本>.json`：该版本最近一次运行的逐项检查与观察值，含二进制与配置的 SHA-256。
 
 ## 期望是怎么定的
@@ -111,8 +115,9 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
 3. 在 1.6.0 上定格为 39/40。
 4. 把同一份配置和同一套用例原样拿到 1.7.0 上：同样是 39/40，失败的同样是 `P1-SS-04`。这次运行暴露了第 6 项，据此新增 `P1-CF-01`，并把网关改为从副本启动、经环境变量拿会话密钥。
 5. 两个版本定格为 40/41。
-6. 网关到 PDP 的共享密钥换成双向 TLS，`P1-AZ-11`、`P1-CR-03` 的期望随之收紧（原来查"没有密钥就 401"，现在查"没有证书连不上，证书身份不是网关就 401"），新增 `P1-TL-01`、`P1-CR-04`；加入模式 B（`P1-MB-01..04`）和 `key.expression` 路由（`P1-KX-01..03`）。新增的 9 个用例在 `run_poc.py` 里第一次运行就全部通过；在此之前，mTLS 和 `key.expression` 的配置写法已经在单独的试验里试过。当前 1.7.0 为 49/50，1.6.0 为 46/47 加 3 个 SKIP。
+6. 网关到 PDP 的共享密钥换成双向 TLS，`P1-AZ-11`、`P1-CR-03` 的期望随之收紧（原来查"没有密钥就 401"，现在查"没有证书连不上，证书身份不是网关就 401"），新增 `P1-TL-01`、`P1-CR-04`；加入模式 B（`P1-MB-01..04`）和 `key.expression` 路由（`P1-KX-01..03`）。新增的 9 个用例在 `run_poc.py` 里第一次运行就全部通过；在此之前，mTLS 和 `key.expression` 的配置写法已经在单独的试验里试过。当时 1.7.0 为 49/50，1.6.0 为 46/47 加 3 个 SKIP。
+7. 为 `P1-SS-04` 加了前置 nginx 和 `P1-FP-01..04`。`P1-SS-04` 本身没有动，仍然 FAIL。新增的 4 个用例第一次运行就通过；之后只给 `P1-FP-01` 加了一条对照检查（单个 `Host` 的请求确实会在网关日志里留下记录），用来说明"网关日志没有新增"这条检查不是空的。当前 1.7.0 为 53/54，1.6.0 为 50/51 加 3 个 SKIP。
 
 没有任何期望被放宽过。
 
-`validate_baseline.py` 会核对每份证据里的配置、策略、Mock 的哈希与仓库当前文件一致；改了其中任何一个或 `policy_reference.py` 之后，两个版本都要重跑。
+`validate_baseline.py` 会核对每份证据里的配置、策略、Mock、前置 nginx 配置的哈希与仓库当前文件一致；改了其中任何一个或 `policy_reference.py` 之后，两个版本都要重跑。

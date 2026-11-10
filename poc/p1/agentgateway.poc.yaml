@@ -21,15 +21,20 @@
 # variable, which stops the rewrite (case P1-CF-01). "key: disabled" is not usable in a
 # file shared by both versions: 1.7.0 accepts it, 1.6.0 rejects it.
 #
-# Port block 27611-27618 is reserved for this PoC:
+# Ports 27611-27618 and 27620 are reserved for this PoC:
 #   27611 gateway listener   27612 mock provider      27613 mock Gatekeeper (TLS)
 #   27614 gateway admin      27615 gateway stats      27616 gateway readiness
 #   27617 "forbidden" target that no route may ever reach
 #   27618 mock local broker (Mode B)
+#   27620 front proxy (nginx, front.nginx.conf) that forwards to 27611
 #
 # Neither schema has a bind-address field for a gateway listener: 27611 listens on every
 # interface of the machine for as long as the PoC runs. Admin, stats and readiness are
 # pinned to loopback below.
+#
+# The gateway accepts a request with two Host headers and has no setting against it
+# (P1-SS-04). The front proxy refuses such a request; that only helps where callers
+# cannot reach 27611 except through it, which this file cannot enforce.
 config:
   adminAddr: 127.0.0.1:27614
   statsAddr: 127.0.0.1:27615

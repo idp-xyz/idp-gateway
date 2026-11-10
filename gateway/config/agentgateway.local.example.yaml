@@ -7,10 +7,10 @@
 # No real secrets. For a route with JWT, ExtAuthZ and credential injection that has actually
 # been run, see poc/p1/agentgateway.poc.yaml.
 #
-# Ports: the project reserves 27610-27619 so that it never collides with the usual
+# Ports: the project reserves 27610-27620 so that it never collides with the usual
 # 3000/8080 development ports, and stays below the kernel's ephemeral port range
 # (Linux default 32768-60999). 27610 = this sample's listener, 27619 = its placeholder
-# upstream (nothing listens there), 27611-27617 = the P1 PoC (see poc/p1/README.md).
+# upstream (nothing listens there), 27611-27618 and 27620 = the P1 PoC (see poc/p1/README.md).
 gateways:
   demo:
     port: 27610

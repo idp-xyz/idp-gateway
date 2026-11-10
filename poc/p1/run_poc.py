@@ -36,7 +36,13 @@ OVERLAY = HERE / 'agentgateway.poc.key-expression.yaml'
 # (1.7.0 does, see P1-CF-01) must not be able to alter the reviewed file in the repository.
 RUN_CONFIG = RUN / 'agentgateway.yaml'
 PORTS = {'gateway': 27611, 'provider': 27612, 'gatekeeper': 27613, 'admin': 27614,
-         'stats': 27615, 'readiness': 27616, 'forbidden': 27617, 'broker': 27618}
+         'stats': 27615, 'readiness': 27616, 'forbidden': 27617, 'broker': 27618, 'front': 27620}
+# Front proxy: official nginx, unprivileged variant, from nginx's own public registry. Pinned
+# by digest; the tag is there for the reader. Docker Hub was not reachable from this host.
+FRONT_IMAGE = ('public.ecr.aws/nginx/nginx-unprivileged:stable-alpine'
+               '@sha256:c3fc8fa482be50ef709c6438eb1bc98d50dbfe5a9b48be90711b8814f4dfd701')
+FRONT_CONF = HERE / 'front.nginx.conf'
+FRONT_CONTAINER = 'idp-gateway-p1-front'
 ISSUER, AUDIENCE, LOGICAL_HOST, KID = 'https://gatekeeper.idp.test', 'idp-egress-gateway', 'egress-api.idp.test', 'poc-key-1'
 PROVIDER_SLOW_SECONDS, PDP_SLOW_SECONDS = 3.5, 2.5   # both longer than the gateway's 2s / 1s timeouts
 TRACKING = '/providers/mockcarrier/v1/tracking'
@@ -117,11 +123,17 @@ def send(port: int, method: str, target: str, headers=(), body: bytes | None = N
         conn.close()
 
 
-def gw(method: str, target: str, token: str | None = None, headers=(), body: bytes | None = None, host: str = LOGICAL_HOST, **kw) -> dict:
+def gw(method: str, target: str, token: str | None = None, headers=(), body: bytes | None = None, host: str = LOGICAL_HOST,
+       port: int | None = None, **kw) -> dict:
     hs = [('Host', host)]
     if token is not None:
         hs.append(('Authorization', 'Bearer ' + token))
-    return send(PORTS['gateway'], method, target, hs + list(headers), body, **kw)
+    return send(port or PORTS['gateway'], method, target, hs + list(headers), body, **kw)
+
+
+def front(*args, **kw) -> dict:
+    """The same request as gw(), sent to the front proxy instead of the gateway listener."""
+    return gw(*args, port=PORTS['front'], **kw)
 
 
 def header(resp_or_pairs, name: str) -> list[str]:
@@ -185,6 +197,37 @@ def start_broker():
     start('broker', [sys.executable, str(HERE / 'mock_broker.py'), '--port', str(PORTS['broker']),
                      '--state', str(RUN / 'state.json'), '--store', str(RUN / 'broker-store.json'),
                      '--local-key', str(RUN / 'broker-local.key')], PORTS['broker'])
+
+
+def docker(*argv: str, timeout: float = 180) -> subprocess.CompletedProcess:
+    return subprocess.run(['docker', *argv], capture_output=True, text=True, timeout=timeout)
+
+
+def front_image_available() -> bool:
+    """The pinned image, pulled once if this host does not have it yet."""
+    try:
+        return docker('image', 'inspect', FRONT_IMAGE).returncode == 0 or docker('pull', '-q', FRONT_IMAGE).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def start_front():
+    docker('rm', '-f', FRONT_CONTAINER)   # a leftover of an interrupted run, by this name only
+    run = docker('run', '-d', '--name', FRONT_CONTAINER, '--network', 'host', '--read-only', '--tmpfs', '/tmp',
+                 '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+                 '-v', f'{FRONT_CONF}:/etc/nginx/nginx.conf:ro', '--entrypoint', 'nginx', FRONT_IMAGE,
+                 '-c', '/etc/nginx/nginx.conf', '-g', 'daemon off;')
+    if run.returncode != 0:
+        raise RuntimeError(f'front proxy did not start: {run.stderr.strip()[:300]}')
+    wait_port(PORTS['front'], up=True)
+
+
+def stop_front():
+    logs = docker('logs', FRONT_CONTAINER)
+    if logs.returncode == 0:
+        (RUN / 'front.log').write_text(logs.stdout + logs.stderr, encoding='utf-8')
+    docker('rm', '-f', FRONT_CONTAINER)
+    wait_port(PORTS['front'], up=False)
 
 
 class Impostor:
@@ -759,6 +802,124 @@ def _(c):
     c.check('forbidden target received nothing', len(forbidden_hits()) == 0)
 
 
+# ---- front proxy ------------------------------------------------------------------------------------
+# P1-SS-04 stays as it is: it records what the gateway does on its own listener. These cases
+# send requests to the nginx in front of it.
+def gateway_log_lines() -> int:
+    return len((RUN / 'agentgateway.log').read_text(encoding='utf-8', errors='replace').splitlines())
+
+
+def answered_by_nginx(r: dict) -> bool:
+    """nginx's own error page. (Its Server header is on every response it relays, so that says nothing.)"""
+    return b'<center>nginx</center>' in r['body']
+
+
+@case('P1-FP-01', 'request carrying two Host headers, sent through the front proxy',
+      '400 from the front proxy, as RFC 9112 §3.2 requires; the gateway, the PDP and the provider see nothing',
+      ('GW-ST-017', 'GW-FR-034'))
+def _(c):
+    f = f"127.0.0.1:{PORTS['forbidden']}"
+    tok = blue()
+    before = gateway_log_lines()
+    attempts = {
+        'logical host first, forbidden target second': front('GET', TRACKING + '/TRK-1', tok, [('Host', f)]),
+        'forbidden target first, logical host second': front('GET', TRACKING + '/TRK-1', tok, [('Host', LOGICAL_HOST)], host=f),
+        'the same Host header twice': front('GET', TRACKING + '/TRK-1', tok, [('Host', LOGICAL_HOST)]),
+        'two Host headers on a write': front('POST', LABELS, tok, JSON_CT + [('Host', f)], LABEL_BODY),
+        'no Host header at all': send(PORTS['front'], 'GET', TRACKING + '/TRK-1', [('Authorization', 'Bearer ' + tok)]),
+    }
+    c.note('statuses', {k: v['status'] for k, v in attempts.items()})
+    c.check('every attempt answered 400', all(v['status'] == 400 for v in attempts.values()))
+    c.check('...by the front proxy itself (its own error page)', all(answered_by_nginx(v) for v in attempts.values()))
+    time.sleep(0.5)
+    c.check('the gateway logged no request', gateway_log_lines() == before)
+    nothing_forwarded(c)
+    # Control: the refusals are about the Host headers, not about the route or the token.
+    ok = front('GET', TRACKING + '/TRK-1', tok)
+    c.check('control: the same request with one Host header is served', ok['status'] == 200 and body_json(ok).get('account') == 'account-blue')
+    time.sleep(0.5)
+    c.check('control: ...and that one the gateway did log', gateway_log_lines() > before)
+    # Observation, not a check: the gateway's own answer to a request without a Host header.
+    c.note('gateway_listener_without_host_header', send(PORTS['gateway'], 'GET', TRACKING + '/TRK-1', [('Authorization', 'Bearer ' + tok)])['status'])
+
+
+@case('P1-FP-02', 'ordinary traffic through the front proxy',
+      'what holds at the gateway listener holds behind the front proxy: caller authentication, account isolation, what the provider receives, the request body',
+      ('GW-AT-006', 'GW-AT-008', 'GW-AT-009', 'GW-NAT-001', 'GW-FR-006', 'GW-FR-008', 'GW-FR-009'))
+def _(c):
+    tok = blue()
+    r = front('GET', TRACKING + '/TRK-9?a=1&a=2&b=%20x&c=', tok, [('Cookie', 'session=caller-session'), ('X-Client-Trace', 'keep-me')])
+    expect_account(c, r, 'account-blue', '/v1/tracking/TRK-9?a=1&a=2&b=%20x&c=')
+    for h in provider_hits():
+        names = sorted({k.lower() for k, _ in h['headers']})
+        c.note('provider_saw_header_names', names)
+        c.check('IDP JWT appears in no header value', all(tok not in v for _, v in h['headers']))
+        c.check('nothing the front proxy or the caller added about itself reaches the provider',
+                not any(n.startswith(('x-idp-', 'x-forwarded-')) or n in ('x-provider-account', 'cookie', 'forwarded', 'x-real-ip') for n in names))
+        c.check('Host is the registered upstream authority', header(h['headers'], 'host') == [f"127.0.0.1:{PORTS['provider']}"])
+        c.check('caller\'s ordinary header preserved', header(h['headers'], 'x-client-trace') == ['keep-me'])
+    log = pdp_log()
+    c.check('PDP saw tenant-blue and the path as the caller sent it',
+            len(log) == 1 and header(log[0]['headers'], 'x-idp-verified-tenant') == ['tenant-blue']
+            and header(log[0]['headers'], 'x-idp-path') == [TRACKING + '/TRK-9'])
+    send(PORTS['provider'], 'POST', '/admin/reset', ADMIN(), b'')
+    expect_account(c, front('GET', TRACKING + '/TRK-2', green()), 'account-green', '/v1/tracking/TRK-2')
+    send(PORTS['provider'], 'POST', '/admin/reset', ADMIN(), b'')
+    c.check('no token: 401', front('GET', TRACKING + '/TRK-1')['status'] == 401)
+    c.check('tenant-blue asking for account-green: 403', front('GET', TRACKING + '/TRK-1', tok, [('X-Provider-Account', 'account-green')])['status'] == 403)
+    c.check('unregistered path: 404', front('GET', '/providers/othercarrier/v1/tracking/1', tok)['status'] == 404)
+    c.check('...and none of those three reached the provider', len(provider_hits()) == 0)
+    w = front('POST', LABELS, tok, JSON_CT, LABEL_BODY)
+    hits = provider_hits()
+    c.check('POST a label: 201, received once, body byte-for-byte',
+            w['status'] == 201 and len(hits) == 1 and hits[0]['body_sha256'] == hashlib.sha256(LABEL_BODY).hexdigest())
+
+
+@case('P1-FP-03', 'writes through the front proxy when the provider fails',
+      'the caller gets the gateway\'s 504 or 5xx and the provider received each write exactly once: the front proxy replays nothing',
+      ('GW-AT-012', 'GW-ST-011', 'GW-FR-012'))
+def _(c):
+    slow = front('POST', LABELS + '?fault=slow', blue(), JSON_CT, LABEL_BODY)
+    dropped = [front('POST', LABELS + '?fault=reset', blue(), JSON_CT, LABEL_BODY)['status'] for _ in range(2)]
+    time.sleep(PROVIDER_SLOW_SECONDS + 1.5)  # long enough for any replay to have arrived
+    hits = provider_hits()
+    c.note('statuses', {'slow': slow['status'], 'dropped': dropped}); c.note('seconds_slow', slow['seconds'])
+    c.note('provider_hits', len(hits))
+    c.check('provider slower than the gateway\'s budget: 504 at about 2s', slow['status'] == 504 and 1.5 <= slow['seconds'] <= 3.0)
+    c.check('provider drops the connection: 5xx each time', all(s is not None and 500 <= s <= 599 for s in dropped))
+    c.check('three writes sent, three received', len(hits) == 3)
+
+
+@case('P1-FP-04', 'caller tries to choose the upstream or bend the path, through the front proxy',
+      'the forbidden target receives nothing and no bent path reaches the provider, whichever of the two hops stops it',
+      ('GW-AT-005', 'GW-ST-003', 'GW-ST-017', 'GW-AT-034', 'GW-FR-005', 'GW-FR-034'))
+def _(c):
+    f = f"127.0.0.1:{PORTS['forbidden']}"
+    attempts = {
+        'absolute-form request target': front('GET', f'http://{f}/v1/stolen', blue()),
+        'absolute-form target, logical path': front('GET', f'http://{f}{TRACKING}/TRK-1', blue()),
+        'Host header names the forbidden target': front('GET', TRACKING + '/TRK-1', blue(), host=f),
+        'X-Forwarded-Host': front('GET', TRACKING + '/TRK-1', blue(), [('X-Forwarded-Host', f)]),
+    }
+    c.note('statuses', {k: v['status'] for k, v in attempts.items()})
+    c.check('forbidden target received nothing', len(forbidden_hits()) == 0)
+    c.check('provider never saw the forbidden authority in any header',
+            all(f not in v for h in provider_hits() for _, v in h['headers']))
+    variants = [TRACKING + '/../../admin/hits', TRACKING + '/%2e%2e/%2e%2e/admin/hits', TRACKING + '/..%2fadmin',
+                TRACKING + '/%252e%252e/admin', TRACKING + '//admin', TRACKING + '/TRK-1%00', TRACKING + '/TRK-1;x=1',
+                TRACKING + '/./TRK-1', RATES + '/../../admin/hits', RATES + '/%252e%252e/admin', RATES + '//x']
+    seen = {}
+    for v in variants:
+        reset_all()
+        r = front('GET', v, blue())
+        seen[v] = {'status': r['status'], 'provider_saw': [h['raw_target'] for h in provider_hits()],
+                   'stopped_by': 'front proxy' if answered_by_nginx(r) else ('pdp' if pdp_log() else 'gateway')}
+    c.note('variants', seen)
+    c.check('no variant reached the provider', all(not s['provider_saw'] for s in seen.values()))
+    c.check('no variant answered 2xx', all(s['status'] is None or s['status'] >= 400 for s in seen.values()))
+    c.check('forbidden target received nothing after the path variants', len(forbidden_hits()) == 0)
+
+
 # ---- Mode C ---------------------------------------------------------------------------------------
 @case('P1-MC-01', 'static gateway-attached credential (Mode C)',
       'works without a PDP call, but both tenants reach the provider as the same account', ('GW-AT-033', 'GW-FR-033'))
@@ -966,6 +1127,9 @@ SCOPE_LIMITS = [
     'no SPIFFE Workload API, no rotation, no certificate revocation. Caller-to-gateway and gateway-to-provider are plain HTTP.',
     'The local broker (Mode B) is a mock with a JSON file as its store. The gateway reaches it over loopback HTTP and proves '
     'itself with a key file, standing in for a Unix socket or pod-local restriction; that restriction itself is untested.',
+    'The front proxy is one nginx build with a minimal configuration, there to show that a component in front can refuse '
+    'what the gateway accepts (P1-SS-04). Four cases go through it; the others address the gateway listener directly, '
+    'which stays reachable. Whether the eventual entry component behaves like this nginx has to be tested on that component.',
     'Single gateway process: nothing here speaks to multi-replica behaviour, config rollout, quotas or load.',
     'The result holds for the agentgateway build named in this file only; each version tested has its own evidence file.',
     'HTTP ExtAuthZ only. gRPC ExtAuthZ, decision caching, CONNECT, gRPC upstreams, HMAC signing and mTLS towards providers are untested.',
@@ -1059,6 +1223,11 @@ def main() -> int:
     eph = ephemeral_range()
     if eph and any(eph[0] <= p <= eph[1] for p in PORTS.values()):
         print(f'port block overlaps the ephemeral range {eph[0]}-{eph[1]} of this host, refusing to start'); return 2
+    if not front_image_available():
+        print(f'front proxy image not available and could not be pulled (is docker running?): {FRONT_IMAGE}'); return 2
+    front_version = docker('run', '--rm', '--entrypoint', 'nginx', FRONT_IMAGE, '-v')
+    front_version = (front_version.stdout + front_version.stderr).strip()
+    print('front proxy:', front_version)
     prepare()
     validation = compose_config(binary)
     print('native config validation:', validation['base_said'])
@@ -1077,6 +1246,7 @@ def main() -> int:
         start_gatekeeper()
         start_broker()
         start('agentgateway', [binary, '-f', str(RUN_CONFIG.relative_to(HERE))], PORTS['gateway'], env=gateway_env(S.session_key))
+        start_front()
         listeners = sh(['ss', '-ltnH'])
         listeners = sorted(l.split()[3] for l in listeners.splitlines() if any(f':{p}' in l for p in PORTS.values()))
 
@@ -1101,6 +1271,10 @@ def main() -> int:
                 if not x['ok']:
                     print(f"        x {x['check']}")
     finally:
+        try:
+            stop_front()
+        except Exception as e:
+            print(f'front proxy did not stop cleanly: {type(e).__name__}: {e}')
         for name in list(PROCS):
             stop(name)
         time.sleep(0.3)
@@ -1135,6 +1309,9 @@ def main() -> int:
         'policy_reference_sha256': hashlib.sha256((ROOT / 'scripts' / 'policy_reference.py').read_bytes()).hexdigest(),
         'mocks_sha256': {f: hashlib.sha256((HERE / f).read_bytes()).hexdigest()
                          for f in ('mock_gatekeeper.py', 'mock_broker.py', 'mock_provider.py', 'pki.py')},
+        'front_proxy': {'image': FRONT_IMAGE, 'version': front_version, 'config_file': 'poc/p1/front.nginx.conf',
+                        'config_sha256': hashlib.sha256(FRONT_CONF.read_bytes()).hexdigest(),
+                        'runs_as': 'container on the host network, unprivileged user, read-only root, no capabilities'},
         'workload_identities': pki.ID,
         'ports': PORTS, 'host_ephemeral_port_range': ephemeral_range(),
         'listen_addresses_observed': listeners, 'ports_left_open_after_run': still_open,

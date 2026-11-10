@@ -36,7 +36,7 @@ python3 -m unittest discover -s tests/security -p 'test_*.py'
 
 这只验证本包资产结构与 Mock 安全策略，不验证真实 agentgateway 行为。启动真实服务前须固定具体 1.7.x 版本/镜像 digest 并执行官方 schema/CLI 校验。
 
-依赖见 `requirements.txt`（`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`，之后用 `.venv/bin/python` 运行上面的命令）。真实 agentgateway 上的 PoC：`.venv/bin/python poc/p1/run_poc.py`。本项目只使用 `27610-27619` 端口段。
+依赖见 `requirements.txt`（`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`，之后用 `.venv/bin/python` 运行上面的命令）。真实 agentgateway 上的 PoC：`.venv/bin/python poc/p1/run_poc.py`（需要本机有 docker，用来运行网关前面的 nginx）。本项目只使用 `27610-27620` 端口段。
 
 ## 阅读顺序
 
