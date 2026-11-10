@@ -55,7 +55,7 @@
 - 对写操作 504 不得展示为业务失败；正确的领域结果状态为 `UNKNOWN / Needs Reconciliation`。
 
 ### UX-05 Config Releases
-- 明确区分 `DRAFT → VALIDATED → REVIEW → APPROVED → ROLLOUT → RECONCILED (ACTIVE)`、`FAILED/REVERTED/SUPERSEDED`；不可将点击“部署”直接等同于真实生效。
+- 发布状态以契约 `ReleaseState`（G03 §3）为准；界面标签 REVIEW = VALIDATED 待审批、ROLLOUT = STAGED/APPLYING/OBSERVING、RECONCILED = ACTIVE、REVERTED = 回滚发布生效（被取代者为 SUPERSEDED），并显式展示 FAILED/PARTIAL/UNKNOWN；不可将点击“部署”直接等同于真实生效。
 - 实际对账应显示 expected/observed digest、每实例 revision、回读结果、策略生效时刻和回滚证据；仅 Gateway 物理实例确认才可标识 Active。
 - 高风险发布必须具有安全审批、预检、分批执行、回滚预案和独立审计。Demo 仅模拟批准/部署/回滚按钮及角色；不实现真实状态机。
 

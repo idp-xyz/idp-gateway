@@ -1,7 +1,8 @@
 # IDP Gateway — 工程设计基线 V1.0
 
 > **IDP Gateway** / agentgateway 首选候选 / Go Control & Gatekeeper 适配 / 2026-11-10  
-> **状态：设计候选（DESIGN_DRAFT）· NOT APPROVED · Gateway Runtime PoC NOT_RUN**
+> **状态：设计候选（DESIGN_DRAFT）· NOT APPROVED · 正式验收与全部门禁 NOT_RUN**  
+> P1 PoC 已在 agentgateway 1.6.0 + Mock Gatekeeper/Provider 上运行（40 个用例 39 个通过，有未解决项），见 [poc/p1/README.md](poc/p1/README.md)；它不是验收证据。
 
 本包是按 **IDP-SCG-STD-001《供应链 DDD 产品与工程设计统一规范 V1.0》** 建立的第一版 **可审查、可追溯、可静态校验** 工程基线。不是部署好的网关，也不证明已通过 Gatekeeper/Provider 实际集成、安全或性能测试。
 
@@ -24,7 +25,7 @@
 | [G05 工程运维](docs/G05_Engineering_and_Operations.md) | Go DDD 结构、观测、CI/CD、SLO、HA、Runbook |
 | [G06 验收交付](docs/G06_Testing_and_Acceptance.md) | 需求→测试追溯、门禁、真实证据规范 |
 
-**其它资产**：`decisions/ADR-0001..0007.md`、`governance/project-manifest.json`、`contracts/` (OpenAPI/JSON Schema)、`gateway/config/`（仅示意）、`gateway/policies/`、`tests/acceptance_matrix.csv`、`scripts/validate_baseline.py`。
+**其它资产**：`decisions/ADR-0001..0008.md`、`poc/p1/`（P1 PoC）、`governance/project-manifest.json`、`contracts/` (OpenAPI/JSON Schema)、`gateway/config/`（仅示意）、`gateway/policies/`、`tests/acceptance_matrix.csv`、`scripts/validate_baseline.py`。
 
 ## 离线静态验证
 
@@ -34,6 +35,8 @@ python3 -m unittest discover -s tests/security -p 'test_*.py'
 ```
 
 这只验证本包资产结构与 Mock 安全策略，不验证真实 agentgateway 行为。启动真实服务前须固定具体 1.7.x 版本/镜像 digest 并执行官方 schema/CLI 校验。
+
+依赖见 `requirements.txt`（`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`，之后用 `.venv/bin/python` 运行上面的命令）。真实 agentgateway 上的 PoC：`.venv/bin/python poc/p1/run_poc.py`。本项目只使用 `47610-47619` 端口段。
 
 ## 阅读顺序
 

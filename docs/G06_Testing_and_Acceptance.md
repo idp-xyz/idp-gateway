@@ -82,7 +82,7 @@ V0 不包含企业级漏洞扫描、网关运行测试、服务认证性能或�
 
 ## 8. 当前版本已验证与未验证
 
-**可验证（本机可运行）**：文档存在、基础相对路径、JSON/YAML 语法、JSON Schema/fixture、策略样例的非开放目标和基本拒绝逻辑、ZIP 条目与哈希。实测结果见 `tests/evidence/static-validation.json` 和 `CHECKSUMS.sha268`（生成时间与工具执行见实际证据，不以正文宣称已全部执行）。
+**可验证（本机可运行）**：文档存在、基础相对路径、JSON/YAML 语法、JSON Schema/fixture、策略样例的非开放目标和基本拒绝逻辑、ZIP 条目与哈希。实测结果见 `tests/evidence/static-validation.json` 和 `CHECKSUMS.sha256`（生成时间与工具执行见实际证据，不以正文宣称已全部执行）。
 
 **未验证**：真实 agentgateway 启动和配置 API、Gatekeeper/ExtAuthZ/mTLS 的生产对接、第三方 OAuth、REST/gRPC 端到端、多实例 HA、性能指标、安全渗透、发布恢复及上位规范正式门禁。**这些必须始终标 NOT_RUN，直到有可核验证据。**
 

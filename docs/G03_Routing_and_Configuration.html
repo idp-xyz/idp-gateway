@@ -129,6 +129,7 @@
   │        │          │         │         │          │           │
   └─REJECTED / CANCELED   └──FAILED / PARTIAL / UNKNOWN──RECONCILE/ROLLBACK
 ACTIVE → WITHDRAW_REQUESTED → REVOKING → REVOKED
+ACTIVE → SUPERSEDED（被更新的 ACTIVE 发布取代，含回滚发布）
 </code></pre>
 <p>状态语义：</p>
 <ul>
@@ -142,7 +143,7 @@ ACTIVE → WITHDRAW_REQUESTED → REVOKING → REVOKED
 </ul>
 <h2 id="h-7">4. 发布算法与并发一致性</h2>
 <ol>
-<li>Fabric 发出具名已批准 <code>RoutePublicationIntent</code>，携带 <code>asset_ref/release_ref/target_id/approval_ref/expected_generation/idempotency_key</code>。</li>
+<li>Fabric 发出具名已批准 <code>RoutePublicationIntent</code>：信封携带 <code>idempotency_key/release_ref/target_id</code>，内嵌的 <code>intent</code>（RouteIntent）携带 <code>approval_ref/expected_generation</code> 与 API 资产引用（<code>api_asset_ref</code> 或 <code>contract_ref</code>）；契约见 <code>contracts/fabric/route-publication-intent.openapi.yaml</code>。</li>
 <li>Gateway Publisher 服务端复核调用主体权限、来源和签名/可信通道，不把任意客户端的 Approval Flag 当权威事实。</li>
 <li>将结构化意图与受控策略仓库合成完整 Snapshot；校验引用存在、上游目标白名单、TLS 要求、JWT 绑定、Header 策略及敏感字段。</li>
 <li>产生确定性内容摘要，采用 CAS/乐观版本切换 Desired Generation；保存不可变制品和审计。</li>
@@ -160,7 +161,7 @@ ACTIVE → WITHDRAW_REQUESTED → REVOKING → REVOKED
 <p>按 <code>pool → provider → provider_account → tenant/service → operation</code> 定义配额域。全局限流依赖专门协调服务时，必须验证多副本一致性和协调器故障行为；本地限流不可被标记为全局精确配额。<code>429</code> 必须明确来源（Gateway/Provider），勿把供应商余额和内部配额混为一谈。对 ExtAuthZ 高风险操作以 fail-closed 为默认；读取缓存允许使用时间窗必须由安全负责人批准，且缓存键包含全部授权输入。</p>
 <h2 id="h-10">7. 示例资产与检查方式</h2>
 <ul>
-<li><code>gateway/config/agentgateway.local.example.yaml</code>：基于官方路由形态的本地<strong>占位样例</strong>，仅使用 loopback upstream，尚未通过本机 agentgateway 二进制校验。</li>
+<li><code>gateway/config/agentgateway.local.example.yaml</code>：基于官方路由形态的本地<strong>占位样例</strong>，仅使用 loopback upstream，已通过 agentgateway 1.6.0 <code>--validate-only</code> 语法检查但从未启动；实际运行过的配置见 <code>poc/p1/agentgateway.poc.yaml</code>。</li>
 <li><code>contracts/gateway/route-intent.schema.json</code>：中立 RouteIntent JSON Schema。</li>
 <li><code>gateway/policies/egress-policy.example.json</code>：经过显式枚举的 Provider Operation 白名单示例。</li>
 <li><code>scripts/validate_baseline.py</code>：离线 JSON/YAML/Markdown 与示例静态检查，不代替官方配置 schema 或运行时验收。</li>
@@ -175,7 +176,7 @@ ACTIVE → WITHDRAW_REQUESTED → REVOKING → REVOKED
 <p>这些资料证明配置能力的<strong>官方描述</strong>，不证明我们的 Runtime 版本、配置及多租户方案已通过兼容性或安全测试。</p>
 <h2 id="h-12">9. 管理页面与发布操作语义（G03 · V1.0 同版更新）</h2>
 <p>Routes 页面仅展示 RouteIntent/Observed Config 的差异与配置来源。Config Releases 页面必须显示发布 <strong>期望 Revision</strong>、各实例 <strong>观察 Revision</strong> 和回读确认结果；只有 Reconciler 确认完成才能标识 ACTIVE。待审批的变更不允许由 UI 直接提交到 agentgateway 配置接口。</p>
-<p>状态建议：DRAFT → VALIDATED → REVIEW → APPROVED → ROLLOUT → RECONCILED(ACTIVE)，并显式支持 FAILED/REVERTED/SUPERSEDED。高风险操作需具名审批、职责分离、乐观版本检查、Idempotency-Key 和独立审计。离线原型仅模拟部分状态转换，不等同真实状态机实现。见 <a href="../portal/spec/Gateway_Operations_UX_Spec_V1.0.html">UX 规格</a>。</p>
+<p>发布状态只有一套词表，即 §3 状态机与契约中的 <code>ReleaseState</code>；Console 上的 REVIEW（= VALIDATED 待审批）、ROLLOUT（= STAGED/APPLYING/OBSERVING）、RECONCILED（= ACTIVE）、REVERTED（= 回滚发布到达 ACTIVE，被取代者为 SUPERSEDED）只是 <code>ReleaseState</code> 的展示标签，不是额外状态。高风险操作需具名审批、职责分离、乐观版本检查、Idempotency-Key 和独立审计。离线原型仅模拟部分状态转换，不等同真实状态机实现。见 <a href="../portal/spec/Gateway_Operations_UX_Spec_V1.0.html">UX 规格</a>。</p>
 <h2 id="h-13">同版设计增补：统一 Gateway Console</h2>
 <p>交互原则：可视化接入向导输出版本化的 RouteIntent；部署前执行配置 Schema 检查、路由冲突检查、租户授权校验和发布影响分析；Raw Configuration 仅用于受控诊断和批准流程。</p>
 <p>详情参见 <code>portal/spec/Agentgateway_UI_Capability_Matrix_V1.0.md</code>（自本工程根目录）。</p>

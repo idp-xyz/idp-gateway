@@ -10,6 +10,7 @@
     "result",
     "reason_code",
     "policy_version",
+    "revocation_epoch",
     "request_id",
     "expires_at"
   ],
@@ -33,6 +34,11 @@
     "policy_version": {
       "type": "string",
       "minLength": 1
+    },
+    "revocation_epoch": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Revocation generation the decision was made under; a decision from an older epoch must not be used (G02 §11.2)."
     },
     "request_id": {
       "type": "string",

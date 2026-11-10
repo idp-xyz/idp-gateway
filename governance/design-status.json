@@ -20,6 +20,36 @@
     "performance": "NOT_RUN",
     "production": "NOT_RUN"
   },
+  "poc": {
+    "p1_credential_injection": {
+      "status": "RUN_WITH_OPEN_FINDINGS",
+      "evidence": "poc/p1/evidence/p1-run.json",
+      "report": "poc/p1/README.md",
+      "agentgateway_version_used": "1.6.0",
+      "agentgateway_version_targeted": "1.7.x (not run)",
+      "gatekeeper": "MOCK",
+      "provider": "MOCK",
+      "counts_as_gate_or_acceptance_evidence": false,
+      "proposed_decision": "decisions/ADR-0008.md"
+    }
+  },
+  "scope_freeze": {
+    "ui_ux_expansion": {
+      "state": "FROZEN",
+      "since": "2026-11-10",
+      "covers": [
+        "portal/prototypes/",
+        "tests/ux/acceptance_matrix.csv",
+        "new console pages or UX cases"
+      ],
+      "lift_when": [
+        "open findings in poc/p1/README.md are resolved or explicitly accepted",
+        "ADR-0008 is approved by named owners",
+        "a named product owner confirms whether the console is in delivery scope"
+      ],
+      "decided_by": "UNASSIGNED-GOV"
+    }
+  },
   "profile_notes": {
     "AI": "TRIGGERED because AI traffic is in declared scope; verify detailed applicability and actual implementation",
     "BENTO_GO": "Not selected/verified; only include after actual component and version confirmation"
@@ -33,6 +63,6 @@
   "warnings": [
     "Manifest passes official JSON Schema shape, but contains explicit unresolved placeholders: cannot pass semantic adoption or CP1.",
     "No ADR formally approved; decisions array intentionally empty.",
-    "No runtime test evidence is claimed."
+    "No runtime acceptance evidence is claimed. The P1 PoC under \"poc\" ran against mocks on a version other than the targeted one and is not acceptance evidence."
   ]
 }

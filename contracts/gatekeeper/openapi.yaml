@@ -2,17 +2,83 @@ openapi: 3.1.0
 info:
   title: IDP Gatekeeper External Credential Control API (DRAFT)
   version: 1.0.0
-  description: 'Internal design contract only. This is NOT Envoy extAuthz wire protocol.
+  description: 'Internal design contract only.
 
-    Only registered Gateway workload identities over mTLS may call the credential endpoint.
+    Only registered Gateway workload identities over mTLS may call these endpoints.
 
 
-    V1.0 gap remediation: typed CredentialUse proposal; native ExtAuthZ/BackendAuth binding still NOT_RUN.
+    Two kinds of path live here. /v1/extauthz/check is the HTTP ExtAuthZ exchange between agentgateway and the
+    PDP: its shape is dictated by the gateway, and it is the one exercised by poc/p1 on agentgateway 1.6.0 (with
+    a mock Gatekeeper). The /v1/egress/... paths are IDP''s neutral control API and are NOT an ExtAuthZ wire
+    protocol; nothing has run them.
+
+
+    How a provider credential reaches the gateway (credential redemption): for header injection it is delivered
+    only in the allow response of /v1/extauthz/check, to the authenticated gateway workload, for the one request
+    being authorised. No endpoint in this API returns credential material in a response body, and no handle
+    issued here can be exchanged for one. See decisions/ADR-0008.md.
 
     '
 servers:
 - url: https://gatekeeper-control.idp.internal
 paths:
+  /v1/extauthz/check:
+    get:
+      operationId: checkEgressRequestExtAuthz
+      summary: HTTP ExtAuthZ check; on allow, releases the provider credential for this one request
+      description: 'Called by the gateway for every request on a route with per-request credentials, after it has
+        validated the caller''s token. The gateway forwards the original method; GET is shown, the contract is the
+        same for every method. The request has no body.
+
+        The x-idp-* headers are written by the gateway from the validated token and from the matched route. The
+        gateway must not copy them from the caller, and the PDP must reject a request in which any of them appears
+        more than once. x-provider-account is the one caller-supplied input: a request for an account, checked
+        against the tenant''s grants, never a fact.
+
+        Any answer other than 200 means the request is not forwarded. If the PDP cannot be reached or does not
+        answer in time, the gateway rejects the request (fail closed).'
+      security:
+      - WorkloadMTLS: []
+      parameters:
+      - {name: x-idp-verified-subject, in: header, required: true, schema: {type: string}, description: Service identity from the validated token (sub)}
+      - {name: x-idp-verified-tenant, in: header, required: true, schema: {type: string}, description: Tenant bound to the validated token}
+      - {name: x-idp-verified-env, in: header, required: true, schema: {$ref: '#/components/schemas/Environment'}, description: Environment the token was issued for}
+      - {name: x-idp-route-id, in: header, required: true, schema: {type: string}, description: Matched route (constant of the route)}
+      - {name: x-idp-provider-id, in: header, required: true, schema: {type: string}, description: Provider of the matched route (constant of the route)}
+      - {name: x-idp-operation-id, in: header, required: true, schema: {type: string}, description: Registered operation of the matched route (constant of the route)}
+      - {name: x-idp-environment, in: header, required: true, schema: {$ref: '#/components/schemas/Environment'}, description: Environment of the gateway pool (constant of the route)}
+      - {name: x-idp-method, in: header, required: true, schema: {type: string}, description: Method of the caller's request}
+      - {name: x-idp-path, in: header, required: true, schema: {type: string}, description: Path of the caller's request without the query string - as received and not normalised}
+      - {name: x-provider-account, in: header, required: false, schema: {type: string}, description: Account the caller asks for; when absent the tenant must have exactly one granted account}
+      responses:
+        '200':
+          description: Allowed. The gateway copies Authorization, and only Authorization, onto the upstream request.
+          headers:
+            Authorization:
+              required: true
+              description: Provider credential for the granted account. Never logged, never cached by the gateway
+                across requests, never returned to the caller.
+              schema:
+                type: string
+            X-Idp-Decision-Id:
+              required: true
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+                enum:
+                - no-store
+        '401':
+          description: The caller of this endpoint is not an authenticated gateway workload. No decision is made.
+        '403':
+          description: Denied. The body explains why and carries no credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtAuthzDenial'
+        '503':
+          description: 'PDP or Broker cannot decide: treated as a denial'
   /v1/egress/authorizations/decision:
     post:
       operationId: evaluateEgressRequest
@@ -43,7 +109,9 @@ paths:
       operationId: materializeEgressCredential
       summary: Resolve a short-lived provider credential after an approved decision
       description: Gateway-only high-privilege API; response must never reach business apps or ordinary logs. LEGACY
-        DESIGN DRAFT; do not assume it can satisfy HMAC/mTLS or all multi-tenant credential flows.
+        DESIGN DRAFT; do not assume it can satisfy HMAC/mTLS or all multi-tenant credential flows. DO NOT IMPLEMENT -
+        it returns credential material in a response body in exchange for a handle, which is what the redemption
+        rule in the API description rules out. Superseded by /v1/extauthz/check.
       security:
       - WorkloadMTLS: []
       requestBody:
@@ -105,9 +173,17 @@ paths:
     post:
       operationId: prepareAuthorizedCredentialUse
       summary: Prepare narrowly scoped provider credential use for a trusted gateway workload
-      description: Draft control-plane contract. Must bind mTLS workload identity, valid PDP decision, provider
+      description: 'Draft control-plane contract. Must bind mTLS workload identity, valid PDP decision, provider
         account, operation, route/config digest, policy version, revocation epoch and request ID. Not a generic
         token dispenser. Provider-origin secrets must never be echoed to caller business apps.
+
+        The answer is a plan, never a secret, and what the plan refers to is redeemed as follows.
+        HEADER_INJECTION: not through this API. The credential is released by /v1/extauthz/check for one request;
+        this endpoint only lets the gateway learn, ahead of traffic, that the binding exists and is usable, and
+        secure_binding_handle is not issued. This is the only kind with PoC evidence.
+        TRUSTED_REQUEST_SIGNER: signer_ref names a signer that signs the final outgoing request itself; the key
+        never leaves it. MTLS_IDENTITY_REFERENCE: mtls_identity_ref names a client identity mounted into the
+        gateway by the secret facility. Neither of these two has been run; both stay design proposals.'
       security:
       - WorkloadMTLS: []
       requestBody:
@@ -147,6 +223,9 @@ components:
       - provider_id
       - requested_account_id
       - environment
+      - method
+      - path
+      - config_digest
       properties:
         request_id:
           type: string
@@ -158,45 +237,58 @@ components:
           type: string
         requested_account_id:
           type: string
+          description: A request, not a fact; checked against the tenant's grants
         environment:
+          $ref: '#/components/schemas/Environment'
+        method:
           type: string
-          enum:
-          - DEV
-          - TEST
-          - PROD
+          description: Method of the caller's request
+        path:
+          type: string
+          description: Path of the caller's request without the query string, as received and not normalised
+        config_digest:
+          type: string
+          description: Digest of the gateway configuration snapshot the route was matched in (G02 §11.2)
         service_id:
           type: string
           description: Candidate only; server MUST bind to authenticated caller identity
         tenant_id:
           type: string
           description: Candidate only; server MUST derive/verify trusted tenant binding
-    DecisionResponse:
-      type: object
-      additionalProperties: false
-      required:
-      - decision_id
-      - result
-      - policy_version
-      - reason_code
-      - expires_at
-      properties:
-        decision_id:
+        delegated_subject:
           type: string
+          description: Candidate only, present when the service acts for a user; server MUST verify the delegation
+            grant and MUST NOT treat a missing value as "any user" (G04 §11.1)
+    DecisionResponse:
+      description: The decision artefact has one definition, shared with the mock and the fixtures. policy_version
+        and revocation_epoch are stated by the PDP, not supplied by the caller.
+      $ref: ./authz-decision.schema.json
+    Environment:
+      type: string
+      enum:
+      - DEV
+      - TEST
+      - PROD
+    ExtAuthzDenial:
+      type: object
+      required:
+      - result
+      - reason_code
+      - policy_version
+      - revocation_epoch
+      properties:
         result:
           type: string
           enum:
-          - ALLOW
           - DENY
           - INDETERMINATE
         reason_code:
           type: string
         policy_version:
           type: string
-        credential_handle:
-          type: string
-        expires_at:
-          type: string
-          format: date-time
+        revocation_epoch:
+          type: integer
+          minimum: 0
     CredentialUseRequest:
       type: object
       additionalProperties: false
@@ -263,7 +355,9 @@ components:
           minimum: 0
         secure_binding_handle:
           type: string
-          description: Opaque, short-lived, gateway-workload-bound; NOT an API Key or raw OAuth Token
+          deprecated: true
+          description: Not issued. It was an opaque handle with no defined way to redeem it; the redemption rule in
+            the API description replaces it. Kept only so that older drafts still parse.
         signer_ref:
           type: string
           description: Only valid for explicitly approved request-signature provider modes

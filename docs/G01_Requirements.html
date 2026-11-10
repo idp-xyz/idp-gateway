@@ -52,7 +52,7 @@
 </tbody>
 </table>
 <h2 id="h-4">1. 使用者、边界与流程</h2>
-<p><strong>使用者</strong>：内部业务产品服务账户、外部 API 客户、开发者、平台运维、安全管理员、API Fabric 审批人与 Gatekeeper 凭证管理员。实际人工 UI 不在本期必交范围；如建立管理 UI，必须重新触发 STD-CP4 的适用性评审。</p>
+<p><strong>使用者</strong>：内部业务产品服务账户、外部 API 客户、开发者、平台运维、安全管理员、API Fabric 审批人与 Gatekeeper 凭证管理员。实际人工 UI 不在本期必交范围；同版增补的 Gateway Console 原型与 75 条 UX 用例已使 STD-CP4 适用（Manifest <code>user_interface=true</code>），其扩展在 P1 PoC 结论落地前冻结，见 <code>governance/README.md</code>。</p>
 <p><strong>网络信任域</strong>：公网入口、内部业务入口、内部第三方出口、AI 入口、控制面与密钥域独立定义。一个统一产品名称或配置标准不意味着单一公共故障域。内部服务间通信不默认强制经中心网关；如组织决定全部强制走 Internal Gateway，须另补服务拓扑、延迟预算、容灾和可用性 ADR。</p>
 <p><strong>MVP 请求生命周期</strong>：应用携带 Gatekeeper 信任域签发的服务身份，调用受管理的 Egress 逻辑路径；网关验证 JWT 和请求级授权；可选凭证适配从获授权账户生成外发凭证；仅向已登记 upstream 透传请求；领域 ACL 将提供商响应翻译成内部结果。非幂等操作不会被代理层盲目自动重试。</p>
 <p><strong>非目标</strong>：BIP/ESB、EDI/SFTP 编排、跨系统业务映射、Workflow Engine、商业化 API 订阅计费、通用 Service Mesh、独立 IAM/IdP、业务领域对象授权、替代 Fabric、重写 agentgateway Rust 核心。</p>

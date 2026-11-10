@@ -54,6 +54,7 @@ DRAFT → VALIDATED → APPROVED → STAGED → APPLYING → OBSERVING → ACTIV
   │        │          │         │         │          │           │
   └─REJECTED / CANCELED   └──FAILED / PARTIAL / UNKNOWN──RECONCILE/ROLLBACK
 ACTIVE → WITHDRAW_REQUESTED → REVOKING → REVOKED
+ACTIVE → SUPERSEDED（被更新的 ACTIVE 发布取代，含回滚发布）
 ```
 
 状态语义：
@@ -68,7 +69,7 @@ ACTIVE → WITHDRAW_REQUESTED → REVOKING → REVOKED
 
 ## 4. 发布算法与并发一致性
 
-1. Fabric 发出具名已批准 `RoutePublicationIntent`，携带 `asset_ref/release_ref/target_id/approval_ref/expected_generation/idempotency_key`。
+1. Fabric 发出具名已批准 `RoutePublicationIntent`：信封携带 `idempotency_key/release_ref/target_id`，内嵌的 `intent`（RouteIntent）携带 `approval_ref/expected_generation` 与 API 资产引用（`api_asset_ref` 或 `contract_ref`）；契约见 `contracts/fabric/route-publication-intent.openapi.yaml`。
 2. Gateway Publisher 服务端复核调用主体权限、来源和签名/可信通道，不把任意客户端的 Approval Flag 当权威事实。
 3. 将结构化意图与受控策略仓库合成完整 Snapshot；校验引用存在、上游目标白名单、TLS 要求、JWT 绑定、Header 策略及敏感字段。
 4. 产生确定性内容摘要，采用 CAS/乐观版本切换 Desired Generation；保存不可变制品和审计。
@@ -94,7 +95,7 @@ ACTIVE → WITHDRAW_REQUESTED → REVOKING → REVOKED
 
 ## 7. 示例资产与检查方式
 
-- `gateway/config/agentgateway.local.example.yaml`：基于官方路由形态的本地**占位样例**，仅使用 loopback upstream，尚未通过本机 agentgateway 二进制校验。
+- `gateway/config/agentgateway.local.example.yaml`：基于官方路由形态的本地**占位样例**，仅使用 loopback upstream，已通过 agentgateway 1.6.0 `--validate-only` 语法检查但从未启动；实际运行过的配置见 `poc/p1/agentgateway.poc.yaml`。
 - `contracts/gateway/route-intent.schema.json`：中立 RouteIntent JSON Schema。
 - `gateway/policies/egress-policy.example.json`：经过显式枚举的 Provider Operation 白名单示例。
 - `scripts/validate_baseline.py`：离线 JSON/YAML/Markdown 与示例静态检查，不代替官方配置 schema 或运行时验收。
@@ -113,7 +114,7 @@ ACTIVE → WITHDRAW_REQUESTED → REVOKING → REVOKED
 
 Routes 页面仅展示 RouteIntent/Observed Config 的差异与配置来源。Config Releases 页面必须显示发布 **期望 Revision**、各实例 **观察 Revision** 和回读确认结果；只有 Reconciler 确认完成才能标识 ACTIVE。待审批的变更不允许由 UI 直接提交到 agentgateway 配置接口。
 
-状态建议：DRAFT → VALIDATED → REVIEW → APPROVED → ROLLOUT → RECONCILED(ACTIVE)，并显式支持 FAILED/REVERTED/SUPERSEDED。高风险操作需具名审批、职责分离、乐观版本检查、Idempotency-Key 和独立审计。离线原型仅模拟部分状态转换，不等同真实状态机实现。见 [UX 规格](../portal/spec/Gateway_Operations_UX_Spec_V1.0.md)。
+发布状态只有一套词表，即 §3 状态机与契约中的 `ReleaseState`；Console 上的 REVIEW（= VALIDATED 待审批）、ROLLOUT（= STAGED/APPLYING/OBSERVING）、RECONCILED（= ACTIVE）、REVERTED（= 回滚发布到达 ACTIVE，被取代者为 SUPERSEDED）只是 `ReleaseState` 的展示标签，不是额外状态。高风险操作需具名审批、职责分离、乐观版本检查、Idempotency-Key 和独立审计。离线原型仅模拟部分状态转换，不等同真实状态机实现。见 [UX 规格](../portal/spec/Gateway_Operations_UX_Spec_V1.0.md)。
 
 
 ## 同版设计增补：统一 Gateway Console

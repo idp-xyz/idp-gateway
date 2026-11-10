@@ -1,0 +1,30 @@
+{
+  "idempotency_key": "pub-mockcarrier-tracking-0001",
+  "release_ref": "fabric-release:consumer-api-mockcarrier-v1/0001",
+  "target_id": "fabric-target:egress-test",
+  "intent": {
+    "intent_id": "gwi-example-001",
+    "gateway_pool": "egress-test",
+    "traffic_class": "EGRESS",
+    "environment": "TEST",
+    "provider_id": "mockcarrier",
+    "operation_id": "tracking.get",
+    "logical_path": "/providers/mockcarrier/v1/tracking",
+    "allowed_methods": [
+      "GET"
+    ],
+    "upstream_hostname": "mockcarrier.example",
+    "upstream_port": 443,
+    "authz_profile": "provider-account-allowlist-v1",
+    "approval_ref": "APPROVAL-PENDING-001",
+    "expected_generation": 0,
+    "contract_ref": "consumer-api-mockcarrier-v1",
+    "credential_binding_ref": "gatekeeper:mockcarrier-test",
+    "redirect_policy": "DENY",
+    "upstream_tls": "VERIFY_REQUIRED",
+    "provider_account_strategy": "GATEKEEPER_DECISION_BINDING",
+    "transport": "HTTP",
+    "policy_bundle_ref": "policy:egress-standard-v1",
+    "upstream_sni": "mockcarrier.example"
+  }
+}

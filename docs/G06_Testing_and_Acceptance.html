@@ -185,7 +185,7 @@
 <li><strong>引用资料</strong>：官方文档来源、规范版本、依赖和技术适用性保留条件。</li>
 </ul>
 <h2 id="h-10">8. 当前版本已验证与未验证</h2>
-<p><strong>可验证（本机可运行）</strong>：文档存在、基础相对路径、JSON/YAML 语法、JSON Schema/fixture、策略样例的非开放目标和基本拒绝逻辑、ZIP 条目与哈希。实测结果见 <code>tests/evidence/static-validation.json</code> 和 <code>CHECKSUMS.sha268</code>（生成时间与工具执行见实际证据，不以正文宣称已全部执行）。</p>
+<p><strong>可验证（本机可运行）</strong>：文档存在、基础相对路径、JSON/YAML 语法、JSON Schema/fixture、策略样例的非开放目标和基本拒绝逻辑、ZIP 条目与哈希。实测结果见 <code>tests/evidence/static-validation.json</code> 和 <code>CHECKSUMS.sha256</code>（生成时间与工具执行见实际证据，不以正文宣称已全部执行）。</p>
 <p><strong>未验证</strong>：真实 agentgateway 启动和配置 API、Gatekeeper/ExtAuthZ/mTLS 的生产对接、第三方 OAuth、REST/gRPC 端到端、多实例 HA、性能指标、安全渗透、发布恢复及上位规范正式门禁。<strong>这些必须始终标 NOT_RUN，直到有可核验证据。</strong></p>
 <h2 id="h-11">9. STD-CP4 专业体验补充与独立 UX 验收（G06 · V1.0 同版更新）</h2>
 <p>由于本项目的内部工程管理模块包含人工操作，STD-CP4 不应标记 N/A。新增 <a href="../portal/spec/Gateway_Operations_UX_Spec_V1.0.html">Gateway Operations UX 设计规格</a> 与 <a href="../tests/ux/acceptance_matrix.csv">UX 验收矩阵</a>：共 <strong>75 条 UI/UX 场景</strong>，全部 <code>NOT_RUN</code>（正式 UI/权限/可访问性验收）。当前 95 条运行时验收场景继续保持 <code>NOT_RUN</code>，两套矩阵分别追踪不得混为已通过。</p>

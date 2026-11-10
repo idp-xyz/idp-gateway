@@ -22,7 +22,7 @@
 
 ## 1. 使用者、边界与流程
 
-**使用者**：内部业务产品服务账户、外部 API 客户、开发者、平台运维、安全管理员、API Fabric 审批人与 Gatekeeper 凭证管理员。实际人工 UI 不在本期必交范围；如建立管理 UI，必须重新触发 STD-CP4 的适用性评审。
+**使用者**：内部业务产品服务账户、外部 API 客户、开发者、平台运维、安全管理员、API Fabric 审批人与 Gatekeeper 凭证管理员。实际人工 UI 不在本期必交范围；同版增补的 Gateway Console 原型与 75 条 UX 用例已使 STD-CP4 适用（Manifest `user_interface=true`），其扩展在 P1 PoC 结论落地前冻结，见 `governance/README.md`。
 
 **网络信任域**：公网入口、内部业务入口、内部第三方出口、AI 入口、控制面与密钥域独立定义。一个统一产品名称或配置标准不意味着单一公共故障域。内部服务间通信不默认强制经中心网关；如组织决定全部强制走 Internal Gateway，须另补服务拓扑、延迟预算、容灾和可用性 ADR。
 
@@ -146,7 +146,7 @@
 - **GW-UX-013～020**：租户与账户权限投影、脱敏 Trace、故障状态、空值/超时/过期状态、禁用明文凭证。
 - **GW-UX-021～030**：受控实例运维、生产状态回读、审计、可访问性、安全回归与响应式交互。
 
-**设计规格**：[Gateway Operations UX Spec](../portal/spec/Gateway_Operations_UX_Spec_V1.0.md)；**原型**：[离线 18 页统一 Console 演示](../portal/prototypes/gateway-operations.html)；**71 条 UX 验收矩阵**：[CSV](../tests/ux/acceptance_matrix.csv)。现有 50 FR / 19 NFR 有对应追溯，全部正式运行验收 NOT_RUN；UX 补充作为单独追溯域，不得宣称完成正式验收。
+**设计规格**：[Gateway Operations UX Spec](../portal/spec/Gateway_Operations_UX_Spec_V1.0.md)；**原型**：[离线 18 页统一 Console 演示](../portal/prototypes/gateway-operations.html)；**75 条 UX 验收矩阵**：[CSV](../tests/ux/acceptance_matrix.csv)。现有 50 FR / 19 NFR 有对应追溯，全部正式运行验收 NOT_RUN；UX 补充作为单独追溯域，不得宣称完成正式验收。
 
 
 ## 同版设计增补：统一 Gateway Console

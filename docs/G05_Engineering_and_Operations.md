@@ -124,7 +124,7 @@ Publisher 和 Reconciler 可以通过 PostgreSQL Outbox + 独立 Worker 实现�
 
 正式实现建议接入现有 IDP Engineering UI Shell 与设计系统，采用 Gateway Operations BFF 聚合查询，服务端分页、权限范围过滤、审计、缓存新鲜度、错误和降级状态。网关原生管理 UI 仅供受控运维或调试，生产配置必须经 Fabric/Config Controller 的批准发布接口，不在浏览器里直接写入 agentgateway 原生配置。
 
-必须执行独立的 UI/UX 自动化测试、可访问性评审、权限绕过负向测试、浏览器兼容性测试、安全头部检查和跨系统权限一致性验收。UX 场景见 [30 条验证矩阵](../tests/ux/acceptance_matrix.csv)，真正集成仍为 NOT_RUN。
+必须执行独立的 UI/UX 自动化测试、可访问性评审、权限绕过负向测试、浏览器兼容性测试、安全头部检查和跨系统权限一致性验收。UX 场景见 [75 条验证矩阵](../tests/ux/acceptance_matrix.csv)，真正集成仍为 NOT_RUN。
 
 
 ## 同版设计增补：统一 Gateway Console

@@ -30,7 +30,7 @@
     "optimization": false,
     "ai": true,
     "integrations": true,
-    "user_interface": false,
+    "user_interface": true,
     "production_service": true,
     "multi_tenant": true
   },

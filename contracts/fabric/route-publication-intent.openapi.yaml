@@ -2,13 +2,23 @@ openapi: 3.1.0
 info:
   title: IDP Gateway Route Publication Intent API (DRAFT)
   version: 1.0.0
-  description: Governance intent between API Fabric and Gateway Controller. NOT agentgateway native API.
+  description: 'Governance intent between API Fabric and Gateway Controller. NOT agentgateway native API.
+
+    A publication is an envelope (which release, for which target, under which idempotency key) around one
+    RouteIntent (what to route). The RouteIntent schema stays the single definition of the route itself.
+
+    ReleaseState below is the only release-state vocabulary; G03 §3 describes its transitions and G03 §9 maps
+    the console labels onto it.
+
+    '
 servers:
 - url: https://gateway-control.idp.internal
 paths:
   /v1/route-intents:
     post:
       operationId: submitRouteIntent
+      description: Idempotent on idempotency_key. Repeating a request with the same key and the same body returns
+        the original answer; the same key with a different body is rejected with 409.
       security:
       - WorkloadMTLS: []
       requestBody:
@@ -16,7 +26,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/RouteIntent'
+              $ref: '#/components/schemas/RoutePublicationIntent'
       responses:
         '202':
           description: Accepted for validation, not yet applied
@@ -26,17 +36,20 @@ paths:
                 type: object
                 required:
                 - intent_id
-                - status
+                - release_ref
+                - state
                 properties:
                   intent_id:
                     type: string
-                  status:
+                  release_ref:
                     type: string
-                    enum:
-                    - RECEIVED
-                    - VALIDATING
+                  state:
+                    description: DRAFT on acceptance. Validation has not happened yet.
+                    $ref: '#/components/schemas/ReleaseState'
         '409':
-          description: Expected generation conflict
+          description: Expected generation conflict, or idempotency_key reused with a different body
+        '422':
+          description: Envelope or RouteIntent failed schema validation or preflight
   /v1/route-intents/{intent_id}/status:
     get:
       operationId: getRouteIntentStatus
@@ -62,28 +75,81 @@ paths:
                 properties:
                   intent_id:
                     type: string
+                  release_ref:
+                    type: string
                   desired_digest:
                     type: string
                   observed_digest:
                     type: string
                   state:
-                    type: string
-                    enum:
-                    - DRAFT
-                    - VALIDATED
-                    - APPROVED
-                    - STAGED
-                    - APPLYING
-                    - OBSERVING
-                    - ACTIVE
-                    - PARTIAL
-                    - UNKNOWN
-                    - FAILED
-                    - REVOKED
+                    $ref: '#/components/schemas/ReleaseState'
 components:
   securitySchemes:
     WorkloadMTLS:
       type: mutualTLS
   schemas:
+    RoutePublicationIntent:
+      type: object
+      additionalProperties: false
+      required:
+      - idempotency_key
+      - release_ref
+      - target_id
+      - intent
+      properties:
+        idempotency_key:
+          type: string
+          minLength: 16
+          maxLength: 128
+          pattern: ^[A-Za-z0-9._:-]+$
+          description: Chosen by Fabric, unique per publication attempt of one release to one target.
+        release_ref:
+          type: string
+          minLength: 4
+          maxLength: 160
+          description: Fabric release this publication belongs to. A reference, not a key into Fabric's database.
+        target_id:
+          type: string
+          minLength: 4
+          maxLength: 160
+          description: Fabric deployment target the release is published to. A reference, not a key into Fabric's
+            database; the gateway pool itself is named by intent.gateway_pool.
+        intent:
+          description: The route. approval_ref and expected_generation are carried here and nowhere else; the API
+            asset is intent.api_asset_ref (INGRESS) or intent.contract_ref.
+          $ref: '#/components/schemas/RouteIntent'
+    ReleaseState:
+      type: string
+      description: 'Canonical release states (G03 §3).
+
+        Progress: DRAFT, VALIDATED, APPROVED, STAGED, APPLYING, OBSERVING, ACTIVE.
+
+        Stopped before approval: REJECTED, CANCELED.
+
+        Did not converge: FAILED, PARTIAL, UNKNOWN (UNKNOWN is neither success nor failure; reconcile).
+
+        Leaving service: SUPERSEDED (replaced by a newer ACTIVE release, including by a rollback release),
+        WITHDRAW_REQUESTED, REVOKING, REVOKED.
+
+        Rollback and reconcile are events that create or re-drive a release; they are not states.
+
+        '
+      enum:
+      - DRAFT
+      - VALIDATED
+      - APPROVED
+      - STAGED
+      - APPLYING
+      - OBSERVING
+      - ACTIVE
+      - REJECTED
+      - CANCELED
+      - FAILED
+      - PARTIAL
+      - UNKNOWN
+      - SUPERSEDED
+      - WITHDRAW_REQUESTED
+      - REVOKING
+      - REVOKED
     RouteIntent:
       $ref: ../gateway/route-intent.schema.json

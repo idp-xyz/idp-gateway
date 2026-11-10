@@ -14,3 +14,13 @@
 - `gateway/diagnostic-event.schema.json` 定义四阶段可观察事实和 `NOT_SENT` / `NOT_OBSERVED` / `TRUNCATED` / `NOT_CAPTURED` 状态，不允许把未记录的报文推断为已经发送的字节。
 - `gateway/policies/traffic-policy.*`、`credential-binding.*`、`diagnostic-capture.*` 为中立治理策略 **仅供候选**，不能直接当 native agentgateway 语法或已实现的 Gateway 功能。
 - Gatekeeper `credentials/prepare` 为新候选接口；旧 `credentials/materialize` 标记为 `deprecated`，需确认调用方兼容后才可退役。
+
+## P1 PoC 之后的契约修正
+
+- **决策制品只有一份定义**：`gatekeeper/openapi.yaml` 的 `DecisionResponse` 直接 `$ref` 到 `gatekeeper/authz-decision.schema.json`，并新增必填的 `revocation_epoch`；`DecisionRequest` 补上 `method`、`path`、`config_digest` 与可选的 `delegated_subject`。
+- **凭证兑换路径**：Header 注入类凭证只在 `/v1/extauthz/check` 的允许响应头里、按请求下发给已认证的网关工作负载（`poc/p1` 跑过的就是这个交换）。没有任何接口在响应正文里返回凭证；`credentials/materialize` 不实现，`secure_binding_handle` 不签发。见 `decisions/ADR-0008.md`。
+- **发布信封**：`fabric/route-publication-intent.openapi.yaml` 的请求体是 `RoutePublicationIntent`（`idempotency_key`、`release_ref`、`target_id` + 内嵌 `intent`），RouteIntent 仍只有 `gateway/route-intent.schema.json` 一份定义；示例见 `fabric/route-publication-intent.example.json`。
+- **发布状态只有一套**：同一文件的 `ReleaseState` 是唯一词表，与 G03 §3 一致；Console 上的 REVIEW/ROLLOUT/RECONCILED/REVERTED 是它的展示标签。
+- **RouteIntent**：INGRESS 与 AI 分支不再允许携带 `upstream_*`、`redirect_policy`、`operation_id`。
+- **诊断事件**：`sanitized_headers` 由黑名单改为白名单（名称小写），值不得形似凭证；`NOT_SENT`/`NOT_OBSERVED` 的阶段不得带状态码、头或正文。
+- `tests/contracts/test_contract_consistency.py` 与 `test_bypass_regressions.py` 固定以上各条。

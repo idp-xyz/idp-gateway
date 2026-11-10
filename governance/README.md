@@ -18,3 +18,15 @@ CORE + TECH + GO 为候选；因 AI/LLM/MCP/A2A 被纳入当前项目目标范�
 - STD-CP6：发布授权、运行手册和发布后实际验证。
 
 **必须保持全部 NOT_RUN，直到有真实执行和具名批准。**
+
+## PoC 证据不是门禁证据
+
+`poc/p1` 在真实 agentgateway 1.6.0 上用 Mock Gatekeeper 和 Mock Provider 跑过，结果记在 `design-status.json` 的 `poc` 下。它回答"技术上走不走得通"，不改变任何门禁、`runtime_verification` 或验收用例的 `NOT_RUN`：Gatekeeper 与 Provider 都是 Mock，版本不是设计目标版本，没有具名执行人与批准。验收用例要离开 `NOT_RUN`，必须在矩阵里填写指向仓库内证据文件的 `evidence_uri`，`scripts/validate_baseline.py` 会检查。
+
+## UI/UX 范围冻结
+
+基线里同时存在"人工 UI 不在本期必交范围"（G01 §1）和一个 18 页 Console 原型加 75 条 UX 用例。处理如下：
+
+- Manifest 的 `capabilities.user_interface` 改为 `true`，与 README 中"STD-CP4 适用"的表述一致。这只是承认 UI 资产存在并触发 STD-CP4，不代表 UI 已获批纳入交付范围；是否纳入由产品 Owner 决定，目前 Owner 未指定。
+- **冻结**：在 P1 PoC 的遗留问题处置完、ADR-0008 获具名批准之前，不新增 Console 页面、不扩充 UX 用例、不修改 `portal/prototypes/`。已有的 UI 资产保留原样。
+- 解冻条件与责任人记录在 `design-status.json` 的 `scope_freeze`。
