@@ -1,0 +1,504 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:idp:scg:manifest:1.0.0",
+  "title": "IDP Supply Chain Standard Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "standard_id",
+    "standard_version",
+    "project_id",
+    "scope",
+    "risk_level",
+    "capabilities",
+    "profiles",
+    "technology",
+    "owners",
+    "project_overlay",
+    "quality_targets_reference",
+    "adoption",
+    "decisions"
+  ],
+  "properties": {
+    "standard_id": {
+      "const": "IDP-SCG-STD-001"
+    },
+    "standard_version": {
+      "const": "1.0.0"
+    },
+    "project_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,63}$"
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "description",
+        "legal_entities",
+        "jurisdictions",
+        "exclusions"
+      ],
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "legal_entities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "jurisdictions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "exclusions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "risk_level": {
+      "enum": [
+        "R1",
+        "R2",
+        "R3"
+      ]
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "physical_goods",
+        "traceability",
+        "inventory",
+        "transport",
+        "trade_documents",
+        "commercial_fees",
+        "regulatory",
+        "special_goods",
+        "optimization",
+        "ai",
+        "integrations",
+        "user_interface",
+        "production_service",
+        "multi_tenant"
+      ],
+      "properties": {
+        "physical_goods": {
+          "type": "boolean",
+          "description": "管理实物货物"
+        },
+        "traceability": {
+          "type": "boolean",
+          "description": "管理对象流转追溯"
+        },
+        "inventory": {
+          "type": "boolean",
+          "description": "管理库存或仓内作业"
+        },
+        "transport": {
+          "type": "boolean",
+          "description": "管理运输计划、运力或运输执行"
+        },
+        "trade_documents": {
+          "type": "boolean",
+          "description": "管理贸易、运输或业务单证"
+        },
+        "commercial_fees": {
+          "type": "boolean",
+          "description": "管理计费、费用或结算"
+        },
+        "regulatory": {
+          "type": "boolean",
+          "description": "承担适用监管义务"
+        },
+        "special_goods": {
+          "type": "boolean",
+          "description": "处理危险品、温控或其他特殊货物"
+        },
+        "optimization": {
+          "type": "boolean",
+          "description": "启用优化、排程或预测算法"
+        },
+        "ai": {
+          "type": "boolean",
+          "description": "启用 AI 模型或智能代理"
+        },
+        "integrations": {
+          "type": "boolean",
+          "description": "与其他上下文或外部系统集成"
+        },
+        "user_interface": {
+          "type": "boolean",
+          "description": "提供人工操作界面"
+        },
+        "production_service": {
+          "type": "boolean",
+          "description": "提供生产业务服务"
+        },
+        "multi_tenant": {
+          "type": "boolean",
+          "description": "服务多个隔离租户"
+        }
+      }
+    },
+    "profiles": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "version"
+        ],
+        "properties": {
+          "id": {
+            "enum": [
+              "CORE",
+              "TRACE",
+              "INVENTORY",
+              "TRANSPORT",
+              "TRADE",
+              "FINANCE",
+              "REGULATORY",
+              "SPECIAL",
+              "OPT",
+              "AI",
+              "TECH",
+              "GO",
+              "BENTO_GO"
+            ]
+          },
+          "version": {
+            "const": "1.0.0"
+          }
+        }
+      }
+    },
+    "technology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "language",
+        "toolchain",
+        "baseline_reference",
+        "components"
+      ],
+      "properties": {
+        "language": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9+#.-]{0,31}$"
+        },
+        "toolchain": {
+          "type": "string",
+          "minLength": 1
+        },
+        "baseline_reference": {
+          "type": "string",
+          "minLength": 1
+        },
+        "components": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "version",
+              "source"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Z0-9_]*$"
+              },
+              "version": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "owners": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "GOV": {
+          "type": "string",
+          "minLength": 1
+        },
+        "DOMAIN": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ARCH": {
+          "type": "string",
+          "minLength": 1
+        },
+        "DATA": {
+          "type": "string",
+          "minLength": 1
+        },
+        "SEC": {
+          "type": "string",
+          "minLength": 1
+        },
+        "UX": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ENG": {
+          "type": "string",
+          "minLength": 1
+        },
+        "OPS": {
+          "type": "string",
+          "minLength": 1
+        },
+        "AI": {
+          "type": "string",
+          "minLength": 1
+        },
+        "FIN": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "minProperties": 1
+    },
+    "project_overlay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "reference"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reference": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "quality_targets_reference": {
+      "type": "string",
+      "minLength": 1
+    },
+    "adoption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "approved_by",
+        "approved_at",
+        "approval_reference"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "EXAMPLE",
+            "DRAFT",
+            "APPROVED"
+          ]
+        },
+        "approved_by": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "approved_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "approval_reference": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "rule_id",
+          "decision",
+          "reason",
+          "approval_reference",
+          "expires_at"
+        ],
+        "properties": {
+          "rule_id": {
+            "enum": [
+              "SCG-GOV-001",
+              "SCG-GOV-002",
+              "SCG-GOV-003",
+              "SCG-GOV-004",
+              "SCG-GOV-005",
+              "SCG-GOV-006",
+              "SCG-GOV-007",
+              "SCG-GOV-008",
+              "SCG-GOV-009",
+              "SCG-GOV-010",
+              "SCG-GOV-011",
+              "SCG-GOV-012",
+              "SCG-DDD-001",
+              "SCG-DDD-002",
+              "SCG-DDD-003",
+              "SCG-DDD-004",
+              "SCG-DDD-005",
+              "SCG-DDD-006",
+              "SCG-DDD-007",
+              "SCG-DDD-008",
+              "SCG-DDD-009",
+              "SCG-DDD-010",
+              "SCG-DATA-001",
+              "SCG-DATA-002",
+              "SCG-DATA-003",
+              "SCG-DATA-004",
+              "SCG-DATA-005",
+              "SCG-DATA-006",
+              "SCG-DATA-007",
+              "SCG-DATA-008",
+              "SCG-DATA-009",
+              "SCG-DATA-010",
+              "SCG-DATA-011",
+              "SCG-DATA-012",
+              "SCG-SEC-001",
+              "SCG-SEC-002",
+              "SCG-SEC-003",
+              "SCG-SEC-004",
+              "SCG-SEC-005",
+              "SCG-SEC-006",
+              "SCG-SEC-007",
+              "SCG-SEC-008",
+              "SCG-SEC-009",
+              "SCG-SEC-010",
+              "SCG-UX-001",
+              "SCG-UX-002",
+              "SCG-UX-003",
+              "SCG-UX-004",
+              "SCG-UX-005",
+              "SCG-UX-006",
+              "SCG-UX-007",
+              "SCG-UX-008",
+              "SCG-ENG-001",
+              "SCG-ENG-002",
+              "SCG-ENG-003",
+              "SCG-ENG-004",
+              "SCG-ENG-005",
+              "SCG-ENG-006",
+              "SCG-ENG-007",
+              "SCG-ENG-008",
+              "SCG-ENG-009",
+              "SCG-ENG-010",
+              "SCG-ENG-011",
+              "SCG-ENG-012",
+              "SCG-AI-001",
+              "SCG-AI-002",
+              "SCG-AI-003",
+              "SCG-AI-004",
+              "SCG-AI-005",
+              "SCG-AI-006",
+              "SCG-AI-007",
+              "SCG-AI-008",
+              "SCG-SCM-001",
+              "SCG-SCM-002",
+              "SCG-SCM-003",
+              "SCG-SCM-004",
+              "SCG-SCM-005",
+              "SCG-SCM-006",
+              "SCG-SCM-007",
+              "SCG-SCM-008",
+              "SCG-SCM-009",
+              "SCG-SCM-010",
+              "SCG-SCM-011",
+              "SCG-SCM-012",
+              "SCG-SCM-013",
+              "SCG-SCM-014",
+              "SCG-SCM-015",
+              "SCG-SCM-016",
+              "SCG-SCM-017",
+              "SCG-SCM-018",
+              "SCG-OPT-001",
+              "SCG-OPT-002",
+              "SCG-OPT-003",
+              "SCG-OPT-004",
+              "SCG-OPT-005",
+              "SCG-OPT-006",
+              "SCG-TECH-001",
+              "SCG-TECH-002",
+              "SCG-TECH-003",
+              "SCG-TECH-004"
+            ]
+          },
+          "decision": {
+            "enum": [
+              "N/A",
+              "WAIVER",
+              "DEVIATION"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "approval_reference": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  }
+}

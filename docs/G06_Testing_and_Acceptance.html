@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"/><meta content="width=device-width,initial-scale=1" name="viewport"/><meta content="light" name="color-scheme"/><title>测试与验收 | IDP Gateway V1.0</title><link href="../assets/site.css" rel="stylesheet"/></head><body><header class="site-header"><a class="brand" href="../index.html"><span class="brand-mark">IDP</span> IDP GATEWAY <span style="color:#99aab8">/</span> Engineering Baseline</a><div class="header-meta">V1.0 · DESIGN DRAFT · 2026-11-10</div><span class="pill warn">NOT PRODUCTION APPROVED</span></header><div class="layout"><aside class="sidebar"><div class="aside-title">ENGINEERING BASELINE</div><a class="nav-item" href="../docs/G01_Requirements.html"><span class="num">G01</span> 产品需求与范围</a><a class="nav-item" href="../docs/G02_Architecture.html"><span class="num">G02</span> 系统架构与 DDD 边界</a><a class="nav-item" href="../docs/G03_Routing_and_Configuration.html"><span class="num">G03</span> 路由与配置治理</a><a class="nav-item" href="../docs/G04_Identity_and_Security.html"><span class="num">G04</span> 认证鉴权与凭证安全</a><a class="nav-item" href="../docs/G05_Engineering_and_Operations.html"><span class="num">G05</span> Go 工程与运维</a><a class="nav-item active" href="../docs/G06_Testing_and_Acceptance.html"><span class="num">G06</span> 测试与验收</a><hr class="aside-sep"/><div class="aside-title">GATEWAY OPERATIONS</div><a class="nav-item" href="../portal/prototypes/gateway-operations.html">六页交互式 UI / UX 原型</a><hr class="aside-sep"/><a class="nav-item" href="../index.html">← 总览 / Overview</a><div class="aside-title">CURRENT STATUS</div><div class="pill plain">Runtime tests NOT_RUN</div></aside><main class="page"><div class="topline">GATEWAY / ENGINEERING SPECIFICATION / G06</div><div class="article-meta"><span class="pill">验证与交付</span><span class="pill warn">DESIGN_DRAFT</span><span class="pill plain">V1.0</span></div><article class="article"><h1 id="h-1">G06 — 验证策略、交付批次与正式验收</h1>
+<blockquote>
+<p><strong>编号</strong> G06 · Verification &amp; Acceptance · <strong>版本</strong> V1.0 · <strong>状态</strong> DESIGN_DRAFT。<br/>
+离线静态检查仅属于 <code>STATIC_CHECK</code>；所有需启动真实 agentgateway、Gatekeeper 和第三方沙箱才能完成的测试，均为 <strong>NOT_RUN</strong>，不得虚报通过。</p>
+</blockquote>
+<h2 id="h-2">0. 验收哲学</h2>
+<p><strong>先验证“能否安全工作”，再验证“是否值得统一强制路径”</strong>。不接受以 API Gateway 功能清单替代实际多租户动态凭证测试；不接受以 Mock Server 的正常返回替代失败场景或真实身份验证；不接受以配置文件解析通过声称 Gateway 运行中可用。</p>
+<h2 id="h-3">1. 分层验证与证据类型</h2>
+<table>
+<thead>
+<tr>
+<th>层级</th>
+<th>类型</th>
+<th>执行方式</th>
+<th>证据要求</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>V0</td>
+<td>文档和中立契约静态一致性</td>
+<td>本包 <code>scripts/validate_baseline.py</code> + <code>unittest</code></td>
+<td>stdout、依赖、退出码、SHA 摘要</td>
+</tr>
+<tr>
+<td>V1</td>
+<td>agentgateway config/syntax</td>
+<td>已固定的官方版本二进制及官方 schema/CLI</td>
+<td>二进制版本、完整指令、真实输出</td>
+</tr>
+<tr>
+<td>V2</td>
+<td>认证与策略</td>
+<td>Gatekeeper 真/测试 JWT、真实 Gateway ExtAuthZ 对接</td>
+<td>正负请求、认证决策、Secret 泄密检查</td>
+</tr>
+<tr>
+<td>V3</td>
+<td>真实 Provider Sandbox</td>
+<td>2 租户/2 账户/创建与查询操作</td>
+<td>Trace、Provider correlation、外部确认</td>
+</tr>
+<tr>
+<td>V4</td>
+<td>高可用与性能</td>
+<td>多副本、故障注入、负载生成器</td>
+<td>资源、延迟分布、错误率、持续时间</td>
+</tr>
+<tr>
+<td>V5</td>
+<td>安全与发布</td>
+<td>SSRF、账户越权、密钥轮换、生产发布恢复</td>
+<td>具名批准、PoC 证据、运维演练</td>
+</tr>
+</tbody>
+</table>
+<p>V0 不包含企业级漏洞扫描、网关运行测试、服务认证性能或生产条件。若某项因契约变化失效，应按变更影响重验，不要求所有无关测试机械重跑。</p>
+<h2 id="h-4">2. 重点验收场景</h2>
+<ol>
+<li><strong>JWT 严格验证</strong>：同一服务身份的合法 JWT 可在允许环境访问，错误 iss/aud/alg/签名/过期/撤销场景拒绝。Gateway 必须鉴别 Token 类型与客户端权威。</li>
+<li><strong>跨租户隔离</strong>：相同 Provider 多账户并存，A 不能访问 B；改变 Header/URI/account ID 无法绕过 Gatekeeper 的复合授权。</li>
+<li><strong>第三方凭证处理</strong>：Gateway 执行认证，第三方只收到其认可 Token；不记录或转发内部 JWT；失效/刷新/吊销时反应在规定窗口内。</li>
+<li><strong>出站 L7 正确透传</strong>：对 Path/Query/Body/Header/Status 按允许契约观察，异常字符、URI 规范化、重定向不形成新的未授权目标。</li>
+<li><strong>CONNECT 对照</strong>：以官方 Tunnel 与 Route 模式分别测量可见信息，验证不误用 CONNECT 实现动态 HTTP 认证注入。</li>
+<li><strong>gRPC</strong>：Unary 与 Stream 的 deadline/metadata/status，识别认证中间件在流内能否保证安全。</li>
+<li><strong>运行可靠性</strong>：Gatekeeper PDP、JWKS、Token Broker、DNS、Provider、Gateway 分别故障，确认 Fail Closed、无写请求重放、配置可回退。</li>
+<li><strong>部署一致性</strong>：同一 GatewayPool 多副本的 Desired 和 Observed 摘要一致，部分成功必须显示 PARTIAL/UNKNOWN。</li>
+<li><strong>Provider 限流</strong>：多租户与共享 Account 配额不互相挤占、可明确区分 Provider 429 与 Gateway 429。</li>
+<li><strong>运营审计</strong>：能通过 Trace 和 Snapshot 信息重构授权事实、上游状态及发布责任；日志中没有 Secret/Token。</li>
+</ol>
+<p><code>tests/acceptance_matrix.csv</code> 提供逐条 ID、FR 映射、前置条件、预期结果、状态与证据占位标记；没有运行过的行保持 <code>NOT_RUN</code>，不把自带 Mock 逻辑测试伪装成运行验证。</p>
+<h2 id="h-5">3. 风险优先验证矩阵</h2>
+<table>
+<thead>
+<tr>
+<th>风险维度</th>
+<th>必需样例</th>
+<th>失败时处理</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>认证入口</td>
+<td>未认证、错误签名、Key Rotation、OIDC/JWKS 故障</td>
+<td>Block P1/P2</td>
+</tr>
+<tr>
+<td>资源授权</td>
+<td>Cross Tenant/Account/Env/Operation、无 Grant、撤销</td>
+<td>Block P1/P2</td>
+</tr>
+<tr>
+<td>凭证外发</td>
+<td>Token 注入、Header 剥离、Scope、缓存污染</td>
+<td>Block P2</td>
+</tr>
+<tr>
+<td>出站网络</td>
+<td>SSRF、重定向、DNS 重绑定、内网/IPv6</td>
+<td>Block P2</td>
+</tr>
+<tr>
+<td>gRPC HTTP</td>
+<td>Streaming、超时、Header/Body、Provider Error</td>
+<td>按已承诺协议阻断</td>
+</tr>
+<tr>
+<td>异步及故障</td>
+<td>重试副作用、代理失效、配置漂移、Broker 超时</td>
+<td>Block 生产</td>
+</tr>
+<tr>
+<td>效率与 SLO</td>
+<td>direct vs gateway 三类基线</td>
+<td>超出经批准预算阻断</td>
+</tr>
+<tr>
+<td>运营</td>
+<td>发布/回滚、Secret 轮换、值守</td>
+<td>Block CP6</td>
+</tr>
+</tbody>
+</table>
+<h2 id="h-6">4. 验收所需环境</h2>
+<ul>
+<li><strong>Dev Mock</strong>：固定 loopback upstream 和本地测试账户；仅用于结构验证，不使用真实 Provider Secret。</li>
+<li><strong>Stage / Test</strong>：隔离 VPC、受控 Gatekeeper Issuer、测试 Secret Manager、真实 agentgateway 版本、可观测组件、多副本部署。</li>
+<li><strong>Provider Sandbox</strong>：真实 Provider 沙箱账号、两个独立账户、隔离 token，测试数据合法；不可在不具备合同授权时自行模拟成官方 API。</li>
+<li><strong>Pre-Production</strong>：与生产一致的网关配置发布方式、硬件/SLO、故障域和回滚机制。</li>
+</ul>
+<p>必须在测试报告记录 <code>agentgateway image digest</code>、<code>Gatekeeper commit</code>、<code>Gateway adapter commit</code>、<code>Policy digest</code>、<code>Env</code>、<code>Clock</code>、<code>Dataset</code>、<code>Operator</code>、<code>Evidence URIs</code>。没有这些元数据无法复现时，证据状态为不充分而不是 PASS。</p>
+<h2 id="h-7">5. 安全测试与外部权限</h2>
+<p>安全测试的 Provider 账号必须获得合法使用授权；不要对真实第三方系统执行未经许可的渗透或压测。SSRF 等攻击性测试应在受控 Mock 环境与隔离网络中完成，确认网络策略/网关阻断而不请求真实内部敏感服务。</p>
+<h2 id="h-8">6. 发布门禁对照</h2>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>入口条件</th>
+<th>放行条件</th>
+<th>当前状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>D0 文档候选基线</td>
+<td>G01–G06 与机器契约成形</td>
+<td>文档 QA 成功，ADR/Manifest 仍可 Proposed</td>
+<td>静态检查可执行，设计待审</td>
+</tr>
+<tr>
+<td>D1 功能 PoC</td>
+<td>D0 已评审/必要风险已确认</td>
+<td>JWT/AuthZ、L7、Token 负向测试真实通过</td>
+<td>NOT_RUN</td>
+</tr>
+<tr>
+<td>D2 Provider Sandbox</td>
+<td>D1 通过</td>
+<td>多租户账户、失效/刷新、结果不确定真实通过</td>
+<td>NOT_RUN</td>
+</tr>
+<tr>
+<td>D3 生产候选</td>
+<td>D2 通过</td>
+<td>性能/安全/HA/回滚/运维实测达批准 SLO</td>
+<td>NOT_RUN</td>
+</tr>
+<tr>
+<td>D4 正式发布</td>
+<td>STD-CP1–CP5 适用门禁有效</td>
+<td>有权审批 + 受控发布 + 发布后真实验证</td>
+<td>NOT_RUN</td>
+</tr>
+</tbody>
+</table>
+<h2 id="h-9">7. 交付包目录与审查清单</h2>
+<ul>
+<li><strong>文档</strong>：G01–G06 Markdown + 对应 HTML，统一索引 <code>index.html</code>；每份文档需包含权威、约束、验证。</li>
+<li><strong>ADR</strong>：明确选型、Ingress/Egress/AI 分池、Gatekeeper 认证/凭证、Fabric 发布边界、BIP 取消、Runtime/失败策略、ACL。</li>
+<li><strong>机器资产</strong>：Gatekeeper OpenAPI、RouteIntent JSON Schema、AuthZ Decision Schema、Policy 样例、agentgateway 本地示例、Mock 数据。</li>
+<li><strong>测试</strong>：<code>tests/acceptance_matrix.csv</code>、安全与契约离线测试、真实测试证据目录 <code>tests/evidence/</code>。</li>
+<li><strong>Manifest</strong>：技术 Profile 采用及六门禁的候选状态，<strong>具名责任人与审批不得虚构</strong>。</li>
+<li><strong>引用资料</strong>：官方文档来源、规范版本、依赖和技术适用性保留条件。</li>
+</ul>
+<h2 id="h-10">8. 当前版本已验证与未验证</h2>
+<p><strong>可验证（本机可运行）</strong>：文档存在、基础相对路径、JSON/YAML 语法、JSON Schema/fixture、策略样例的非开放目标和基本拒绝逻辑、ZIP 条目与哈希。实测结果见 <code>tests/evidence/static-validation.json</code> 和 <code>CHECKSUMS.sha268</code>（生成时间与工具执行见实际证据，不以正文宣称已全部执行）。</p>
+<p><strong>未验证</strong>：真实 agentgateway 启动和配置 API、Gatekeeper/ExtAuthZ/mTLS 的生产对接、第三方 OAuth、REST/gRPC 端到端、多实例 HA、性能指标、安全渗透、发布恢复及上位规范正式门禁。<strong>这些必须始终标 NOT_RUN，直到有可核验证据。</strong></p>
+<h2 id="h-11">9. STD-CP4 专业体验补充与独立 UX 验收（G06 · V1.0 同版更新）</h2>
+<p>由于本项目的内部工程管理模块包含人工操作，STD-CP4 不应标记 N/A。新增 <a href="../portal/spec/Gateway_Operations_UX_Spec_V1.0.html">Gateway Operations UX 设计规格</a> 与 <a href="../tests/ux/acceptance_matrix.csv">UX 验收矩阵</a>：共 <strong>75 条 UI/UX 场景</strong>，全部 <code>NOT_RUN</code>（正式 UI/权限/可访问性验收）。当前 95 条运行时验收场景继续保持 <code>NOT_RUN</code>，两套矩阵分别追踪不得混为已通过。</p>
+<p>原型浏览器自动化仅验证静态 HTML/JS 交互行为，不能代替实际 Gatekeeper RBAC/ABAC、多租户数据保护、agentgateway 配置回读、发布审计、错误恢复或生产可访问性验收。须分别提交真实浏览器截图/测试日志、真实后端联调与验收报告。</p>
+<h2 id="h-12">同版设计增补：统一 Gateway Console</h2>
+<p>新增验收约束：以官方开源 UI 功能矩阵核对 Gateway/Traffic/LLM/MCP/Tools 的可用性；区分 Mock UI PASS 与 Gateway/Gatekeeper/Fabric 真正联调 NOT_RUN；新增角色隔离、密钥不泄漏、配置冲突与恢复演练。</p>
+<p>详情参见 <code>portal/spec/Agentgateway_UI_Capability_Matrix_V1.0.md</code>（自本工程根目录）。</p>
+<blockquote>
+<p>本次统一 Console 设计增补后 UX 正式验收矩阵共有 <strong>75 项</strong>，状态全部保持 <code>NOT_RUN</code>；95 条 Gateway 真实验收仍保持 <code>NOT_RUN</code>。</p>
+</blockquote>
+<h2 id="h-13">同版增补：报文诊断验收门槛</h2>
+<p>新增 UX 正式验收用例 <code>GW-UX-AT-055</code> 至 <code>GW-UX-AT-062</code>，状态全部 <code>NOT_RUN</code>。其中包含：四阶段消息证据链、前后请求转换差异、401/403 未向外转发、504 写操作 UNKNOWN、Secret/PII 采集前脱敏、租户/角色访问隔离及审计、按需捕获的上限与性能、gRPC Metadata/Status/Streaming。离线 Mock 的页面渲染或合成数据导出不等于上述真实验收通过。</p>
+<h2 id="h-14">11. 生产阻断缺口的新增追溯与准入规则</h2>
+<ul>
+<li>功能总量：<strong>50 FR + 19 NFR</strong>。原 30 FR / 12 NFR 的编号不变，新增 <code>GW-FR-031..050</code>、<code>GW-NFR-13..19</code>，逐项追溯 <code>tests/acceptance_matrix.csv</code>；新增 <strong>20+7</strong> 个对应运行用例，全部 NOT_RUN。</li>
+<li>新增 <code>tests/protocol-compatibility.csv</code>、<code>tests/operational-exercises.csv</code> 和 <code>governance/gap-remediation-matrix.csv</code> 作为执行清单，不得把设计文本映射为 PASS。</li>
+<li><code>tests/contracts/test_route_preflight.py</code> 的结果只能证明<strong>离线配置意图语义</strong>，不证明真实 Gateway Runtime、AuthZ、DNS/SSRF、Quota Coordinator、Capture 及 Snapshot 生效。</li>
+<li>PoC 的唯一生产结论门槛：选定镜像 digest/配置版本，以真实 Gatekeeper、Gateway、Provider Mock/Sandbox 进行正反向安全测试。多租户账户隔离、凭证撤销、配额越界、DNS 重解析、非幂等 UNKNOWN、配置半失败和四阶段诊断应全部有可重复证据。</li>
+<li>UI/UX 正式案例新增 <code>GW-UX-063..071</code>，涵盖账户配额、Upstream Health、配置漂移和诊断证据权限；其验证仍为 NOT_RUN，离线 Mock 只能证明界面行为。</li>
+</ul>
+<h3 id="h-15">11.1 逐层验收顺序（不能跳步）</h3>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>真实产出证据</th>
+<th>失败时行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A. Native Config</td>
+<td>配置 Schema、CLI/启动、版本/镜像摘要</td>
+<td>拒绝发布，不生成 ACTIVE</td>
+</tr>
+<tr>
+<td>B. Identity/Broker</td>
+<td>已验证身份、双租户双账户、Token 生命周期、撤销传播</td>
+<td>失败关闭并记录脱敏审计</td>
+</tr>
+<tr>
+<td>C. Traffic/Protocol</td>
+<td>配额、并发、健康/熔断、HTTP/gRPC/SSE、异常处理</td>
+<td>异常状态可区分且可恢复</td>
+</tr>
+<tr>
+<td>D. Rollout/Resilience</td>
+<td>Canary、Partial/Unknown、漂移、故障回滚</td>
+<td>恢复有效批准快照并重新观察</td>
+</tr>
+<tr>
+<td>E. Observability/Security</td>
+<td>四阶段证据采集精度、脱敏前拦截、服务端 ABAC</td>
+<td>禁止未授权正文泄露</td>
+</tr>
+<tr>
+<td>F. Formal Signoff</td>
+<td>STD-CP1–CP6 具名门禁与运营接收</td>
+<td>无签核不得生产</td>
+</tr>
+</tbody>
+</table>
+<h2>Message Inspector Request / Response 专项验收</h2>
+<p>除既有 95 条运行时验收外，UX 验收还覆盖 4 项成对报文场景（<code>GW-UX-AT-072..075</code>）；因此正式 UX 场景总数为 <strong>75</strong>，全部保持 <code>NOT_RUN</code>。原型自测结果只能说明合成数据界面交互正常。</p>
+<ol>
+<li>对 HTTP 200：同一 Trace 必须看见两个 Hop，分别存在 Request/Response；请求状态行与响应状态行绝不能混放，且显示 Headers 和 Body 采集状态。</li>
+<li>对请求改写和响应映射：可核对入站 Target、外发 Target、上游 Status、下游 Status，凭证值仅能显示安全脱敏标记。</li>
+<li>对 401/403/429：上游 Request 为 <code>NOT_SENT</code>，上游 Response 为 <code>NOT_OBSERVED/NOT_REACHED</code>，但下游 Gateway 错误 Response 必须可见。</li>
+<li>对 504：上游 Request 为已发送、上游 Response 为 <code>NOT_OBSERVED</code>，下游 Gateway 504 可见；写操作须标注 <code>UNKNOWN / reconciliation required</code>。</li>
+</ol>
+<p>正式通过依赖真实 agentgateway 原生路由与 BFF 服务端采集、授权、脱敏、导出审计及双租户负向验证。</p>
+</article><div class="doc-footer-nav"><a href="G05_Engineering_and_Operations.html">← Go 工程与运维</a><a href="../index.html">文档总览 →</a></div><div class="footer">IDP Gateway V1.0 · 设计候选 · 文件可离线阅读 · 真实 PoC / 审批 / 生产验证尚未完成</div></main></div></body></html>

@@ -1,0 +1,310 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.idp.internal/gateway/route-intent-1.0.json",
+  "title": "Gateway Route Intent — internal governance schema",
+  "description": "Stable, IDP-owned intent contract (not native agentgateway configuration). Draft ingress/egress/AI discriminated branches.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "intent_id",
+    "gateway_pool",
+    "traffic_class",
+    "environment",
+    "logical_path",
+    "authz_profile",
+    "approval_ref",
+    "expected_generation"
+  ],
+  "properties": {
+    "intent_id": {
+      "type": "string",
+      "pattern": "^gwi-[a-z0-9-]{3,64}$"
+    },
+    "gateway_pool": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{2,63}$"
+    },
+    "traffic_class": {
+      "type": "string",
+      "enum": [
+        "INGRESS",
+        "EGRESS",
+        "AI"
+      ]
+    },
+    "environment": {
+      "type": "string",
+      "enum": [
+        "DEV",
+        "TEST",
+        "PROD"
+      ]
+    },
+    "provider_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,63}$"
+    },
+    "operation_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.-]{2,127}$"
+    },
+    "logical_path": {
+      "type": "string",
+      "pattern": "^/(?:[A-Za-z0-9._~%-]+/?)*$"
+    },
+    "allowed_methods": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "GET",
+          "HEAD",
+          "OPTIONS",
+          "POST",
+          "PUT",
+          "PATCH",
+          "DELETE"
+        ]
+      }
+    },
+    "upstream_hostname": {
+      "type": "string",
+      "pattern": "^(?:[a-z0-9-]+\\.)+[a-z]{2,}$"
+    },
+    "upstream_port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "authz_profile": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 100
+    },
+    "approval_ref": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 128
+    },
+    "expected_generation": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "contract_ref": {
+      "type": "string",
+      "maxLength": 160
+    },
+    "credential_binding_ref": {
+      "type": "string",
+      "maxLength": 160
+    },
+    "redirect_policy": {
+      "type": "string",
+      "enum": [
+        "DENY",
+        "ALLOW_SAME_APPROVED_HOST"
+      ]
+    },
+    "public_hostname": {
+      "type": "string",
+      "pattern": "^(?:[a-z0-9-]+\\.)+[a-z]{2,}$"
+    },
+    "backend_service_ref": {
+      "type": "string",
+      "pattern": "^service:[a-z0-9][a-z0-9._/-]{2,127}$"
+    },
+    "ai_protocol": {
+      "type": "string",
+      "enum": [
+        "LLM",
+        "MCP",
+        "A2A"
+      ]
+    },
+    "ai_target_ref": {
+      "type": "string",
+      "pattern": "^ai:[a-z0-9][a-z0-9._/-]{2,127}$"
+    },
+    "transport": {
+      "type": "string",
+      "enum": [
+        "HTTP",
+        "GRPC"
+      ]
+    },
+    "route_priority": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000
+    },
+    "policy_bundle_ref": {
+      "type": "string",
+      "pattern": "^policy:[a-z0-9][a-z0-9._/-]{2,127}$"
+    },
+    "upstream_tls": {
+      "type": "string",
+      "enum": [
+        "VERIFY_REQUIRED"
+      ]
+    },
+    "upstream_sni": {
+      "type": "string",
+      "pattern": "^(?:[a-z0-9-]+\\.)+[a-z]{2,}$"
+    },
+    "provider_account_strategy": {
+      "type": "string",
+      "enum": [
+        "GATEKEEPER_DECISION_BINDING",
+        "NONE"
+      ]
+    },
+    "api_asset_ref": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 160
+    }
+  },
+  "oneOf": [
+    {
+      "title": "Internal or external client accessing a published IDP API",
+      "properties": {
+        "traffic_class": {
+          "const": "INGRESS"
+        }
+      },
+      "required": [
+        "traffic_class",
+        "public_hostname",
+        "backend_service_ref",
+        "allowed_methods",
+        "api_asset_ref"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "provider_account_strategy"
+            ]
+          },
+          {
+            "required": [
+              "credential_binding_ref"
+            ]
+          },
+          {
+            "required": [
+              "ai_protocol"
+            ]
+          },
+          {
+            "required": [
+              "ai_target_ref"
+            ]
+          },
+          {
+            "required": [
+              "provider_id"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "title": "IDP workload accessing registered external HTTP/gRPC operations",
+      "properties": {
+        "traffic_class": {
+          "const": "EGRESS"
+        },
+        "provider_account_strategy": {
+          "const": "GATEKEEPER_DECISION_BINDING"
+        },
+        "redirect_policy": {
+          "const": "DENY"
+        },
+        "upstream_tls": {
+          "const": "VERIFY_REQUIRED"
+        }
+      },
+      "required": [
+        "traffic_class",
+        "provider_id",
+        "operation_id",
+        "allowed_methods",
+        "upstream_hostname",
+        "upstream_port",
+        "upstream_tls",
+        "redirect_policy",
+        "provider_account_strategy",
+        "credential_binding_ref"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "backend_service_ref"
+            ]
+          },
+          {
+            "required": [
+              "public_hostname"
+            ]
+          },
+          {
+            "required": [
+              "ai_protocol"
+            ]
+          },
+          {
+            "required": [
+              "ai_target_ref"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "title": "AI traffic isolated from business egress authentication",
+      "properties": {
+        "traffic_class": {
+          "const": "AI"
+        }
+      },
+      "required": [
+        "traffic_class",
+        "ai_protocol",
+        "ai_target_ref"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "provider_account_strategy"
+            ]
+          },
+          {
+            "required": [
+              "credential_binding_ref"
+            ]
+          },
+          {
+            "required": [
+              "backend_service_ref"
+            ]
+          },
+          {
+            "required": [
+              "public_hostname"
+            ]
+          },
+          {
+            "required": [
+              "provider_id"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

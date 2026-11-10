@@ -1,0 +1,13 @@
+﻿protocol,scenario,status
+HTTP/1.1,"GET/POST, chunked, HEAD, OPTIONS",NOT_RUN
+HTTP/2,"Multiplexing, headers, trailers",NOT_RUN
+gRPC Unary,Metadata/status/trailer,NOT_RUN
+gRPC client-stream,Flow-control and cancellation,NOT_RUN
+gRPC server-stream,Timeouts and cancellation,NOT_RUN
+gRPC bidi-stream,Flow-control and cancellation,NOT_RUN
+SSE,No unintended buffering,NOT_RUN
+Binary/PDF,"Bytes preservation, MIME correctness",NOT_RUN
+Large JSON,"Body limits, 413, truncation",NOT_RUN
+Path normalization,"%2e/%2f, duplicate query, raw path",NOT_RUN
+TLS/mTLS,SNI/certs rotation/verify,NOT_RUN
+gRPC H2C,Permitted only in trusted environment,NOT_RUN

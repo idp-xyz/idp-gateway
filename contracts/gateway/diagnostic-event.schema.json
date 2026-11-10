@@ -1,0 +1,201 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "IDP Diagnostic Stage Evidence V1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "trace_id",
+    "route_id",
+    "config_digest",
+    "tenant_ref",
+    "request_id",
+    "stages",
+    "failure_origin",
+    "business_outcome",
+    "observed_at"
+  ],
+  "properties": {
+    "trace_id": {
+      "type": "string",
+      "minLength": 4
+    },
+    "route_id": {
+      "type": "string",
+      "minLength": 4
+    },
+    "config_digest": {
+      "type": "string",
+      "minLength": 4
+    },
+    "tenant_ref": {
+      "type": "string",
+      "minLength": 4
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 4
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "failure_origin": {
+      "enum": [
+        "GATEWAY_AUTHN",
+        "GATEKEEPER_AUTHZ",
+        "GATEWAY_RATE_LIMIT",
+        "UPSTREAM_PROVIDER",
+        "NETWORK",
+        "UNKNOWN",
+        "NONE"
+      ]
+    },
+    "business_outcome": {
+      "enum": [
+        "SUCCESS",
+        "DEFINITE_FAILURE",
+        "UNKNOWN",
+        "NOT_SENT"
+      ]
+    },
+    "stages": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "stage",
+          "status",
+          "timestamp"
+        ],
+        "properties": {
+          "stage": {
+            "enum": [
+              "INGRESS",
+              "EGRESS",
+              "UPSTREAM_RESPONSE",
+              "DOWNSTREAM_RESPONSE"
+            ]
+          },
+          "status": {
+            "enum": [
+              "CAPTURED_SANITIZED",
+              "METADATA_ONLY",
+              "NOT_SENT",
+              "NOT_OBSERVED",
+              "TRUNCATED",
+              "NOT_CAPTURED"
+            ]
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "http_status": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 599
+          },
+          "sanitized_headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "not": {
+                "pattern": "^(?:[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[pP][rR][oO][xX][yY]\\-[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[sS][eE][tT]\\-[cC][oO][oO][kK][iI][eE]|[xX]\\-[aA][pP][iI]\\-[kK][eE][yY]|[xX]\\-[aA][uU][tT][hH]\\-[tT][oO][kK][eE][nN])$"
+              }
+            }
+          },
+          "body_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "body_sample_sanitized": {
+            "type": "string",
+            "maxLength": 65536
+          },
+          "bytes_observed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "message_kind": {
+            "enum": [
+              "REQUEST",
+              "RESPONSE"
+            ]
+          },
+          "hop": {
+            "enum": [
+              "CLIENT_GATEWAY",
+              "GATEWAY_UPSTREAM"
+            ]
+          },
+          "http_method": {
+            "type": "string",
+            "enum": [
+              "GET",
+              "POST",
+              "PUT",
+              "PATCH",
+              "DELETE",
+              "HEAD",
+              "OPTIONS",
+              "CONNECT",
+              "TRACE"
+            ]
+          },
+          "request_target": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "http_version": {
+            "type": "string",
+            "maxLength": 12
+          },
+          "content_type": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "body_capture_status": {
+            "enum": [
+              "DISABLED",
+              "METADATA_ONLY",
+              "CAPTURED_SANITIZED",
+              "EMPTY",
+              "TRUNCATED",
+              "NOT_CAPTURED",
+              "NOT_OBSERVED"
+            ]
+          },
+          "body_total_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "body_captured_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "redaction_policy_ref": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "provider_request_id_sanitized": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "grpc_status": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 16
+          }
+        }
+      }
+    }
+  }
+}

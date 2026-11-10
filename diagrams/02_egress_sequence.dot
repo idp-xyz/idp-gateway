@@ -1,0 +1,14 @@
+digraph G {
+graph [fontname="Noto Sans CJK SC",bgcolor="#ffffff",pad="0.35",rankdir=LR,nodesep="0.28",ranksep="0.48",splines="polyline",labelloc=t,labeljust=l,fontsize=21,fontcolor="#12233b"];
+node [shape=box,style="rounded,filled",color="#DCE5EF",fillcolor="#F4F7FB",fontname="Noto Sans CJK SC",fontcolor="#203249",fontsize=12,penwidth=1.2,margin="0.23,0.16"];
+edge [color="#97AABD",penwidth=1.7,arrowsize=.75,fontname="Noto Sans CJK SC",fontsize=10,fontcolor="#50718A"];
+label="Egress API — 认证、账户授权与外发凭证的责任链";
+a [label="① IDP 业务 Port / ACL\n业务操作与服务身份",fillcolor="#F0F4FA"];
+b [label="② agentgateway\nJWT/JWKS 校验",fillcolor="#DAEAFB",color="#4F90D4"];
+c [label="③ Gatekeeper PDP\n服务 × 租户 × 账户 × 操作",fillcolor="#E5F5EE",color="#65B6A0"];
+d [label="④ Credential Broker\n短期 Token / 受控凭证",fillcolor="#E5F5EE",color="#65B6A0"];
+e [label="⑤ agentgateway L7\n清洗内部 Token + 注入上游凭证",fillcolor="#DAEAFB",color="#4F90D4"];
+f [label="⑥ 第三方 Provider API\n自身 OAuth / API Key 认证",fillcolor="#F0F4FA"];
+g [label="⑦ 领域 ACL 解释返回值\n业务状态与恢复",fillcolor="#F0F4FA"];
+a -> b -> c -> d -> e -> f -> g;
+}

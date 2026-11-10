@@ -1,0 +1,19 @@
+{
+  "intent_id": "gwi-public-001",
+  "gateway_pool": "ingress-test",
+  "traffic_class": "INGRESS",
+  "environment": "TEST",
+  "logical_path": "/v1/shipments",
+  "allowed_methods": [
+    "GET",
+    "HEAD"
+  ],
+  "public_hostname": "api.cargopai.example",
+  "backend_service_ref": "service:cargopai/shipment-api",
+  "api_asset_ref": "apiasset:cargopai/shipment/v1",
+  "authz_profile": "public-oidc-jwt-v1",
+  "approval_ref": "APPROVAL-PENDING-002",
+  "expected_generation": 0,
+  "transport": "HTTP",
+  "policy_bundle_ref": "policy:ingress-standard-v1"
+}

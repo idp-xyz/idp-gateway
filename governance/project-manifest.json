@@ -1,0 +1,90 @@
+{
+  "standard_id": "IDP-SCG-STD-001",
+  "standard_version": "1.0.0",
+  "project_id": "idp-gateway",
+  "scope": {
+    "description": "IDP 通用 API/AI 网关集成与受控配置方案；agentgateway 数据面、Gatekeeper 身份/账户凭证、Fabric 发布意图、Ingress/Egress/AI 安全域；当前为候选设计，不含真实生产部署。",
+    "legal_entities": [
+      "UNRESOLVED-LEGAL-ENTITY"
+    ],
+    "jurisdictions": [
+      "UNRESOLVED-JURISDICTION"
+    ],
+    "exclusions": [
+      "不建设独立 BIP 平台",
+      "不自研通用代理内核",
+      "不替代业务领域对象级授权",
+      "不开发全量网关商业化管理产品"
+    ]
+  },
+  "risk_level": "R3",
+  "capabilities": {
+    "physical_goods": false,
+    "traceability": false,
+    "inventory": false,
+    "transport": false,
+    "trade_documents": false,
+    "commercial_fees": false,
+    "regulatory": false,
+    "special_goods": false,
+    "optimization": false,
+    "ai": true,
+    "integrations": true,
+    "user_interface": false,
+    "production_service": true,
+    "multi_tenant": true
+  },
+  "profiles": [
+    {
+      "id": "CORE",
+      "version": "1.0.0"
+    },
+    {
+      "id": "AI",
+      "version": "1.0.0"
+    },
+    {
+      "id": "TECH",
+      "version": "1.0.0"
+    },
+    {
+      "id": "GO",
+      "version": "1.0.0"
+    }
+  ],
+  "technology": {
+    "language": "go",
+    "toolchain": "UNRESOLVED-PINNED-GO-TOOLCHAIN",
+    "baseline_reference": "docs/G05_Engineering_and_Operations.md",
+    "components": [
+      {
+        "id": "AGENTGATEWAY",
+        "version": "1.7.x-UNPINNED",
+        "source": "https://agentgateway.dev/docs/kubernetes/latest/release-notes/versions/"
+      }
+    ]
+  },
+  "owners": {
+    "GOV": "UNASSIGNED-GOV",
+    "DOMAIN": "UNASSIGNED-DOMAIN",
+    "ARCH": "UNASSIGNED-ARCH",
+    "DATA": "UNASSIGNED-DATA",
+    "SEC": "UNASSIGNED-SEC",
+    "ENG": "UNASSIGNED-ENG",
+    "OPS": "UNASSIGNED-OPS",
+    "AI": "UNASSIGNED-AI"
+  },
+  "project_overlay": {
+    "id": "IDP-GW-OVERLAY",
+    "version": "1.0.0",
+    "reference": "docs/G02_Architecture.md"
+  },
+  "quality_targets_reference": "docs/G01_Requirements.md",
+  "adoption": {
+    "status": "DRAFT",
+    "approved_by": null,
+    "approved_at": null,
+    "approval_reference": null
+  },
+  "decisions": []
+}

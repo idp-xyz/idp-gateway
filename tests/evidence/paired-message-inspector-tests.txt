@@ -1,0 +1,1 @@
+PASS 15 checks: paired 200, denied 403, timeout 504, mock role isolation, redacted export, JS errors

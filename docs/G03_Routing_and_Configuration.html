@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"/><meta content="width=device-width,initial-scale=1" name="viewport"/><meta content="light" name="color-scheme"/><title>路由与配置治理 | IDP Gateway V1.0</title><link href="../assets/site.css" rel="stylesheet"/></head><body><header class="site-header"><a class="brand" href="../index.html"><span class="brand-mark">IDP</span> IDP GATEWAY <span style="color:#99aab8">/</span> Engineering Baseline</a><div class="header-meta">V1.0 · DESIGN DRAFT · 2026-11-10</div><span class="pill warn">NOT PRODUCTION APPROVED</span></header><div class="layout"><aside class="sidebar"><div class="aside-title">ENGINEERING BASELINE</div><a class="nav-item" href="../docs/G01_Requirements.html"><span class="num">G01</span> 产品需求与范围</a><a class="nav-item" href="../docs/G02_Architecture.html"><span class="num">G02</span> 系统架构与 DDD 边界</a><a class="nav-item active" href="../docs/G03_Routing_and_Configuration.html"><span class="num">G03</span> 路由与配置治理</a><a class="nav-item" href="../docs/G04_Identity_and_Security.html"><span class="num">G04</span> 认证鉴权与凭证安全</a><a class="nav-item" href="../docs/G05_Engineering_and_Operations.html"><span class="num">G05</span> Go 工程与运维</a><a class="nav-item" href="../docs/G06_Testing_and_Acceptance.html"><span class="num">G06</span> 测试与验收</a><hr class="aside-sep"/><div class="aside-title">GATEWAY OPERATIONS</div><a class="nav-item" href="../portal/prototypes/gateway-operations.html">六页交互式 UI / UX 原型</a><hr class="aside-sep"/><a class="nav-item" href="../index.html">← 总览 / Overview</a><div class="aside-title">CURRENT STATUS</div><div class="pill plain">Runtime tests NOT_RUN</div></aside><main class="page"><div class="topline">GATEWAY / ENGINEERING SPECIFICATION / G03</div><div class="article-meta"><span class="pill">运行时发布</span><span class="pill warn">DESIGN_DRAFT</span><span class="pill plain">V1.0</span></div><article class="article"><h1 id="h-1">G03 — 路由、配置发布与流量策略治理</h1>
+<blockquote>
+<p><strong>编号</strong> G03 · Routing &amp; Configuration Governance · <strong>版本</strong> V1.0 · <strong>状态</strong> DESIGN_DRAFT / Runtime compatibility NOT_RUN<br/>
+文档约束：API Fabric 负责治理批准；Gateway 适配器负责 agentgateway 运行配置编译/应用；Gatekeeper 保有账户/凭证授权权威。所有例子仅是候选接口与沙箱配置。</p>
+</blockquote>
+<h2 id="h-2">0. 设计目标与系统事实</h2>
+<p><strong>统一地址不是开放代理</strong>：业务产品调用逻辑入口 <code>https://egress-api.idp.internal/providers/{provider}/...</code>（规划占位），Router 查找已登记 Provider Operation；任何用户输入目标 URL、Host、IP、端口的接口都不纳入 MVP。地址仅是名字空间，绝不能由字符串拼接推导上游 URL。</p>
+<p><strong>单一配置事实权威</strong>：Gateway 的正式 Desired Snapshot 由受控 Gateway Config/Publisher 持有，引用 Fabric 的批准记录。运行时 agentgateway 的观察状态仅是 Applied/Observed Evidence，不是另一个可变批准源。Fabric API Catalog 的文档可见性不自动转换为运行时 Route 可用性。</p>
+<p><img alt="受控发布链" src="../diagrams/04_publication_flow.svg"/></p>
+<h2 id="h-3">1. 配置资产模型</h2>
+<table>
+<thead>
+<tr>
+<th>资产</th>
+<th>意义</th>
+<th>权威/更新方式</th>
+<th>关键约束</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ProviderRegistration</code></td>
+<td>服务提供商标识和环境归属</td>
+<td>Gatekeeper/治理登记分工需确定</td>
+<td>不包含秘钥明文</td>
+</tr>
+<tr>
+<td><code>ApiOperation</code></td>
+<td>API 方法、路径、输入输出契约</td>
+<td>Fabric Consumer API Catalog</td>
+<td>第三方接口契约不由我们伪造为权威</td>
+</tr>
+<tr>
+<td><code>RouteIntent</code></td>
+<td>哪个入口/路径允许访问哪个 Provider Operation</td>
+<td>Fabric 受控发布意图</td>
+<td>唯一 ID、显式环境与 APIAsset 引用</td>
+</tr>
+<tr>
+<td><code>TargetAllowlist</code></td>
+<td>上游 host、SNI、端口、路径/方法边界</td>
+<td>Gateway 治理资源</td>
+<td>SSRF 默认拒绝；只允许已核准目的地</td>
+</tr>
+<tr>
+<td><code>AuthnProfile</code></td>
+<td>客户端身份认证方式</td>
+<td>Gatekeeper 与 Gateway 双方签名/适配</td>
+<td>issuer/audience/algorithm 不允许通配</td>
+</tr>
+<tr>
+<td><code>AuthzProfile</code></td>
+<td>访问权限检查规则</td>
+<td>Gatekeeper PDP</td>
+<td>多维账户/操作/租户范围</td>
+</tr>
+<tr>
+<td><code>CredentialBindingRef</code></td>
+<td>如何选用第三方凭证</td>
+<td>Gatekeeper 负责实际授权和 Token</td>
+<td>Gateway 不直接存放原始第三方私钥</td>
+</tr>
+<tr>
+<td><code>PolicyBundle</code></td>
+<td>限流、超时、Header 清洗、网络规则组合</td>
+<td>Gateway Publisher</td>
+<td>内容可哈希、可复现、可回退</td>
+</tr>
+<tr>
+<td><code>DeploymentSnapshot</code></td>
+<td>一次完整已批准配置制品</td>
+<td>Gateway Publisher</td>
+<td>只追加、不可变、带审批依据</td>
+</tr>
+<tr>
+<td><code>ObservedState</code></td>
+<td>各运行副本真实摘要与健康</td>
+<td>Gateway Reconciler</td>
+<td>与批准状态不得混淆</td>
+</tr>
+</tbody>
+</table>
+<p>参考结构：<code>contracts/gateway/route-intent.schema.json</code> 和 <code>gateway/policies/egress-policy.example.json</code>。这些是我们的<strong>中立意图模型</strong>，不是 agentgateway 原生命令格式。</p>
+<h2 id="h-4">2. 路由解析规则</h2>
+<p><strong>Ingress</strong>：按域名、已批准路径、方法、可选 Header 及权重匹配，不允许公共路径吞并内部管理路由；先 TLS/客户端验证，再授权、再请求转发。API 请求对业务对象的最终权限在业务服务验证。</p>
+<p><strong>Egress</strong>：按 <code>provider_id + operation_id + environment</code> 解析固定 Upstream；账户标识由 Gateway 可信上下文和 Gatekeeper 授权解析。Provider Account 可不出现在 URL；若出现，也只是申请使用的 ID，必须重新授权。任何主机名替换、跨环境或重定向改变目的地都需重新匹配允许目标。</p>
+<p><strong>AI</strong>：TELOS 流量使用独立网关实例和独立策略；MCP/A2A 版本、安全握手和 Tool 访问权限不得用 REST 通用授权替代。</p>
+<h3 id="h-5">2.1 L7、CONNECT 与 gRPC 的选择</h3>
+<table>
+<thead>
+<tr>
+<th>模式</th>
+<th>可见/可控的内容</th>
+<th>典型用途</th>
+<th>本期要求</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>L7 托管 HTTP(S) Route</td>
+<td>HTTP 方法、路径、Header 及请求级策略</td>
+<td>第三方 OAuth/API Key 按账户选择并注入</td>
+<td><strong>P1 必测</strong></td>
+</tr>
+<tr>
+<td>CONNECT Tunnel 透传</td>
+<td>CONNECT 目标、TLS SNI；内部 HTTPS 内容不可见</td>
+<td>出口域名白名单、网络代理</td>
+<td>可选，不作为动态 Token 注入依据</td>
+</tr>
+<tr>
+<td>CONNECT Route Mode</td>
+<td>CONNECT 请求的 HTTP 策略，隧道中真实 HTTPS 内容通常仍不可见</td>
+<td>出站连接级认证与路由</td>
+<td>单独验证，不宣称等同 L7</td>
+</tr>
+<tr>
+<td>gRPC L7 Route</td>
+<td>Metadata、Method、状态、流控取决于实现/版本</td>
+<td>对外 gRPC</td>
+<td>P1/P2 单独验证 Unary/Streaming</td>
+</tr>
+</tbody>
+</table>
+<p>官方对 CONNECT 两种模式的策略差异有明确说明；见文末官方资料链接。<strong>禁止</strong>用只验证 CONNECT 白名单的测试结果推导“可以替第三方 HTTPS 注入 Header”。</p>
+<h2 id="h-6">3. 配置发布状态机</h2>
+<pre><code class="language-text">DRAFT → VALIDATED → APPROVED → STAGED → APPLYING → OBSERVING → ACTIVE
+  │        │          │         │         │          │           │
+  └─REJECTED / CANCELED   └──FAILED / PARTIAL / UNKNOWN──RECONCILE/ROLLBACK
+ACTIVE → WITHDRAW_REQUESTED → REVOKING → REVOKED
+</code></pre>
+<p>状态语义：</p>
+<ul>
+<li><code>APPROVED</code> 是授权发布的事实，不意味着 agentgateway 已接收配置。</li>
+<li><code>STAGED</code> 表示已生成目标版本且签名/静态检查通过，并非已生效。</li>
+<li><code>APPLYING</code> 向目标池开始发布，部分实例成功时记录 <code>PARTIAL</code>。</li>
+<li><code>OBSERVING</code> 各实例回读摘要和健康；在所有预期实例达到规定健康策略前不标 ACTIVE。</li>
+<li><code>ACTIVE</code> 必须包含 <code>snapshot_digest</code>、已完成的观察证据和目标池集合。</li>
+<li><code>ROLLBACK</code> 创建新受控事件，指向上一个已批准有效 Snapshot；不得静默篡改历史。</li>
+<li>凭证撤销属于独立安全状态，不能因为旧路由配置仍有效就允许访问被撤销账户。</li>
+</ul>
+<h2 id="h-7">4. 发布算法与并发一致性</h2>
+<ol>
+<li>Fabric 发出具名已批准 <code>RoutePublicationIntent</code>，携带 <code>asset_ref/release_ref/target_id/approval_ref/expected_generation/idempotency_key</code>。</li>
+<li>Gateway Publisher 服务端复核调用主体权限、来源和签名/可信通道，不把任意客户端的 Approval Flag 当权威事实。</li>
+<li>将结构化意图与受控策略仓库合成完整 Snapshot；校验引用存在、上游目标白名单、TLS 要求、JWT 绑定、Header 策略及敏感字段。</li>
+<li>产生确定性内容摘要，采用 CAS/乐观版本切换 Desired Generation；保存不可变制品和审计。</li>
+<li>先在受限 canary pool 验证，再按批次应用到副本；记录 <code>deployment_id, instance_id, desired_digest, observed_digest, health, apply_time</code>。</li>
+<li>健康与一致性条件满足才标 <code>ACTIVE</code>。超时不认定失败或成功，标记 UNKNOWN 后 Reconcile。</li>
+<li>对安全严重变更（撤销、Block）即刻触发拒绝策略/隔离，不应等待普通发布慢速最终一致；若达不到撤销窗口，阻断影响范围。</li>
+</ol>
+<p><strong>一致性</strong>：跨 Fabric/Gateway/Secret Manager 不宣称单事务 Exactly Once。使用幂等命令 + 乐观版本 + Outbox/持久工作队列 + 对账，补偿不能伪造已发生的外部请求从未发生。</p>
+<h2 id="h-8">5. Header、URI 与转发契约</h2>
+<p><strong>入站允许</strong>：仅按提供商允许的 HTTP Headers 传播 <code>Content-Type</code>、业务 Idempotency-Key 等；<code>Traceparent</code> 保持关联但清洗不受信任的 <code>Baggage</code>；禁止将 <code>Authorization</code>（IDP JWT）、<code>Cookie</code>、<code>X-Forwarded-*</code> 等未经边界验证的身份标头传给第三方。</p>
+<p><strong>出站生成</strong>：Provider Access Token 或签名只能由通过授权的 Credential Broker / Gateway 可信组件附加。<code>Host</code>/<code>:authority</code>/SNI 严格匹配批准上游，防止 Host header injection。第三方响应中的 <code>Set-Cookie</code>、跳转和 Hop-by-Hop Header 按 API 契约单独处理，不可无条件向业务客户端暴露。</p>
+<p><strong>URI 改写</strong>：逻辑 URI 与 Provider URI 的映射属于配置策略；Path 编码、百分号、双斜线、点段、尾斜线、Query 重复键都必须有负向用例。任何上游重定向不允许绕过原目的地验证。</p>
+<p><strong>写操作</strong>：禁止 Gateway 默认对 POST/PATCH 以及其他无幂等保证操作进行自动重试；允许 Idempotency-Key 只代表业务协议和提供商确实支持，不能因 Header 存在就认定安全。</p>
+<h2 id="h-9">6. 限流、熔断与实时授权策略</h2>
+<p>按 <code>pool → provider → provider_account → tenant/service → operation</code> 定义配额域。全局限流依赖专门协调服务时，必须验证多副本一致性和协调器故障行为；本地限流不可被标记为全局精确配额。<code>429</code> 必须明确来源（Gateway/Provider），勿把供应商余额和内部配额混为一谈。对 ExtAuthZ 高风险操作以 fail-closed 为默认；读取缓存允许使用时间窗必须由安全负责人批准，且缓存键包含全部授权输入。</p>
+<h2 id="h-10">7. 示例资产与检查方式</h2>
+<ul>
+<li><code>gateway/config/agentgateway.local.example.yaml</code>：基于官方路由形态的本地<strong>占位样例</strong>，仅使用 loopback upstream，尚未通过本机 agentgateway 二进制校验。</li>
+<li><code>contracts/gateway/route-intent.schema.json</code>：中立 RouteIntent JSON Schema。</li>
+<li><code>gateway/policies/egress-policy.example.json</code>：经过显式枚举的 Provider Operation 白名单示例。</li>
+<li><code>scripts/validate_baseline.py</code>：离线 JSON/YAML/Markdown 与示例静态检查，不代替官方配置 schema 或运行时验收。</li>
+</ul>
+<h2 id="h-11">8. 资料来源与证据界限</h2>
+<ul>
+<li><a href="https://agentgateway.dev/docs/standalone/latest/documentation/configuration/routes/">Agentgateway Routes</a></li>
+<li><a href="https://agentgateway.dev/docs/standalone/latest/documentation/configuration/egress-proxy/">Agentgateway Egress Proxy</a></li>
+<li><a href="https://agentgateway.dev/docs/standalone/latest/documentation/setup/update/">Agentgateway Update Config</a></li>
+<li><a href="https://agentgateway.dev/docs/standalone/latest/documentation/configuration/security/external-authz/">Agentgateway ExtAuthZ</a></li>
+</ul>
+<p>这些资料证明配置能力的<strong>官方描述</strong>，不证明我们的 Runtime 版本、配置及多租户方案已通过兼容性或安全测试。</p>
+<h2 id="h-12">9. 管理页面与发布操作语义（G03 · V1.0 同版更新）</h2>
+<p>Routes 页面仅展示 RouteIntent/Observed Config 的差异与配置来源。Config Releases 页面必须显示发布 <strong>期望 Revision</strong>、各实例 <strong>观察 Revision</strong> 和回读确认结果；只有 Reconciler 确认完成才能标识 ACTIVE。待审批的变更不允许由 UI 直接提交到 agentgateway 配置接口。</p>
+<p>状态建议：DRAFT → VALIDATED → REVIEW → APPROVED → ROLLOUT → RECONCILED(ACTIVE)，并显式支持 FAILED/REVERTED/SUPERSEDED。高风险操作需具名审批、职责分离、乐观版本检查、Idempotency-Key 和独立审计。离线原型仅模拟部分状态转换，不等同真实状态机实现。见 <a href="../portal/spec/Gateway_Operations_UX_Spec_V1.0.html">UX 规格</a>。</p>
+<h2 id="h-13">同版设计增补：统一 Gateway Console</h2>
+<p>交互原则：可视化接入向导输出版本化的 RouteIntent；部署前执行配置 Schema 检查、路由冲突检查、租户授权校验和发布影响分析；Raw Configuration 仅用于受控诊断和批准流程。</p>
+<p>详情参见 <code>portal/spec/Agentgateway_UI_Capability_Matrix_V1.0.md</code>（自本工程根目录）。</p>
+<h2 id="h-14">10. RouteIntent V1.0 分支、预检与原生配置之间的明确边界</h2>
+<p><code>contracts/gateway/route-intent.schema.json</code> 现采用 <code>oneOf</code> 处理三类流量：</p>
+<table>
+<thead>
+<tr>
+<th>流量</th>
+<th>专属输入</th>
+<th>不能继承的字段</th>
+<th>运行时风险</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>INGRESS</code></td>
+<td><code>public_hostname</code>,<code>backend_service_ref</code>,<code>api_asset_ref</code>,<code>allowed_methods</code></td>
+<td>外部 Provider 凭证与 AI Target</td>
+<td>公网控制台/管理路由穿透、对象级鉴权遗漏</td>
+</tr>
+<tr>
+<td><code>EGRESS</code></td>
+<td><code>provider_id</code>,<code>operation_id</code>,<code>upstream_hostname/port/TLS</code>,<code>credential_binding_ref</code>,<code>redirect_policy=DENY</code></td>
+<td>公网后端服务或 AI Target</td>
+<td>SSRF、跨租户 Token、账户配额争抢</td>
+</tr>
+<tr>
+<td><code>AI</code></td>
+<td><code>ai_protocol</code>,<code>ai_target_ref</code></td>
+<td>普通第三方凭证绑定</td>
+<td>MCP Tool 认证和 Agent 信任不同于 REST</td>
+</tr>
+</tbody>
+</table>
+<p><code>HEAD</code> 与 <code>OPTIONS</code> 已纳入允许方法枚举，但实际 CORS/预检放行不得仅因方法在列表里就绕过认证策略。示例覆盖三个分支，负例见 <code>tests/contracts/invalid-route-intents.json</code>。</p>
+<p>新增 <code>scripts/preflight_intents.py</code> 执行中立契约验证、典型非法上游字符串检查及完全重叠的路由冲突检查。<strong>不能作为安全边界</strong>：它不执行 DNS 查询、不识别所有 Path/Regex/优先级歧义、也不生成经过 agentgateway Schema 验证的运行配置，输出 <code>STATIC_PREFLIGHT_OK_NOT_DEPLOYABLE</code>，禁止直接发布。</p>
+<h3 id="h-15">10.1 真实发布流水线强制阶段</h3>
+<ol>
+<li>读取已批准、具名、具权限的 Intent；CAS 校验 expected_generation。</li>
+<li>预检模型与引用、上游网络许可和租户权限；拒绝重叠路由或不确定优先级。</li>
+<li>使用固定版本映射器编译到 agentgateway native config；由其对应版本 Schema + CLI + 启动检查执行<strong>真实兼容性校验</strong>。</li>
+<li>构建包含镜像 digest/原生配置 hash/策略版本/审批 ID 的不可变签名 Snapshot。</li>
+<li>Canary → 分批发布 → 实例回读与健康判定；不能以“写入配置文件成功”代表已生效。</li>
+<li>部分失败记录真实副本清单和 <code>PARTIAL</code>；回滚仅指向先前已批准快照，仍需再次观察健康及授权拒绝效果。</li>
+<li>安全撤销、强制封禁与正常配置发布分开：最迟生效时限和失败策略必须具名批准。</li>
+</ol>
+<h3 id="h-16">10.2 ProviderAccount 流量与健康策略（正式设计）</h3>
+<p><code>gateway/policies/traffic-policy.schema.json</code> 规定配额维度、协调方式、超时、并发、连接和熔断意图。运维应看到 <code>gateway_429</code> 与 <code>provider_429</code> 不同来源。</p>
+<ul>
+<li>单 ProviderAccount 的共享额度，应按账户硬上限与各租户/应用子配额同时判断；对全局一致性有要求的场景使用经验证的协调器。</li>
+<li>协调器不可用，必须按配置明确 <code>REJECT</code> 或保守本地上限，绝不无上限放行。</li>
+<li>针对供应商返回 429，应读取和验证合法的 <code>Retry-After</code>/配额响应；不应把本地限流机制假称供应商配额权威。</li>
+<li>熔断/健康检查必须区分连接错误与正常业务 4xx；不得因正常权限拒绝触发整家供应商下线。</li>
+<li>写操作重试一律须业务幂等和供应商契约批准，不得因 Gateway timeout 自动重放。</li>
+</ul>
+<h3 id="h-17">10.3 协议兼容矩阵</h3>
+<p>参考 <code>tests/protocol-compatibility.csv</code>，各能力的执行状态初始为 <code>NOT_RUN</code>。对 gRPC 需测 HTTP/2、unary、client/server/bidi streams、metadata/trailer/status；对 HTTP 测 chunked、SSE、二进制、大包、HEAD/OPTIONS、路径规范化和编码；超时取消和连接清理亦需验证。支持清单应随 agentgateway 镜像 digest 固定。</p>
+<h2>请求 / 响应映射的证据和变更边界</h2>
+<p>每次受管 L7 代理调用视作两个逻辑通信 Hop：<code>Caller ↔ Gateway</code> 与 <code>Gateway ↔ Upstream</code>。Gateway 能够改变外发 Request 的目标路径、Host、Header、认证材料，以及返回给 Caller 的 Response 状态、Header 和错误体。因此仅展示“第三方 HTTP 200”不足以判断客户端是否收到了 HTTP 200；两条 Hop 必须分别呈现 Request 与 Response，并在单一 Trace 下关联。</p>
+<ul>
+<li>采集阶段必须声明是<strong>转换前还是转换后</strong>的报文；请求签名、凭证注入、编码与代理转码的顺序必须通过固定 agentgateway 版本的真实 PoC 验证。</li>
+<li><code>NOT_SENT</code> 表示网关确认未进行上游发送；<code>NOT_OBSERVED</code> 仅表示观测不到响应，不等于上游业务未执行。</li>
+<li>路径重写、敏感 Header 删除、Provider Request ID 与客户端 Correlation ID 应形成脱敏差异摘要。不能从默认 Access Log 推导原始 Request/Response Body。</li>
+<li>对响应改写必须保留业务领域的解释权：Gateway 允许协议/安全错误规范化，领域 ACL 负责业务语义和幂等恢复。</li>
+</ul>
+</article><div class="doc-footer-nav"><a href="G02_Architecture.html">← 系统架构与 DDD 边界</a><a href="G04_Identity_and_Security.html">认证鉴权与凭证安全 →</a></div><div class="footer">IDP Gateway V1.0 · 设计候选 · 文件可离线阅读 · 真实 PoC / 审批 / 生产验证尚未完成</div></main></div></body></html>

@@ -1,0 +1,38 @@
+{
+  "project": "IDP Gateway",
+  "baseline_version": "1.0.0",
+  "date": "2026-11-10",
+  "status": "DESIGN_DRAFT",
+  "approval": "NOT_APPROVED",
+  "gate_status": {
+    "STD-CP1": "NOT_RUN",
+    "STD-CP2": "NOT_RUN",
+    "STD-CP3": "NOT_RUN",
+    "STD-CP4": "NOT_RUN",
+    "STD-CP5": "NOT_RUN",
+    "STD-CP6": "NOT_RUN"
+  },
+  "runtime_verification": {
+    "agentgateway": "NOT_RUN",
+    "gatekeeper_extauthz": "NOT_RUN",
+    "provider_sandbox": "NOT_RUN",
+    "security_penetration": "NOT_RUN",
+    "performance": "NOT_RUN",
+    "production": "NOT_RUN"
+  },
+  "profile_notes": {
+    "AI": "TRIGGERED because AI traffic is in declared scope; verify detailed applicability and actual implementation",
+    "BENTO_GO": "Not selected/verified; only include after actual component and version confirmation"
+  },
+  "blocking_manifest_placeholders": [
+    "legal_entities",
+    "jurisdictions",
+    "toolchain",
+    "owners"
+  ],
+  "warnings": [
+    "Manifest passes official JSON Schema shape, but contains explicit unresolved placeholders: cannot pass semantic adoption or CP1.",
+    "No ADR formally approved; decisions array intentionally empty.",
+    "No runtime test evidence is claimed."
+  ]
+}

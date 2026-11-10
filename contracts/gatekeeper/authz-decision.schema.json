@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.idp.internal/gatekeeper/authz-decision-1.0.json",
+  "title": "Gatekeeper Egress Authorization Decision — neutral contract",
+  "description": "Internal policy decision fixture/schema; not Envoy extAuthz wire format",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "decision_id",
+    "result",
+    "reason_code",
+    "policy_version",
+    "request_id",
+    "expires_at"
+  ],
+  "properties": {
+    "decision_id": {
+      "type": "string",
+      "minLength": 4
+    },
+    "result": {
+      "type": "string",
+      "enum": [
+        "ALLOW",
+        "DENY",
+        "INDETERMINATE"
+      ]
+    },
+    "reason_code": {
+      "type": "string",
+      "minLength": 3
+    },
+    "policy_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 3
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "credential_handle": {
+      "type": "string",
+      "minLength": 4
+    },
+    "audit_ref": {
+      "type": "string"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "result": {
+            "const": "ALLOW"
+          }
+        },
+        "required": [
+          "result"
+        ]
+      },
+      "then": {
+        "required": [
+          "credential_handle"
+        ]
+      }
+    }
+  ]
+}

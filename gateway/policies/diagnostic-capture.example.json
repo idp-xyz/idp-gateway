@@ -1,0 +1,15 @@
+{
+  "capture_id": "capture-mock-001",
+  "route_ref": "gwi-example-001",
+  "tenant_ref": "tenant-blue",
+  "purpose": "Approved narrow investigation of 504 upstream timeout",
+  "requested_by": "engineer-a",
+  "approved_by": "security-reviewer-b",
+  "start_at": "2026-11-10T08:00:00Z",
+  "expires_at": "2026-11-10T08:15:00Z",
+  "body_policy": "SANITIZED_ONLY",
+  "max_bytes_per_message": 16384,
+  "retention_hours": 24,
+  "redaction_profile": "strict-shipping-pii-v1",
+  "environment": "TEST"
+}

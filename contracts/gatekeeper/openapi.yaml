@@ -1,0 +1,272 @@
+openapi: 3.1.0
+info:
+  title: IDP Gatekeeper External Credential Control API (DRAFT)
+  version: 1.0.0
+  description: 'Internal design contract only. This is NOT Envoy extAuthz wire protocol.
+
+    Only registered Gateway workload identities over mTLS may call the credential endpoint.
+
+
+    V1.0 gap remediation: typed CredentialUse proposal; native ExtAuthZ/BackendAuth binding still NOT_RUN.
+
+    '
+servers:
+- url: https://gatekeeper-control.idp.internal
+paths:
+  /v1/egress/authorizations/decision:
+    post:
+      operationId: evaluateEgressRequest
+      summary: Evaluate an authenticated gateway caller's egress permission
+      description: Caller identity MUST be derived from authenticated workload and validated request context, not
+        self-asserted JSON.
+      security:
+      - WorkloadMTLS: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionRequest'
+      responses:
+        '200':
+          description: Decision returned. Treat DENY/INDETERMINATE as rejection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionResponse'
+        '401':
+          description: Unauthenticated Gateway workload
+        '403':
+          description: Gateway workload lacks this permission
+  /v1/egress/credentials/materialize:
+    post:
+      operationId: materializeEgressCredential
+      summary: Resolve a short-lived provider credential after an approved decision
+      description: Gateway-only high-privilege API; response must never reach business apps or ordinary logs. LEGACY
+        DESIGN DRAFT; do not assume it can satisfy HMAC/mTLS or all multi-tenant credential flows.
+      security:
+      - WorkloadMTLS: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - decision_id
+              - credential_handle
+              - request_id
+              properties:
+                decision_id:
+                  type: string
+                credential_handle:
+                  type: string
+                request_id:
+                  type: string
+      responses:
+        '200':
+          description: Transient, narrowly scoped material for trusted Gateway injection only.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                enum:
+                - no-store
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - header_name
+                - header_value
+                - expires_at
+                properties:
+                  header_name:
+                    type: string
+                    enum:
+                    - Authorization
+                    - X-API-Key
+                  header_value:
+                    type: string
+                    writeOnly: true
+                  expires_at:
+                    type: string
+                    format: date-time
+        '401':
+          description: Unauthenticated
+        '403':
+          description: No valid grant or stale decision
+        '409':
+          description: Decision or credential lease revoked
+      deprecated: true
+  /v1/egress/credentials/prepare:
+    post:
+      operationId: prepareAuthorizedCredentialUse
+      summary: Prepare narrowly scoped provider credential use for a trusted gateway workload
+      description: Draft control-plane contract. Must bind mTLS workload identity, valid PDP decision, provider
+        account, operation, route/config digest, policy version, revocation epoch and request ID. Not a generic
+        token dispenser. Provider-origin secrets must never be echoed to caller business apps.
+      security:
+      - WorkloadMTLS: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CredentialUseRequest'
+      responses:
+        '200':
+          description: Typed credential execution plan; secret references must only be redeemable by authorized
+            Gateway execution context
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialUseResponse'
+        '401':
+          description: Untrusted workload identity
+        '403':
+          description: Account/operation not granted
+        '409':
+          description: Revoked or stale authorization decision
+        '503':
+          description: 'Broker unavailable: fail closed'
+components:
+  securitySchemes:
+    WorkloadMTLS:
+      type: mutualTLS
+  schemas:
+    DecisionRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - request_id
+      - route_id
+      - operation_id
+      - provider_id
+      - requested_account_id
+      - environment
+      properties:
+        request_id:
+          type: string
+        route_id:
+          type: string
+        operation_id:
+          type: string
+        provider_id:
+          type: string
+        requested_account_id:
+          type: string
+        environment:
+          type: string
+          enum:
+          - DEV
+          - TEST
+          - PROD
+        service_id:
+          type: string
+          description: Candidate only; server MUST bind to authenticated caller identity
+        tenant_id:
+          type: string
+          description: Candidate only; server MUST derive/verify trusted tenant binding
+    DecisionResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - decision_id
+      - result
+      - policy_version
+      - reason_code
+      - expires_at
+      properties:
+        decision_id:
+          type: string
+        result:
+          type: string
+          enum:
+          - ALLOW
+          - DENY
+          - INDETERMINATE
+        reason_code:
+          type: string
+        policy_version:
+          type: string
+        credential_handle:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+    CredentialUseRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - request_id
+      - decision_id
+      - credential_handle
+      - route_id
+      - config_digest
+      - operation_id
+      - environment
+      properties:
+        request_id:
+          type: string
+        decision_id:
+          type: string
+        credential_handle:
+          type: string
+        route_id:
+          type: string
+        config_digest:
+          type: string
+        operation_id:
+          type: string
+        environment:
+          type: string
+          enum:
+          - DEV
+          - TEST
+          - PROD
+        requested_mode:
+          type: string
+          enum:
+          - API_KEY
+          - OAUTH2_CLIENT_CREDENTIALS
+          - OAUTH2_AUTHORIZATION_CODE
+          - HMAC_REQUEST_SIGNING
+          - MTLS_CLIENT_CERT
+    CredentialUseResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - use_id
+      - kind
+      - expires_at
+      - policy_version
+      - revocation_epoch
+      properties:
+        use_id:
+          type: string
+        kind:
+          type: string
+          enum:
+          - HEADER_INJECTION
+          - TRUSTED_REQUEST_SIGNER
+          - MTLS_IDENTITY_REFERENCE
+        expires_at:
+          type: string
+          format: date-time
+        policy_version:
+          type: string
+        revocation_epoch:
+          type: integer
+          minimum: 0
+        secure_binding_handle:
+          type: string
+          description: Opaque, short-lived, gateway-workload-bound; NOT an API Key or raw OAuth Token
+        signer_ref:
+          type: string
+          description: Only valid for explicitly approved request-signature provider modes
+        mtls_identity_ref:
+          type: string
+          description: Scoped reference to a client TLS identity

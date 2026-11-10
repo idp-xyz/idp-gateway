@@ -1,0 +1,153 @@
+[
+  {
+    "case": "egress_account_selection_not_allowed",
+    "intent": {
+      "intent_id": "gwi-example-001",
+      "gateway_pool": "egress-test",
+      "traffic_class": "EGRESS",
+      "environment": "TEST",
+      "provider_id": "mockcarrier",
+      "operation_id": "tracking.get",
+      "logical_path": "/providers/mockcarrier/v1/tracking",
+      "allowed_methods": [
+        "GET"
+      ],
+      "upstream_hostname": "mockcarrier.example",
+      "upstream_port": 443,
+      "authz_profile": "provider-account-allowlist-v1",
+      "approval_ref": "APPROVAL-PENDING-001",
+      "expected_generation": 0,
+      "contract_ref": "consumer-api-mockcarrier-v1",
+      "credential_binding_ref": "gatekeeper:mockcarrier-test",
+      "redirect_policy": "DENY",
+      "upstream_tls": "VERIFY_REQUIRED",
+      "provider_account_strategy": "NONE",
+      "transport": "HTTP",
+      "policy_bundle_ref": "policy:egress-standard-v1",
+      "upstream_sni": "mockcarrier.example"
+    }
+  },
+  {
+    "case": "egress_cleartext",
+    "intent": {
+      "intent_id": "gwi-example-001",
+      "gateway_pool": "egress-test",
+      "traffic_class": "EGRESS",
+      "environment": "TEST",
+      "provider_id": "mockcarrier",
+      "operation_id": "tracking.get",
+      "logical_path": "/providers/mockcarrier/v1/tracking",
+      "allowed_methods": [
+        "GET"
+      ],
+      "upstream_hostname": "mockcarrier.example",
+      "upstream_port": 443,
+      "authz_profile": "provider-account-allowlist-v1",
+      "approval_ref": "APPROVAL-PENDING-001",
+      "expected_generation": 0,
+      "contract_ref": "consumer-api-mockcarrier-v1",
+      "credential_binding_ref": "gatekeeper:mockcarrier-test",
+      "redirect_policy": "DENY",
+      "upstream_tls": "INSECURE",
+      "provider_account_strategy": "GATEKEEPER_DECISION_BINDING",
+      "transport": "HTTP",
+      "policy_bundle_ref": "policy:egress-standard-v1",
+      "upstream_sni": "mockcarrier.example"
+    }
+  },
+  {
+    "case": "egress_without_credential_reference",
+    "intent": {
+      "intent_id": "gwi-example-001",
+      "gateway_pool": "egress-test",
+      "traffic_class": "EGRESS",
+      "environment": "TEST",
+      "provider_id": "mockcarrier",
+      "operation_id": "tracking.get",
+      "logical_path": "/providers/mockcarrier/v1/tracking",
+      "allowed_methods": [
+        "GET"
+      ],
+      "upstream_hostname": "mockcarrier.example",
+      "upstream_port": 443,
+      "authz_profile": "provider-account-allowlist-v1",
+      "approval_ref": "APPROVAL-PENDING-001",
+      "expected_generation": 0,
+      "contract_ref": "consumer-api-mockcarrier-v1",
+      "redirect_policy": "DENY",
+      "upstream_tls": "VERIFY_REQUIRED",
+      "provider_account_strategy": "GATEKEEPER_DECISION_BINDING",
+      "transport": "HTTP",
+      "policy_bundle_ref": "policy:egress-standard-v1",
+      "upstream_sni": "mockcarrier.example"
+    }
+  },
+  {
+    "case": "ingress_leaks_provider_account_model",
+    "intent": {
+      "intent_id": "gwi-public-001",
+      "gateway_pool": "ingress-test",
+      "traffic_class": "INGRESS",
+      "environment": "TEST",
+      "logical_path": "/v1/shipments",
+      "allowed_methods": [
+        "GET",
+        "HEAD"
+      ],
+      "public_hostname": "api.cargopai.example",
+      "backend_service_ref": "service:cargopai/shipment-api",
+      "api_asset_ref": "apiasset:cargopai/shipment/v1",
+      "authz_profile": "public-oidc-jwt-v1",
+      "approval_ref": "APPROVAL-PENDING-002",
+      "expected_generation": 0,
+      "transport": "HTTP",
+      "policy_bundle_ref": "policy:ingress-standard-v1",
+      "provider_id": "fedex"
+    }
+  },
+  {
+    "case": "ai_uses_egress_credential",
+    "intent": {
+      "intent_id": "gwi-ai-001",
+      "gateway_pool": "ai-test",
+      "traffic_class": "AI",
+      "environment": "TEST",
+      "logical_path": "/llm",
+      "ai_protocol": "LLM",
+      "ai_target_ref": "ai:telos/model-router-v1",
+      "authz_profile": "ai-identity-v1",
+      "approval_ref": "APPROVAL-PENDING-003",
+      "expected_generation": 0,
+      "policy_bundle_ref": "policy:ai-standard-v1",
+      "credential_binding_ref": "gatekeeper:token"
+    }
+  },
+  {
+    "case": "unsupported_method",
+    "intent": {
+      "intent_id": "gwi-example-001",
+      "gateway_pool": "egress-test",
+      "traffic_class": "EGRESS",
+      "environment": "TEST",
+      "provider_id": "mockcarrier",
+      "operation_id": "tracking.get",
+      "logical_path": "/providers/mockcarrier/v1/tracking",
+      "allowed_methods": [
+        "TRACE"
+      ],
+      "upstream_hostname": "mockcarrier.example",
+      "upstream_port": 443,
+      "authz_profile": "provider-account-allowlist-v1",
+      "approval_ref": "APPROVAL-PENDING-001",
+      "expected_generation": 0,
+      "contract_ref": "consumer-api-mockcarrier-v1",
+      "credential_binding_ref": "gatekeeper:mockcarrier-test",
+      "redirect_policy": "DENY",
+      "upstream_tls": "VERIFY_REQUIRED",
+      "provider_account_strategy": "GATEKEEPER_DECISION_BINDING",
+      "transport": "HTTP",
+      "policy_bundle_ref": "policy:egress-standard-v1",
+      "upstream_sni": "mockcarrier.example"
+    }
+  }
+]

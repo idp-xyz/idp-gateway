@@ -1,0 +1,33 @@
+{
+  "trace_id": "trace-mock-504",
+  "route_id": "gwi-example-001",
+  "config_digest": "sha256:mock-digest",
+  "tenant_ref": "tenant-blue",
+  "request_id": "req-mock-1",
+  "observed_at": "2026-11-10T08:21:00Z",
+  "failure_origin": "NETWORK",
+  "business_outcome": "UNKNOWN",
+  "stages": [
+    {
+      "stage": "INGRESS",
+      "status": "METADATA_ONLY",
+      "timestamp": "2026-11-10T08:20:51Z"
+    },
+    {
+      "stage": "EGRESS",
+      "status": "METADATA_ONLY",
+      "timestamp": "2026-11-10T08:20:52Z"
+    },
+    {
+      "stage": "UPSTREAM_RESPONSE",
+      "status": "NOT_OBSERVED",
+      "timestamp": "2026-11-10T08:21:00Z"
+    },
+    {
+      "stage": "DOWNSTREAM_RESPONSE",
+      "status": "METADATA_ONLY",
+      "timestamp": "2026-11-10T08:21:00Z",
+      "http_status": 504
+    }
+  ]
+}

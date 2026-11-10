@@ -1,0 +1,20 @@
+# DOCUMENTATION ONLY: not validated by agentgateway binary.
+# NOT SECURE FOR PUBLIC DEPLOYMENT. Only bind in an isolated test sandbox
+# with loopback-restricted ingress at network layer. Do not publish port 3000.
+# No real secrets. No authentication policy yet: adding real JWT/extAuthZ
+# is mandatory BEFORE exposing a listener to any untrusted traffic.
+# Based on official agentgateway standalone routing concept (1.7.x).
+gateways:
+  demo:
+    port: 3000
+    protocol: HTTP
+routes:
+  - name: mockprovider-demo
+    gateways: [demo]
+    hostnames: ["gateway-demo.internal"]
+    matches:
+      - path:
+          pathPrefix: /providers/mockcarrier/
+    backends:
+      - host: 127.0.0.1:18080
+        weight: 1

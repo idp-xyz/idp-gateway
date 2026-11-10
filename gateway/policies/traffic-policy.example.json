@@ -1,0 +1,30 @@
+{
+  "policy_id": "policy:egress-standard-v1",
+  "traffic_class": "EGRESS",
+  "environment": "TEST",
+  "quota_buckets": [
+    {
+      "key_dimensions": [
+        "provider",
+        "provider_account",
+        "tenant",
+        "operation"
+      ],
+      "max_requests": 300,
+      "window_seconds": 60,
+      "coordination": "DISTRIBUTED_COORDINATED",
+      "coordinator_failure": "REJECT"
+    }
+  ],
+  "failure_policy": "FAIL_CLOSED",
+  "timeout_budget_ms": 8000,
+  "max_in_flight": 64,
+  "max_connections_per_upstream": 32,
+  "retry_mode": "IDEMPOTENT_ONLY_EXPLICIT",
+  "upstream_health": {
+    "mode": "PASSIVE",
+    "failure_threshold": 5,
+    "open_seconds": 30
+  },
+  "approval_ref": "APPROVAL-PENDING-004"
+}

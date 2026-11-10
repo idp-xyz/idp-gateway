@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "IDP Diagnosic Capture Request V1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "capture_id",
+    "route_ref",
+    "tenant_ref",
+    "purpose",
+    "requested_by",
+    "approved_by",
+    "start_at",
+    "expires_at",
+    "body_policy",
+    "max_bytes_per_message",
+    "retention_hours",
+    "redaction_profile",
+    "environment"
+  ],
+  "properties": {
+    "capture_id": {
+      "type": "string",
+      "minLength": 5
+    },
+    "route_ref": {
+      "type": "string",
+      "minLength": 4
+    },
+    "tenant_ref": {
+      "type": "string",
+      "minLength": 4
+    },
+    "purpose": {
+      "type": "string",
+      "minLength": 12,
+      "maxLength": 300
+    },
+    "requested_by": {
+      "type": "string",
+      "minLength": 3
+    },
+    "approved_by": {
+      "type": "string",
+      "minLength": 3
+    },
+    "start_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "body_policy": {
+      "enum": [
+        "SANITIZED_ONLY",
+        "METADATA_ONLY"
+      ]
+    },
+    "max_bytes_per_message": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65536
+    },
+    "retention_hours": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 72
+    },
+    "redaction_profile": {
+      "type": "string",
+      "minLength": 4
+    },
+    "environment": {
+      "enum": [
+        "DEV",
+        "TEST",
+        "PROD"
+      ]
+    }
+  }
+}

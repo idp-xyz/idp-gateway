@@ -1,0 +1,12 @@
+﻿exercise_id,description,environment,status,evidence_uri
+GATEWAY_INSTANCE_DOWN,"Kill one gateway instance, verify other pool availability",Restricted production-like integration environment,NOT_RUN,
+REGION_FAILURE,Simulated whole zone loss,Restricted production-like integration environment,NOT_RUN,
+PDP_UNAVAILABLE,High-risk request fails closed,Restricted production-like integration environment,NOT_RUN,
+TOKEN_BROKER_UNAVAILABLE,No new external credential lease,Restricted production-like integration environment,NOT_RUN,
+QUOTA_COORDINATOR_DOWN,Reject or strict local cap without cross-account leakage,Restricted production-like integration environment,NOT_RUN,
+DNS_REBINDING,Forbidden public DNS re-resolution into private IP,Restricted production-like integration environment,NOT_RUN,
+PROVIDER_429,Provider error stays distinguishable from gateway throttling,Restricted production-like integration environment,NOT_RUN,
+PROVIDER_504_UNKNOWN,No blind retry for already-sent non-idempotent write,Restricted production-like integration environment,NOT_RUN,
+CONFIG_PARTIAL_APPLY,Partial rollout never marked ACTIVE,Restricted production-like integration environment,NOT_RUN,
+REVOCATION_DURING_ROLLBACK,Rollback must not resurrect revoked access,Restricted production-like integration environment,NOT_RUN,
+CAPTURE_DATA_EXFILTRATION,Payload/export tenant/role/cost/time constraints,Restricted production-like integration environment,NOT_RUN,

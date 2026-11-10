@@ -1,0 +1,73 @@
+{
+  "trace_id": "trace-mock-200",
+  "route_id": "gwi-example-001",
+  "config_digest": "sha256:mock-digest",
+  "tenant_ref": "tenant-demo",
+  "request_id": "req-mock-200",
+  "observed_at": "2026-11-10T08:21:00Z",
+  "failure_origin": "NONE",
+  "business_outcome": "SUCCESS",
+  "stages": [
+    {
+      "stage": "INGRESS",
+      "message_kind": "REQUEST",
+      "hop": "CLIENT_GATEWAY",
+      "status": "CAPTURED_SANITIZED",
+      "timestamp": "2026-11-10T08:20:59Z",
+      "http_method": "GET",
+      "request_target": "/providers/mockcarrier/v1/tracking/DEMO-1",
+      "http_version": "HTTP/1.1",
+      "sanitized_headers": {
+        "X-Correlation-ID": "trace-mock-200"
+      },
+      "body_capture_status": "EMPTY",
+      "body_total_bytes": 0,
+      "body_captured_bytes": 0,
+      "truncated": false
+    },
+    {
+      "stage": "EGRESS",
+      "message_kind": "REQUEST",
+      "hop": "GATEWAY_UPSTREAM",
+      "status": "CAPTURED_SANITIZED",
+      "timestamp": "2026-11-10T08:20:59Z",
+      "http_method": "GET",
+      "request_target": "/v1/tracking/DEMO-1",
+      "http_version": "HTTP/1.1",
+      "sanitized_headers": {
+        "X-Correlation-ID": "trace-mock-200"
+      },
+      "body_capture_status": "DISABLED",
+      "truncated": false
+    },
+    {
+      "stage": "UPSTREAM_RESPONSE",
+      "message_kind": "RESPONSE",
+      "hop": "GATEWAY_UPSTREAM",
+      "status": "CAPTURED_SANITIZED",
+      "timestamp": "2026-11-10T08:21:00Z",
+      "http_status": 200,
+      "sanitized_headers": {
+        "Content-Type": "application/json",
+        "X-Provider-Request-ID": "DEMO-REQ-001"
+      },
+      "body_capture_status": "METADATA_ONLY",
+      "truncated": false,
+      "provider_request_id_sanitized": "DEMO-REQ-001"
+    },
+    {
+      "stage": "DOWNSTREAM_RESPONSE",
+      "message_kind": "RESPONSE",
+      "hop": "CLIENT_GATEWAY",
+      "status": "CAPTURED_SANITIZED",
+      "timestamp": "2026-11-10T08:21:00Z",
+      "http_status": 200,
+      "sanitized_headers": {
+        "Content-Type": "application/json",
+        "X-Correlation-ID": "trace-mock-200"
+      },
+      "body_capture_status": "METADATA_ONLY",
+      "truncated": false
+    }
+  ]
+}

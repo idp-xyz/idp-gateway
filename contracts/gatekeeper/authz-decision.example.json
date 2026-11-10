@@ -1,0 +1,10 @@
+{
+  "decision_id": "dec-mock-001",
+  "result": "ALLOW",
+  "reason_code": "ACTIVE_ACCOUNT_GRANT",
+  "policy_version": "0.1-design-only",
+  "request_id": "req-mock-001",
+  "expires_at": "2026-11-10T06:00:00Z",
+  "credential_handle": "handle-mockcarrier-account-blue",
+  "audit_ref": "audit-example-001"
+}

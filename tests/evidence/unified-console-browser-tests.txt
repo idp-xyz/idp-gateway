@@ -1,0 +1,47 @@
+PASS 46/46 checks
+PASS initial dashboard
+PASS page overview
+PASS page catalog
+PASS page gateways
+PASS page routes
+PASS page backends
+PASS page providers
+PASS page policies
+PASS page llm
+PASS page llmsecurity
+PASS page llmkeys
+PASS page llmanalytics
+PASS page mcp
+PASS page mcpplay
+PASS page a2a
+PASS page traffic
+PASS page releases
+PASS page instances
+PASS page tools
+PASS provider detail drawer
+PASS provider search filtering
+PASS viewer blocked from creating draft
+PASS engineer creates local draft
+PASS draft never published
+PASS account/provider mismatch rejected
+PASS subtab llm/models
+PASS subtab llm/providers
+PASS subtab llm/strategy
+PASS subtab llmsecurity/policies
+PASS subtab llmsecurity/guardrails
+PASS subtab llmkeys/keys
+PASS subtab llmkeys/clients
+PASS subtab llmanalytics/usage
+PASS subtab llmanalytics/logs
+PASS subtab mcp/servers
+PASS subtab mcp/tools
+PASS subtab mcp/policies
+PASS subtab tools/cel
+PASS subtab tools/config
+PASS subtab tools/settings
+PASS MCP rejects malformed JSON
+PASS MCP allow mock
+PASS MCP deny mock
+PASS CEL fixed simulation only
+PASS raw configuration clearly IDP logical model
+PASS no uncaught JS errors

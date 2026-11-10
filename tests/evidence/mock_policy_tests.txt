@@ -1,0 +1,21 @@
+test_bad_method (test_policy_reference.PolicyReferenceTests.test_bad_method) ... ok
+test_cross_tenant_account (test_policy_reference.PolicyReferenceTests.test_cross_tenant_account) ... ok
+test_custom_target (test_policy_reference.PolicyReferenceTests.test_custom_target) ... ok
+test_different_service (test_policy_reference.PolicyReferenceTests.test_different_service) ... ok
+test_dot_segments (test_policy_reference.PolicyReferenceTests.test_dot_segments) ... ok
+test_encoded_dot (test_policy_reference.PolicyReferenceTests.test_encoded_dot) ... ok
+test_encoded_slash (test_policy_reference.PolicyReferenceTests.test_encoded_slash) ... ok
+test_no_credential_binding (test_policy_reference.PolicyReferenceTests.test_no_credential_binding) ... ok
+test_no_identity (test_policy_reference.PolicyReferenceTests.test_no_identity) ... ok
+test_own_tenant_account (test_policy_reference.PolicyReferenceTests.test_own_tenant_account) ... ok
+test_prefix_collision (test_policy_reference.PolicyReferenceTests.test_prefix_collision) ... ok
+test_unregistered_operation (test_policy_reference.PolicyReferenceTests.test_unregistered_operation) ... ok
+test_untrusted_host_override (test_policy_reference.PolicyReferenceTests.test_untrusted_host_override) ... ok
+test_unverified_caller (test_policy_reference.PolicyReferenceTests.test_unverified_caller) ... ok
+test_valid_mock_case (test_policy_reference.PolicyReferenceTests.test_valid_mock_case) ... ok
+test_wrong_environment (test_policy_reference.PolicyReferenceTests.test_wrong_environment) ... ok
+
+----------------------------------------------------------------------
+Ran 16 tests in 0.000s
+
+OK

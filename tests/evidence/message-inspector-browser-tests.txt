@@ -1,0 +1,58 @@
+no_response_count 2
+drawer text 请求概要
+Request
+POST /providers/fedex/v1/labels
+Route ID
+RT-2002
+Service identity
+parcel-svc
+Tenant
+tenant-A
+HTTP Status
+504
+Total latency
+3000 ms
+Classification
+Upstream timeout / result unknown
+故障定位与下一步
+外发请求已开始，但网关未观察到第三方确认响应；写操作结果不可判定为失败。
+
+首先使用业务幂等键或第三方查询 API 对账；禁止盲目重试创建/提交请求。
+
+操作结果 UNKNOWN：外部可能已经产生业务副作用，必须通过第三方查询/对账确认，禁止直接重放 POST。
+Message Inspector · 四阶段报文
+
+以下数据均为 本地脱敏 Mock；真正运行时需要先在采集侧执行敏感字段删除/屏蔽与访问授权。源报文、外发变更后报文和响应不一定都能从默认 Access Log 还原。
+
+01 · 应用 → Gateway
+RECEIVED
+POST /providers/fedex/v1/labels HTTP/1.1
+Headers
+Body · 受权限限制
+02 · Gateway → 第三方 API
+FORWARDED
+POST /v1/labels/create HTTP/1.1
+Headers
+Body · 受权限限制
+03 · 第三方 API → Gateway
+NO_RESPONSE_OBSERVED
+超时：无可确认的外部响应
+Headers
+Body · 受权限限制
+04 · Gateway → 应用
+HTTP 504
+HTTP/1.1 504
+Headers
+Body · 受权限限制
+请求链路
+Gateway 接收并校验身份
+09:28:26 · parcel-svc
+Gatekeeper 策略决策
+已通过授权/配额策略（演示）
+第三方 API
+NO_RESPONSE_OBSERVED
+业务域状态
+UNKNOWN / 需要查询与对账
+数据保护
+Authorization / API Key / Cookie / Token：不得保留明文。个人信息在采集侧删除或脱敏。读取真实报文须由服务端校验角色、租户、目的和审计；当前所有报文都是合成示例。
+Browser PASS: 504 UNKNOWN, 403 NOT_SENT, 200 body, role masking, sanitized JSON export, no errors

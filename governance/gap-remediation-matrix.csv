@@ -1,0 +1,16 @@
+﻿priority,gap_id,problem,documentation,requirements,runtime_evidence_category,status
+P0,GW-GAP-01,真实数据面集成,G03/G05,GW-FR-039,native_config,NOT_RUN
+P0,GW-GAP-02,多租户动态凭证,G04,GW-FR-033,credential_modes,NOT_RUN
+P0,GW-GAP-03,委托身份与服务身份绑定,G04,GW-FR-032,delegated_identity,NOT_RUN
+P0,GW-GAP-04,出口网络 SSRF 安全,G03/G04,GW-FR-034,egress_network,NOT_RUN
+P0,GW-GAP-05,连接/熔断/过载保护,G03/G05,GW-FR-036;GW-FR-037,traffic_resilience,NOT_RUN
+P0,GW-GAP-06,配置编译与渐进发布,G03/G05,GW-FR-039;GW-FR-040;GW-FR-041,rollout,NOT_RUN
+P0,GW-GAP-07,真实报文采集与脱敏,G04/G05,GW-FR-042;GW-NFR-14,capture,NOT_RUN
+P0,GW-GAP-08,运行 SLO 与生产验收,G05/G06,GW-NFR-15;GW-NFR-16,operational,NOT_RUN
+P1,GW-GAP-09,ProviderAccount 额度与限流,G03,GW-FR-035;GW-NFR-13,quota,NOT_RUN
+P1,GW-GAP-10,HTTP/gRPC 兼容矩阵,G03/G06,GW-FR-038;GW-NFR-19,protocol,NOT_RUN
+P1,GW-GAP-11,故障来源与跨系统诊断,G05,GW-FR-043,failure_origin,NOT_RUN
+P1,GW-GAP-12,管理后台真实授权与审计,G04/G05,GW-FR-044;GW-NFR-17,console_security,NOT_RUN
+P1,GW-GAP-13,版本升级与供应链保护,G05,GW-FR-045,upgrade,NOT_RUN
+P2,GW-GAP-14,沙箱 API Try / 契约检查,G01/G05,GW-FR-050,safe_try,NOT_RUN
+P2,GW-GAP-15,智能故障辅助判断（建议而非自动执行）,G05,GW-FR-049,intelligent_diagnosis,NOT_RUN

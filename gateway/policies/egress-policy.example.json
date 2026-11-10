@@ -1,0 +1,47 @@
+{
+  "version": "0.1-design-only",
+  "default_decision": "DENY",
+  "registered_operations": [
+    {
+      "route_id": "r-mockcarrier-track-test",
+      "provider_id": "mockcarrier",
+      "operation_id": "tracking.get",
+      "environment": "TEST",
+      "method": "GET",
+      "path_prefix": "/providers/mockcarrier/v1/tracking",
+      "upstream_hostname": "mockcarrier.example",
+      "port": 443,
+      "credential_binding_ref": "gatekeeper:mockcarrier-test",
+      "allowed_tenants": [
+        "tenant-blue",
+        "tenant-green"
+      ],
+      "accounts_by_tenant": {
+        "tenant-blue": [
+          "account-blue"
+        ],
+        "tenant-green": [
+          "account-green"
+        ]
+      },
+      "allowed_service_ids": [
+        "parcel-service",
+        "cargo-service"
+      ]
+    }
+  ],
+  "blocked_ip_ranges": [
+    "127.0.0.0/8",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "169.254.0.0/16",
+    "::1/128",
+    "fc00::/7",
+    "fe80::/10"
+  ],
+  "allow_request_redirects": false,
+  "enforce_tls_upstream": true,
+  "gateway_may_retry_non_idempotent": false,
+  "notes": "Reserved .example hostname, offline policy fixture; not a deployable egress ACL and not a firewall substitute."
+}

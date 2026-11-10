@@ -1,0 +1,89 @@
+openapi: 3.1.0
+info:
+  title: IDP Gateway Route Publication Intent API (DRAFT)
+  version: 1.0.0
+  description: Governance intent between API Fabric and Gateway Controller. NOT agentgateway native API.
+servers:
+- url: https://gateway-control.idp.internal
+paths:
+  /v1/route-intents:
+    post:
+      operationId: submitRouteIntent
+      security:
+      - WorkloadMTLS: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RouteIntent'
+      responses:
+        '202':
+          description: Accepted for validation, not yet applied
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - intent_id
+                - status
+                properties:
+                  intent_id:
+                    type: string
+                  status:
+                    type: string
+                    enum:
+                    - RECEIVED
+                    - VALIDATING
+        '409':
+          description: Expected generation conflict
+  /v1/route-intents/{intent_id}/status:
+    get:
+      operationId: getRouteIntentStatus
+      security:
+      - WorkloadMTLS: []
+      parameters:
+      - name: intent_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Desired, applied and observed progress are separate
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - intent_id
+                - desired_digest
+                - state
+                properties:
+                  intent_id:
+                    type: string
+                  desired_digest:
+                    type: string
+                  observed_digest:
+                    type: string
+                  state:
+                    type: string
+                    enum:
+                    - DRAFT
+                    - VALIDATED
+                    - APPROVED
+                    - STAGED
+                    - APPLYING
+                    - OBSERVING
+                    - ACTIVE
+                    - PARTIAL
+                    - UNKNOWN
+                    - FAILED
+                    - REVOKED
+components:
+  securitySchemes:
+    WorkloadMTLS:
+      type: mutualTLS
+  schemas:
+    RouteIntent:
+      $ref: ../gateway/route-intent.schema.json

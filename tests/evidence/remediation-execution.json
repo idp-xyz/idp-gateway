@@ -1,0 +1,47 @@
+{
+  "title": "V1.0 gap-remediation offline local execution evidence",
+  "timestamp_utc": "2026-11-10T09:34:17.077524+00:00",
+  "scope": "LOCAL OFFLINE ONLY, NOT real agentgateway/Gatekeeper/Provider runtime evidence",
+  "checks": [
+    {
+      "name": "Offline static validation",
+      "command": "/opt/pyvenv/bin/python scripts/validate_baseline.py",
+      "exit_code": 0,
+      "output": "PASS required_files: 16 required baseline files\nPASS markdown_relative_links: 25 Markdown files, 34 local links\nPASS html_relative_links: 11 HTML pages, 137 local asset/href refs\nPASS json_schema_and_examples: 20 JSON files parsed; 6 additional example schemas and negative route samples validated\nPASS yaml_syntax_not_runtime: 3 YAML syntax checks; no native agentgateway runtime/schema tests\nPASS acceptance_coverage_not_run: 95 NOT_RUN scenarios, all 50 FR and 19 NFR referenced\nPASS demo_policy_safety: demo policy: default deny, no redirects, no automatic write retries, reserved upstreams\nPASS approval_and_gate_integrity: official Manifest JSON Schema PASS; unresolved owners/other placeholders; gates NOT_RUN\nPASS gateway_operations_ux_mock: 18-page unified offline mock; 71 UX formal cases NOT_RUN; original 35 + additional 46 local browser checks PASS; 11 preview PNGs\nPASS diagrams_exist: 4 SVG + 4 PNG diagrams\nPASS gap_remediation_offline_only: 15 gaps; 95 runtime cases; 12 protocol scenarios; 11 operational exercises, runtime NOT_RUN\nOffline checks: {'pass': 11, 'fail': 0} | Runtime: NOT_RUN"
+    },
+    {
+      "name": "Route/Policy contract tests",
+      "command": "/opt/pyvenv/bin/python -m unittest discover -s tests/contracts -p test_*.py -v",
+      "exit_code": 0,
+      "output": "test_branch_negatives (test_route_preflight.RoutePreflightTests.test_branch_negatives) ... ok\ntest_conflict_env_isolated (test_route_preflight.RoutePreflightTests.test_conflict_env_isolated) ... ok\ntest_diagnostic_capture_and_event_schema (test_route_preflight.RoutePreflightTests.test_diagnostic_capture_and_event_schema) ... ok\ntest_distributed_quota_fallback_explicit (test_route_preflight.RoutePreflightTests.test_distributed_quota_fallback_explicit) ... ok\ntest_duplicate_route_conflict (test_route_preflight.RoutePreflightTests.test_duplicate_route_conflict) ... ok\ntest_egress_preflight (test_route_preflight.RoutePreflightTests.test_egress_preflight) ... ok\ntest_egress_quota_must_be_account_scoped (test_route_preflight.RoutePreflightTests.test_egress_quota_must_be_account_scoped) ... ok\ntest_head_options_valid (test_route_preflight.RoutePreflightTests.test_head_options_valid) ... ok\ntest_no_api_key_as_config (test_route_preflight.RoutePreflightTests.test_no_api_key_as_config) ... ok\ntest_noncanonical_logical_path (test_route_preflight.RoutePreflightTests.test_noncanonical_logical_path) ... ok\ntest_sni_mismatch (test_route_preflight.RoutePreflightTests.test_sni_mismatch) ... ok\ntest_three_classes_schema (test_route_preflight.RoutePreflightTests.test_three_classes_schema) ... ok\ntest_three_pools_no_collision (test_route_preflight.RoutePreflightTests.test_three_pools_no_collision) ... ok\ntest_traffic_schema (test_route_preflight.RoutePreflightTests.test_traffic_schema) ... ok\ntest_unsafe_destination (test_route_preflight.RoutePreflightTests.test_unsafe_destination) ... ok\n\n----------------------------------------------------------------------\nRan 15 tests in 0.017s\n\nOK"
+    },
+    {
+      "name": "Security mock/reference tests",
+      "command": "/opt/pyvenv/bin/python -m unittest discover -s tests/security -p test_*.py -v",
+      "exit_code": 0,
+      "output": "test_body_cannot_leak (test_diagnostic_reference.DiagnosticReferenceTests.test_body_cannot_leak) ... ok\ntest_cross_tenant_denied (test_diagnostic_reference.DiagnosticReferenceTests.test_cross_tenant_denied) ... ok\ntest_expired_denied (test_diagnostic_reference.DiagnosticReferenceTests.test_expired_denied) ... ok\ntest_self_approval_denied (test_diagnostic_reference.DiagnosticReferenceTests.test_self_approval_denied) ... ok\ntest_token_header_dropped (test_diagnostic_reference.DiagnosticReferenceTests.test_token_header_dropped) ... ok\ntest_valid_sample (test_diagnostic_reference.DiagnosticReferenceTests.test_valid_sample) ... ok\ntest_window_bound (test_diagnostic_reference.DiagnosticReferenceTests.test_window_bound) ... ok\ntest_bad_method (test_policy_reference.PolicyReferenceTests.test_bad_method) ... ok\ntest_cross_tenant_account (test_policy_reference.PolicyReferenceTests.test_cross_tenant_account) ... ok\ntest_custom_target (test_policy_reference.PolicyReferenceTests.test_custom_target) ... ok\ntest_different_service (test_policy_reference.PolicyReferenceTests.test_different_service) ... ok\ntest_dot_segments (test_policy_reference.PolicyReferenceTests.test_dot_segments) ... ok\ntest_encoded_dot (test_policy_reference.PolicyReferenceTests.test_encoded_dot) ... ok\ntest_encoded_slash (test_policy_reference.PolicyReferenceTests.test_encoded_slash) ... ok\ntest_no_credential_binding (test_policy_reference.PolicyReferenceTests.test_no_credential_binding) ... ok\ntest_no_identity (test_policy_reference.PolicyReferenceTests.test_no_identity) ... ok\ntest_own_tenant_account (test_policy_reference.PolicyReferenceTests.test_own_tenant_account) ... ok\ntest_prefix_collision (test_policy_reference.PolicyReferenceTests.test_prefix_collision) ... ok\ntest_unregistered_operation (test_policy_reference.PolicyReferenceTests.test_unregistered_operation) ... ok\ntest_untrusted_host_override (test_policy_reference.PolicyReferenceTests.test_untrusted_host_override) ... ok\ntest_unverified_caller (test_policy_reference.PolicyReferenceTests.test_unverified_caller) ... ok\ntest_valid_mock_case (test_policy_reference.PolicyReferenceTests.test_valid_mock_case) ... ok\ntest_wrong_environment (test_policy_reference.PolicyReferenceTests.test_wrong_environment) ... ok\n\n----------------------------------------------------------------------\nRan 23 tests in 0.001s\n\nOK"
+    },
+    {
+      "name": "Route Egress preflight",
+      "command": "/opt/pyvenv/bin/python scripts/preflight_intents.py contracts/gateway/route-intent.example.json",
+      "exit_code": 0,
+      "output": "{\n  \"status\": \"STATIC_PREFLIGHT_OK_NOT_DEPLOYABLE\",\n  \"native_agentgateway_config_generated\": false,\n  \"native_agentgateway_schema_validated\": false,\n  \"network_dns_allowlist_validated\": false,\n  \"intents_sha256\": \"1de09dc6c17e1e0cdb1f5dd56d150bbca49877ad91398a39b43e1326e4436547\",\n  \"issue_count\": 0,\n  \"issues\": []\n}"
+    },
+    {
+      "name": "Console JS parser",
+      "command": "node --check /tmp/tmpgzyq6eka/prototype.js",
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "name": "Traffic Governance browser smoke",
+      "command": "/opt/pyvenv/bin/python /mnt/data/test_gateway_remediation_browser.py",
+      "exit_code": 0,
+      "output": "IDP Gateway V1.0 - offline traffic governance smoke test\nBrowser: Chromium headless, local HTML injected directly, NO network, NO Gateway/Provider integration\nPASS Traffic Governance displayed\nPASS quota drilldown rendered\nPASS quota drawer closes\nPASS health drilldown rendered\nPASS health drawer closes\nPASS drift drilldown rendered\nPASS drift drawer closes\nPASS Body not displayed as operational evidence\nPASS Route page navigation preserved\nPASS Release page navigation preserved\nPASS No browser JS errors\nJS errors: []\nAll real acceptance cases remain NOT_RUN"
+    }
+  ],
+  "pass": 6,
+  "fail": 0,
+  "runtime_acceptance": "NOT_RUN",
+  "production_approval": "NOT_APPROVED"
+}

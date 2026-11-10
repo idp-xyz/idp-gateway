@@ -1,0 +1,74 @@
+{
+  "title": "IDP Gateway V1.0 offline static validation",
+  "executed_at_utc": "2026-11-10T10:53:42.900135+00:00",
+  "python_version": "3.13.5",
+  "scope": "offline files, schemas, example data, traceability only",
+  "checks": [
+    {
+      "check": "required_files",
+      "status": "PASS",
+      "detail": "16 required baseline files"
+    },
+    {
+      "check": "markdown_relative_links",
+      "status": "PASS",
+      "detail": "25 Markdown files, 40 local links"
+    },
+    {
+      "check": "html_relative_links",
+      "status": "PASS",
+      "detail": "11 HTML pages, 137 local asset/href refs"
+    },
+    {
+      "check": "json_schema_and_examples",
+      "status": "PASS",
+      "detail": "22 JSON files parsed; 6 additional example schemas and negative route samples validated"
+    },
+    {
+      "check": "yaml_syntax_not_runtime",
+      "status": "PASS",
+      "detail": "3 YAML syntax checks; no native agentgateway runtime/schema tests"
+    },
+    {
+      "check": "acceptance_coverage_not_run",
+      "status": "PASS",
+      "detail": "95 NOT_RUN scenarios, all 50 FR and 19 NFR referenced"
+    },
+    {
+      "check": "demo_policy_safety",
+      "status": "PASS",
+      "detail": "demo policy: default deny, no redirects, no automatic write retries, reserved upstreams"
+    },
+    {
+      "check": "approval_and_gate_integrity",
+      "status": "PASS",
+      "detail": "official Manifest JSON Schema PASS; unresolved owners/other placeholders; gates NOT_RUN"
+    },
+    {
+      "check": "gateway_operations_ux_mock",
+      "status": "PASS",
+      "detail": "18-page unified offline mock; 75 UX formal cases NOT_RUN; original 35 + additional 46 local browser checks PASS; 12 preview PNGs"
+    },
+    {
+      "check": "diagrams_exist",
+      "status": "PASS",
+      "detail": "4 SVG + 4 PNG diagrams"
+    },
+    {
+      "check": "gap_remediation_offline_only",
+      "status": "PASS",
+      "detail": "15 gaps; 95 runtime cases; 12 protocol scenarios; 11 operational exercises, runtime NOT_RUN"
+    }
+  ],
+  "summary": {
+    "pass": 11,
+    "fail": 0
+  },
+  "gatekeeper_runtime": "NOT_RUN",
+  "agentgateway_runtime": "NOT_RUN",
+  "provider_sandbox": "NOT_RUN",
+  "performance": "NOT_RUN",
+  "security_penetration": "NOT_RUN",
+  "formal_signoff": "NOT_RUN",
+  "not_a_production_certification": true
+}

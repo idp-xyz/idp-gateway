@@ -1,0 +1,9 @@
+digraph G { graph [fontname="Noto Sans CJK SC",bgcolor="#ffffff",pad="0.3",nodesep="0.45",ranksep="0.65",splines="ortho",labelloc=t,labeljust=l,fontsize=21,fontcolor="#12233b"];node [shape=box,style="rounded,filled",color="#DCE5EF",fillcolor="#F4F7FB",fontname="Noto Sans CJK SC",fontcolor="#203249",fontsize=12,penwidth=1.2,margin="0.24,0.16"];edge [color="#93A9BE",penwidth=1.7,arrowsize=.7,fontname="Noto Sans CJK SC",fontsize=9,fontcolor="#52708B"];
+label="部署与故障域 · 统一技术 ≠ 单一实例";rankdir=LR; 
+subgraph cluster_control {label="控制平面（独立故障域）";style="rounded,dashed";color="#D2DDE8";fabric [label="Fabric Publisher\n批准、期望版本",fillcolor="#E7F0FB"];gk [label="Gatekeeper PDP / Broker\n授权、凭证",fillcolor="#E6F7F1"];}
+subgraph cluster_public {label="公网安全域";color="#9DBBDE";style="rounded";lbi [label="LB · WAF 可选"];gi1[label="Ingress Gateway A",fillcolor="#E9F2FC"];gi2[label="Ingress Gateway B",fillcolor="#E9F2FC"];lbi->gi1;lbi->gi2;}
+subgraph cluster_egress {label="内网出站域";color="#7BC1B4";style="rounded";lbe[label="Private LB / DNS"];ge1[label="Egress Gateway A",fillcolor="#E3F5F1"];ge2[label="Egress Gateway B",fillcolor="#E3F5F1"];lbe->ge1;lbe->ge2;}
+subgraph cluster_ai {label="TELOS AI 专用域";color="#AF9DDA";style="rounded";lba[label="AI Private LB"];ga1[label="AI Gateway A",fillcolor="#F0EAFC"];ga2[label="AI Gateway B",fillcolor="#F0EAFC"];lba->ga1;lba->ga2;}
+flow [label="业务产品 / 外部客户端 / TELOS",fillcolor="#F4F7FA"];services[label="各产品业务 API / 外部 Provider / AI",fillcolor="#F4F7FA"];
+flow->lbi;flow->lbe;flow->lba;gi1->services;ge1->services;ga1->services;fabric->gi2 [style=dashed,label="发布/回读"];fabric->ge2 [style=dashed];fabric->ga2 [style=dashed];gk->ge1 [style=dashed,label="受控认证授权"];gk->gi1 [style=dashed];gk->ga1 [style=dashed];
+}

@@ -1,0 +1,200 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>IDP Gateway Console UI 能力矩阵 V1.0</title><style>body{font-family:Inter,system-ui,"Microsoft Yahei",sans-serif;background:#f5f8fa;color:#20354a;padding:48px;max-width:1150px;margin:auto;line-height:1.75}h1{font-size:27px}h2{border-bottom:1px solid #d9e3eb;padding-bottom:8px}table{width:100%;border-collapse:collapse;background:white;font-size:13px}th,td{border:1px solid #dbe4ec;padding:9px 12px;text-align:left;vertical-align:top}th{background:#eef5f7}blockquote{background:#ecf5f6;padding:8px 20px;border-left:4px solid #1e9398}code{background:#eaf1f5;border-radius:3px;padding:1px 4px}a{color:#087f87}li{margin-bottom:6px}</style></head><body><h1>IDP Gateway Console — agentgateway UI 能力映射与实现边界 V1.0</h1>
+<blockquote>
+<p><strong>基线范围</strong>：参考 agentgateway <strong>官方开源 Standalone UI</strong> 的主要可视化管理能力；不复制官方页面源码或视觉资源。本文件属于 IDP Gateway V1.0 同版设计增补，非真实联调或生产准入证据。<br />
+<strong>原型状态</strong>：OFFLINE MOCK，尚未调用 agentgateway、Gatekeeper、API Fabric、真实 LLM/MCP/A2A 服务；所有运行时验收均 <code>NOT_RUN</code>。</p>
+</blockquote>
+<h2>设计结论</h2>
+<ul>
+<li><strong>完整纳入官方开源 UI 的主要管理能力是合理目标</strong>，但不建议把原生 UI 的所有低层功能直接暴露为默认业务配置界面。</li>
+<li>使用统一的 <strong>IDP Gateway Console</strong> 负责用户交互，用模块化管理 API 显示或提交配置意图；以 <strong>agentgateway</strong> 为运行时数据面。</li>
+<li>保留 <strong>Gatekeeper</strong> 对身份、授权、第三方账户和密钥的权威；保留 <strong>API Fabric</strong> 对 API Catalog、契约、批准发布的权威；业务 Port/ACL 不转移到 Gateway。</li>
+<li>生产配置以 <strong>唯一受控发布通道</strong> 生效。agentgateway 原生 UI 仅用于受权限保护的只读检查、排障或隔离实验环境，不允许与 IDP Console 共同直写同一生产配置。</li>
+<li>开源项目为 <strong>Apache-2.0</strong> 许可。若将来直接复用上游源码/组件，应做版本与第三方依赖的 LICENSE/NOTICE 审核、保留所需版权声明；本轮 UI 使用独立设计与实现。</li>
+</ul>
+<h2>逐项功能覆盖</h2>
+<table>
+<thead>
+<tr>
+  <th>官方开源 UI 能力/对象</th>
+  <th>IDP Console 对应界面</th>
+  <th>该次原型</th>
+  <th>工程实现计划/真实权威</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>Gateway Home / Overview</td>
+  <td>运营总览</td>
+  <td><strong>Mock</strong> KPI / 风险与导航</td>
+  <td>Observability 查询，Cross-Plane Read Models</td>
+</tr>
+<tr>
+  <td>Traffic / Gateways / Listeners</td>
+  <td>监听器与网关</td>
+  <td><strong>Mock</strong> 清单/详情</td>
+  <td>agentgateway Gateway/Listener 适配器</td>
+</tr>
+<tr>
+  <td>Traffic / Routes / Matches</td>
+  <td>路由与接口（原页）</td>
+  <td><strong>Mock</strong> 路由详情、查询</td>
+  <td>RouteIntent → Approved Config → Reconcile</td>
+</tr>
+<tr>
+  <td>Backends / Targets / Weights / TLS</td>
+  <td>上游服务</td>
+  <td><strong>Mock</strong> 详情和权重</td>
+  <td>路由配置/后端健康检查</td>
+</tr>
+<tr>
+  <td>Traffic Route Policies</td>
+  <td>路由与接口、访问授权</td>
+  <td><strong>Mock</strong> 策略关联</td>
+  <td>Gateway Policy Adapter + Gatekeeper AuthZ</td>
+</tr>
+<tr>
+  <td>LLM / Models / Virtual Models</td>
+  <td>LLM 模型与服务商</td>
+  <td><strong>Mock</strong> 模型清单/策略</td>
+  <td>模型路由、权重、条件、故障回退适配</td>
+</tr>
+<tr>
+  <td>LLM / Providers</td>
+  <td>LLM 模型与服务商 → 服务商</td>
+  <td><strong>Mock</strong> 提供商清单</td>
+  <td>Provider 注册与 Secret 引用</td>
+</tr>
+<tr>
+  <td>LLM / Policies</td>
+  <td>LLM 策略与护栏</td>
+  <td><strong>Mock</strong> 策略卡片</td>
+  <td>Gateway Policy Adapter</td>
+</tr>
+<tr>
+  <td>LLM / Guardrails</td>
+  <td>LLM 策略与护栏 → Guardrails</td>
+  <td><strong>Mock</strong> 请求/响应防护</td>
+  <td>Guardrail 配置、审计、数据分级</td>
+</tr>
+<tr>
+  <td>LLM / Virtual API Keys</td>
+  <td>虚拟密钥与客户端</td>
+  <td><strong>Mock</strong> 元数据</td>
+  <td>Gatekeeper/密钥工作流；不可明文展示</td>
+</tr>
+<tr>
+  <td>LLM / Cost / Analytics / Logs</td>
+  <td>LLM 成本与分析</td>
+  <td><strong>Mock</strong> 指标、脱敏日志</td>
+  <td>使用量采集、账单估算、Telemetry</td>
+</tr>
+<tr>
+  <td>LLM / Client Setup</td>
+  <td>虚拟密钥与客户端 → Client Setup</td>
+  <td><strong>Mock</strong> 配置片段</td>
+  <td>已发布 URL/模型/权限的派生视图</td>
+</tr>
+<tr>
+  <td>MCP / Servers / Transports</td>
+  <td>MCP 服务与工具</td>
+  <td><strong>Mock</strong> 服务清单</td>
+  <td>MCP Registry/Proxy 适配与验收</td>
+</tr>
+<tr>
+  <td>MCP / Tools / Resources</td>
+  <td>MCP 服务与工具 → Tools &amp; Resources</td>
+  <td><strong>Mock</strong> 发现结果</td>
+  <td>Gateway MCP Discovery + AuthZ</td>
+</tr>
+<tr>
+  <td>MCP / Policies</td>
+  <td>MCP 服务与工具 → MCP Policies</td>
+  <td><strong>Mock</strong> 规则和关系</td>
+  <td>Gateway Policy + Gatekeeper</td>
+</tr>
+<tr>
+  <td>MCP / Playground</td>
+  <td>MCP Playground</td>
+  <td><strong>模拟</strong> JSON 校验与 Allow/Deny</td>
+  <td>需要有权限的真实 MCP 工具安全测试</td>
+</tr>
+<tr>
+  <td>A2A Agent 接入能力</td>
+  <td>A2A Agents</td>
+  <td><strong>IDP 扩展 Mock</strong></td>
+  <td>Agent Endpoint / Trust / A2A Capability，非声称官方 UI 完全相同</td>
+</tr>
+<tr>
+  <td>Tools / CEL Playground</td>
+  <td>CEL / 配置 / 设置 → CEL</td>
+  <td><strong>固定模拟</strong>，绝不执行任意表达式</td>
+  <td>与对应版本 CEL Parser / TypeChecker 联调</td>
+</tr>
+<tr>
+  <td>Tools / Raw Configuration</td>
+  <td>CEL / 配置 / 设置 → Configuration</td>
+  <td><strong>IDP 意图 JSON 只读</strong></td>
+  <td>原生 schema 适配、校验、发布、对账</td>
+</tr>
+<tr>
+  <td>Tools / Settings UI / OIDC / CORS</td>
+  <td>CEL / 配置 / 设置 → Settings</td>
+  <td><strong>Mock</strong> 设置卡片</td>
+  <td>Gatekeeper SSO、UI 管理入口隔离</td>
+</tr>
+<tr>
+  <td>Tools / Settings Observability</td>
+  <td>CEL / 配置 / 设置 → Settings</td>
+  <td><strong>Mock</strong> 跟踪与日志设置</td>
+  <td>OTel / Logging pipeline</td>
+</tr>
+<tr>
+  <td>IDP 独有：External Provider onboarding</td>
+  <td>API 接入向导、第三方提供商</td>
+  <td><strong>模拟</strong> 三步向导、检查</td>
+  <td>路由意图、账户权限、外部 Token Broker</td>
+</tr>
+<tr>
+  <td>IDP 独有：Publication approval / rollback</td>
+  <td>配置发布（原页）</td>
+  <td><strong>模拟</strong> 审批/发布/回滚</td>
+  <td>API Fabric + Gateway Controller 唯一发布权威</td>
+</tr>
+<tr>
+  <td>IDP 独有：Multi-pool operations</td>
+  <td>实例与故障域（原页）</td>
+  <td><strong>模拟</strong> 生产/测试实例、故障</td>
+  <td>Runtime metrics &amp; incident response</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>覆盖说明</strong>：该表是可视化与信息架构功能覆盖，不表示实现了官方 UI 的每一个具体字段、每个策略插件及原生配置 schema；尤其不能将 Mock 功能标为真实可用。正式功能等价性必须以锁定版本的官方配置 schema、代码审查和端到端测试重新盘点。</p>
+</blockquote>
+<h2>UI/UX 应优先于传统网关资源视图的体验</h2>
+<ol>
+<li><strong>业务意图先行</strong>：从“谁访问哪个外部业务能力”配置，而非直接从路由和 JSON/YAML 对象开始。</li>
+<li><strong>一步到底的关联导航</strong>：API → 服务 / 租户 → Provider Account → Policy → Trace → Release。</li>
+<li><strong>明确多权威边界</strong>：Gatekeeper 持有身份/账户、Fabric 持有契约/发布授权、Gateway 只执行与回读；UI 汇聚不改写所有权。</li>
+<li><strong>先模拟后发布</strong>：配置编辑、校验、冲突检查、差异影响、批准、灰度、回读和回滚全链路可追溯。</li>
+<li><strong>默认安全</strong>：禁止开放出站代理、禁显 Secret、禁用生产任意 YAML 直改、高风险操作职责分离。</li>
+<li><strong>版本升级可持续</strong>：建立 upstream-version compatibility matrix；通过 adapter 做能力探测，避免硬编码单一版本字段。</li>
+</ol>
+<h2>真实实施不可省略的验收</h2>
+<ul>
+<li>agentgateway <strong>Standalone/Kubernetes</strong> 模式下 UI/API 行为不同，尤其 Kubernetes UI 只读；必须固定 Runtime 版本与配置存储模式。</li>
+<li>外部 OAuth Client Credentials、Provider 账户动态选择、Token 刷新与敏感 Header 注入，不能从普通 Backend Authentication 功能推断已自动完成；需要 Gatekeeper PoC。</li>
+<li>LLM virtual model 的条件、权重、failover，MCP OAuth/Tool authorization、A2A trust 需要真实协议测试。</li>
+<li>Route/Policy 修改必须由一个批准发布渠道执行，原生 UI 不允许绕过；验证可审计回读和漂移检测。</li>
+<li>对外部 API 的 GET、POST、gRPC、SSE/Streaming 分别验证 Header、Body、状态码、错误恢复、负载及安全。</li>
+<li>前端可访问性、中文术语一致性、密码不可见、权限越权、移动/宽屏布局需执行正式验收。</li>
+</ul>
+<h2>官方参考</h2>
+<ul>
+<li>agentgateway 开源仓库 / Apache-2.0：<a href="https://github.com/agentgateway/agentgateway">https://github.com/agentgateway/agentgateway</a></li>
+<li>Standalone UI 官方导航与能力：<a href="https://agentgateway.dev/docs/standalone/latest/documentation/setup/ui/launch-ui/">https://agentgateway.dev/docs/standalone/latest/documentation/setup/ui/launch-ui/</a></li>
+<li>Standalone / Kubernetes 差异：<a href="https://agentgateway.dev/docs/standalone/latest/documentation/about/introduction/">https://agentgateway.dev/docs/standalone/latest/documentation/about/introduction/</a></li>
+<li>Routes 与匹配：<a href="https://agentgateway.dev/docs/standalone/latest/documentation/configuration/routes/">https://agentgateway.dev/docs/standalone/latest/documentation/configuration/routes/</a></li>
+<li>Kubernetes UI 只读说明：<a href="https://agentgateway.dev/docs/kubernetes/latest/documentation/observability/ui/">https://agentgateway.dev/docs/kubernetes/latest/documentation/observability/ui/</a></li>
+</ul>
+</body></html>

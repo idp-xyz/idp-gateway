@@ -1,0 +1,13 @@
+{
+  "intent_id": "gwi-ai-001",
+  "gateway_pool": "ai-test",
+  "traffic_class": "AI",
+  "environment": "TEST",
+  "logical_path": "/llm",
+  "ai_protocol": "LLM",
+  "ai_target_ref": "ai:telos/model-router-v1",
+  "authz_profile": "ai-identity-v1",
+  "approval_ref": "APPROVAL-PENDING-003",
+  "expected_generation": 0,
+  "policy_bundle_ref": "policy:ai-standard-v1"
+}
