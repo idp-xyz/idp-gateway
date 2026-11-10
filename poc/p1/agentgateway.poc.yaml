@@ -1,4 +1,5 @@
-# P1 PoC — native agentgateway configuration, written for and validated by the 1.6.0 binary.
+# P1 PoC — native agentgateway configuration. The same file is accepted and run, unchanged,
+# by the 1.6.0 and the 1.7.0 binary.
 #
 # Real:  the agentgateway data plane (JWT validation, HTTP ExtAuthZ, header handling, routing).
 # Mock:  Gatekeeper PDP/Broker (mock_gatekeeper.py) and the provider (mock_provider.py).
@@ -7,12 +8,18 @@
 # Run through run_poc.py: it creates the .run/ files referenced below and starts the
 # gateway with poc/p1 as working directory (relative paths resolve against the cwd).
 #
+# There is deliberately no config.session.key here. 1.7.0 started without one generates a
+# key and WRITES IT INTO THE CONFIG FILE it was started from. run_poc.py therefore starts
+# the gateway from a copy in .run/ and passes a per-run key in the SESSION_KEY environment
+# variable, which stops the rewrite (case P1-CF-01). "key: disabled" is not usable in a
+# file shared by both versions: 1.7.0 accepts it, 1.6.0 rejects it.
+#
 # Port block 27611-27617 is reserved for this PoC:
 #   27611 gateway listener   27612 mock provider      27613 mock Gatekeeper
 #   27614 gateway admin      27615 gateway stats      27616 gateway readiness
 #   27617 "forbidden" target that no route may ever reach
 #
-# The 1.6.0 schema has no bind-address field for a gateway listener: 27611 listens on every
+# Neither schema has a bind-address field for a gateway listener: 27611 listens on every
 # interface of the machine for as long as the PoC runs. Admin, stats and readiness are
 # pinned to loopback below.
 config:

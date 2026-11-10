@@ -78,6 +78,6 @@
 - **HTML 镜像改为由脚本生成**：交付物里没有生成 HTML 的脚本，其后的修改一度靠手工同步。现在 `scripts/build_html.py` 从 Markdown 重新生成 G01–G06、两份 `portal/spec`、P1 PoC 报告、ADR 目录与 8 篇 ADR 的页面正文、各页侧边栏和离线阅读器的各章节（页面外壳的其余部分不动）；`validate_baseline.py` 会在 HTML 落后于 Markdown 时报错。`index.html` 没有 Markdown 源，只有侧边栏由脚本生成；`portal/prototypes/` 不在脚本范围内。重新生成时补上了交付时就缺的内容：《UI 能力矩阵》HTML 里漏掉的"统一平台补强"一节，以及各篇最后一个二级标题的锚点。
 - **页面外壳里过时的三处文字**：页脚"真实 PoC / 审批 / 生产验证尚未完成"改为"正式验收 / 审批 / 生产验证尚未完成"（P1 PoC 已用 Mock 对端跑过，未完成的是正式验收）；侧边栏与 UX 规格页眉里的"六页"原型改为"18 页"，与原型实际页数一致。原型本身未改动。
 - **当前可重跑的离线检查**：`scripts/validate_baseline.py` 13 项；`tests/contracts` 55 个、`tests/security` 35 个测试。新增的测试固定了评审中发现的绕过与契约矛盾，对应的参考实现和 Schema 已改为白名单式。
-- **"仍待决策的架构风险"第 1 项**有了 PoC 级别的回答：`poc/p1` 在 agentgateway 1.6.0 + Mock Gatekeeper/Provider 上跑通了经 HTTP ExtAuthZ 的按请求凭证注入与双租户账户隔离（40 个用例 39 个通过，1 个未解决）。这不是验收：Gatekeeper 是 Mock，版本不是设计目标 1.7.x。结论、网关上必须显式配置的五处、未解决项见 `poc/p1/README.md`，据此提出 `decisions/ADR-0008.md`（Proposed）。
+- **"仍待决策的架构风险"第 1 项**有了 PoC 级别的回答：`poc/p1` 在 agentgateway 1.6.0 与 1.7.0 + Mock Gatekeeper/Provider 上，用同一份配置跑通了经 HTTP ExtAuthZ 的按请求凭证注入与双租户账户隔离（两个版本都是 41 个用例 40 个通过，1 个未解决，结果逐条相同）。这不是验收：Gatekeeper 与 Provider 是 Mock，版本尚未锁定。结论、网关上必须显式处理的六处（含 1.7.0 启动时改写自身配置文件）、未解决项见 `poc/p1/README.md`，据此提出 `decisions/ADR-0008.md`（Proposed）。
 - **"未执行"清单的现状**：其中"agentgateway 真实二进制加载配置、JWKS、ExtAuthZ、后端 Token 动态注入"已在上述 PoC 中用 Mock 对端跑过；gRPC Streaming 及清单其余各项仍未执行。
 - **不变的**：95 条运行验收、75 条 UX 验收、STD-CP1～CP6 全部 `NOT_RUN`；ADR 共 8 项，全部 Proposed；Manifest 未获采用批准。

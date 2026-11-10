@@ -2,7 +2,7 @@
 
 > **IDP Gateway** / agentgateway 首选候选 / Go Control & Gatekeeper 适配 / 2026-11-10  
 > **状态：设计候选（DESIGN_DRAFT）· NOT APPROVED · 正式验收与全部门禁 NOT_RUN**  
-> P1 PoC 已在 agentgateway 1.6.0 + Mock Gatekeeper/Provider 上运行（40 个用例 39 个通过，有未解决项），见 [poc/p1/README.md](poc/p1/README.md)；它不是验收证据。
+> P1 PoC 已在 agentgateway 1.6.0 与 1.7.0 + Mock Gatekeeper/Provider 上运行（两个版本都是 41 个用例 40 个通过，有未解决项），见 [poc/p1/README.md](poc/p1/README.md)；它不是验收证据。
 
 本包是按 **IDP-SCG-STD-001《供应链 DDD 产品与工程设计统一规范 V1.0》** 建立的第一版 **可审查、可追溯、可静态校验** 工程基线。不是部署好的网关，也不证明已通过 Gatekeeper/Provider 实际集成、安全或性能测试。
 
@@ -76,7 +76,7 @@ Markdown 是源，HTML 是生成物：改了 Markdown 之后运行 `.venv/bin/py
 - `governance/gap-remediation-matrix.csv`（15 个缺口）、协议清单、故障演练、`operations/incident-runbook.md`。
 - Console 在 Traffic Explorer 同页新增 ProviderAccount Quota、Upstream Health 和 Config Drift 的**合成 Mock 视图**。
 
-**重要**：这批改善只完成设计、契约、离线 Mock 和检查；真实 Gatekeeper Credential Broker、环境网络策略、限流协调器与安全报文采集均未实现、未联测。agentgateway 二进制此后只在 P1 PoC 中用过（1.6.0，对接 Mock Gatekeeper/Provider，见 `poc/p1/README.md`）；设计目标 1.7.x 与由 RouteIntent 编译原生配置的 Publisher 仍未实现、未验证。
+**重要**：这批改善只完成设计、契约、离线 Mock 和检查；真实 Gatekeeper Credential Broker、环境网络策略、限流协调器与安全报文采集均未实现、未联测。agentgateway 二进制此后只在 P1 PoC 中用过（1.6.0 与 1.7.0，对接 Mock Gatekeeper/Provider，见 `poc/p1/README.md`）；具体版本尚未锁定，由 RouteIntent 编译原生配置的 Publisher 仍未实现、未验证。
 
 
 ## 新增离线测试与文档入口

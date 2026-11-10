@@ -206,22 +206,26 @@ check('gap_remediation_offline_only',gap_evidence)
 def poc_p1_evidence():
  """PoC evidence must describe the files that are in the repository now, and must not be
  passed off as acceptance. It is read here, not re-run: run poc/p1/run_poc.py for that."""
- ev=R/'poc/p1/evidence/p1-run.json'
- if not ev.is_file():return 'no PoC evidence file (PoC not run)'
- e=json.loads(ev.read_text(encoding='utf-8'))
+ runs=sorted((R/'poc/p1/evidence').glob('p1-run-agentgateway-*.json'))
+ if not runs:return 'no PoC evidence file (PoC not run)'
  sha=lambda p:hashlib.sha256((R/p).read_bytes()).hexdigest()
- assert e['agentgateway']['config_sha256']==sha('poc/p1/agentgateway.poc.yaml'),'evidence is for another gateway config; re-run the PoC'
- assert e['policy_sha256']==sha('poc/p1/policy.poc.json'),'evidence is for another PoC policy; re-run the PoC'
- assert e['policy_reference_sha256']==sha('scripts/policy_reference.py'),'evidence is for another policy_reference.py; re-run the PoC'
- assert str(e['formal_acceptance']).startswith('NOT_RUN')
- s=e['summary'];results=[c['result'] for c in e['cases']]
- assert s['cases']==len(results) and s['pass']==results.count('PASS') and s['fail']==results.count('FAIL')
- failed=[c['id'] for c in e['cases'] if c['result']!='PASS']
- # index.html has no Markdown source, so the result it quotes is checked here.
- quoted=f"{s['cases']} 条用例通过 {s['pass']} 条"
- assert quoted in (R/'index.html').read_text(encoding='utf-8'),f'index.html does not say "{quoted}"'
- return (f"PoC evidence matches current config/policy: {s['pass']}/{s['cases']} cases PASS on agentgateway "
-         f"{e['agentgateway']['version'].get('version')}; FAIL: {', '.join(failed) or 'none'}; not acceptance evidence")
+ index=(R/'index.html').read_text(encoding='utf-8');told=[]
+ for ev in runs:
+  e=json.loads(ev.read_text(encoding='utf-8'));ver=e['agentgateway']['version'].get('version')
+  again=f're-run the PoC on agentgateway {ver}'
+  assert ev.name==f'p1-run-agentgateway-{ver}.json',f'{ev.name} holds a run on {ver}'
+  assert e['agentgateway']['config_sha256']==sha('poc/p1/agentgateway.poc.yaml'),f'{ev.name} is for another gateway config; {again}'
+  assert e['policy_sha256']==sha('poc/p1/policy.poc.json'),f'{ev.name} is for another PoC policy; {again}'
+  assert e['policy_reference_sha256']==sha('scripts/policy_reference.py'),f'{ev.name} is for another policy_reference.py; {again}'
+  assert str(e['formal_acceptance']).startswith('NOT_RUN')
+  s=e['summary'];results=[c['result'] for c in e['cases']]
+  assert s['cases']==len(results) and s['pass']==results.count('PASS') and s['fail']==results.count('FAIL')
+  failed=[c['id'] for c in e['cases'] if c['result']!='PASS']
+  # index.html has no Markdown source, so the result it quotes is checked here.
+  quoted=f"{ver}：{s['pass']}/{s['cases']}"
+  assert quoted in index,f'index.html does not say "{quoted}"'
+  told.append(f"{ver}: {s['pass']}/{s['cases']} PASS, FAIL: {', '.join(failed) or 'none'}")
+ return f"PoC evidence matches current config/policy on agentgateway {'; '.join(told)}; not acceptance evidence"
 check('poc_p1_evidence_current',poc_p1_evidence)
 
 report={

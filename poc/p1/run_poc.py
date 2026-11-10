@@ -6,10 +6,13 @@ the provider actually received, and writes poc/p1/evidence/p1-run.json. Expectat
 taken from G01/G03/G04 and are fixed in this file before the run; a case that does not
 meet its expectation is reported as FAIL, not adjusted.
 
-Usage (from the repository root):  .venv/bin/python poc/p1/run_poc.py
+Usage (from the repository root):
+    .venv/bin/python poc/p1/run_poc.py                              the agentgateway on PATH
+    .venv/bin/python poc/p1/run_poc.py --agentgateway /path/to/bin  another build of it
+Each agentgateway version writes its own evidence file, poc/p1/evidence/p1-run-agentgateway-<version>.json.
 """
 from __future__ import annotations
-import base64, datetime, hashlib, hmac, http.client, json, os, platform, secrets, socket, subprocess, sys, time
+import argparse, base64, datetime, hashlib, hmac, http.client, json, os, platform, secrets, shutil, socket, subprocess, sys, time
 from pathlib import Path
 
 import jwt
@@ -19,8 +22,10 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 RUN = HERE / '.run'
-EVIDENCE = HERE / 'evidence' / 'p1-run.json'
 CONFIG = HERE / 'agentgateway.poc.yaml'
+# The gateway is started from a per-run copy: a gateway that writes to its own config file
+# (1.7.0 does, see P1-CF-01) must not be able to alter the reviewed file in the repository.
+RUN_CONFIG = RUN / 'agentgateway.yaml'
 PORTS = {'gateway': 27611, 'provider': 27612, 'gatekeeper': 27613, 'admin': 27614,
          'stats': 27615, 'readiness': 27616, 'forbidden': 27617}
 ISSUER, AUDIENCE, LOGICAL_HOST, KID = 'https://gatekeeper.idp.test', 'idp-egress-gateway', 'egress-api.idp.test', 'poc-key-1'
@@ -135,9 +140,9 @@ def wait_port(port: int, up: bool, timeout: float = 15.0):
     raise RuntimeError(f"port {port} did not become {'open' if up else 'closed'} within {timeout}s")
 
 
-def start(name: str, argv: list[str], port: int, cwd: Path = HERE):
+def start(name: str, argv: list[str], port: int, cwd: Path = HERE, env: dict | None = None):
     log = open(RUN / f'{name}.log', 'ab')
-    PROCS[name] = subprocess.Popen(argv, cwd=cwd, stdout=log, stderr=subprocess.STDOUT)
+    PROCS[name] = subprocess.Popen(argv, cwd=cwd, stdout=log, stderr=subprocess.STDOUT, env=env)
     wait_port(port, up=True)
 
 
@@ -159,6 +164,26 @@ def start_gatekeeper():
                          '--policy', str(HERE / 'policy.poc.json'), '--state', str(RUN / 'state.json')], PORTS['gatekeeper'])
 
 
+def gateway_env(session_key: str | None) -> dict:
+    env = {k: v for k, v in os.environ.items() if k != 'SESSION_KEY'}
+    if session_key:
+        env['SESSION_KEY'] = session_key
+    return env
+
+
+def default_start_rewrites_config(binary: str) -> bool:
+    """Start the gateway once the way an unprepared installation would, with no session key,
+    and report whether it altered the config file it was given."""
+    probe = RUN / 'default-start.yaml'
+    shutil.copyfile(CONFIG, probe)
+    start('agentgateway-default-start', [binary, '-f', f'.run/{probe.name}'], PORTS['gateway'], env=gateway_env(None))
+    time.sleep(0.5)
+    stop('agentgateway-default-start', PORTS['gateway'])
+    rewritten = probe.read_bytes() != CONFIG.read_bytes()
+    probe.unlink()   # it may now hold a generated key
+    return rewritten
+
+
 def sh(argv: list[str]) -> str:
     try:
         return subprocess.run(argv, capture_output=True, text=True, timeout=20, cwd=ROOT).stdout.strip()
@@ -171,8 +196,9 @@ def sh(argv: list[str]) -> str:
 # --------------------------------------------------------------------------------------
 class S:  # per-run secrets; never written to the evidence file
     signing = attacker = None
-    admin = workload = static_token = ''
+    admin = workload = static_token = session_key = ''
     token = {}  # account -> provider token
+    default_start_rewrites = None  # not a secret: what default_start_rewrites_config() observed
 
 
 CASES: list[tuple] = []
@@ -618,6 +644,18 @@ def _(c):
     c.check('caller JWT still not forwarded', all('eyJ' not in v for h in hits for _, v in h['headers']))
 
 
+# ---- configuration integrity --------------------------------------------------------------------------
+@case('P1-CF-01', 'the gateway and its own configuration file',
+      'given its session key through the environment, the gateway leaves the file it was started from byte-identical to the reviewed configuration',
+      ('GW-NAT-004', 'GW-AT-014', 'GW-NFR-04', 'GW-FR-014'))
+def _(c):
+    # Observation, not a check: what the same binary does when nobody supplies a session key.
+    c.note('start_without_session_key_rewrites_config_file', S.default_start_rewrites)
+    c.check('the file the gateway is running from is byte-identical to poc/p1/agentgateway.poc.yaml',
+            RUN_CONFIG.read_bytes() == CONFIG.read_bytes())
+    c.check('the gateway is serving while this is checked', gw('GET', TRACKING + '/TRK-1', blue())['status'] == 200)
+
+
 # --------------------------------------------------------------------------------------
 # main
 # --------------------------------------------------------------------------------------
@@ -626,7 +664,7 @@ SCOPE_LIMITS = [
     'The provider is a loopback mock; no carrier sandbox was called.',
     'No TLS or mTLS on any hop. The gateway-to-PDP channel is authenticated by a shared key standing in for workload mTLS.',
     'Single gateway process: nothing here speaks to multi-replica behaviour, config rollout, quotas or load.',
-    'agentgateway 1.6.0 was used because it is the binary installed on this machine; the design names 1.7.x.',
+    'The result holds for the agentgateway build named in this file only; each version tested has its own evidence file.',
     'HTTP ExtAuthZ only. gRPC ExtAuthZ, decision caching, CONNECT, gRPC upstreams, HMAC signing and mTLS client identities are untested.',
     'DNS rebinding and network-layer egress ACLs are untested: the upstream is a fixed loopback address.',
     'This is PoC evidence. It does not change any NOT_RUN acceptance case or STD-CP gate.',
@@ -641,6 +679,8 @@ def prepare():
     S.admin, S.workload = secrets.token_urlsafe(24), 'gw-workload-' + secrets.token_urlsafe(24)
     S.token = {a: f'mock-{a}-' + secrets.token_urlsafe(24) for a in ('account-blue', 'account-green')}
     S.static_token = 'mock-account-shared-' + secrets.token_urlsafe(24)
+    S.session_key = secrets.token_hex(32)
+    shutil.copyfile(CONFIG, RUN_CONFIG)
     (RUN / 'jwks.json').write_text(json.dumps({'keys': [jwk(S.signing, KID)]}), encoding='utf-8')
     (RUN / 'gateway-workload.key').write_text(S.workload, encoding='utf-8')
     (RUN / 'static-provider.key').write_text(S.static_token, encoding='utf-8')
@@ -662,6 +702,20 @@ def ephemeral_range() -> tuple[int, int] | None:
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(description='P1 PoC runner')
+    ap.add_argument('--agentgateway', default='agentgateway', metavar='BINARY',
+                    help='agentgateway binary to test (default: the one on PATH)')
+    args = ap.parse_args()
+    binary = shutil.which(args.agentgateway)
+    if not binary:
+        print(f'agentgateway binary not found: {args.agentgateway}'); return 2
+    binary = str(Path(binary).resolve())
+    version = json.loads(sh([binary, '--version']) or '{}')
+    if not version.get('version'):
+        print(f'{binary} did not report a version'); return 2
+    evidence_file = HERE / 'evidence' / f"p1-run-agentgateway-{version['version']}.json"
+    print(f"agentgateway {version['version']} at {binary}")
+
     busy = [f'{n}:{p}' for n, p in PORTS.items() if port_open(p)]
     if busy:
         print('ports already in use, refusing to start:', ', '.join(busy)); return 2
@@ -672,7 +726,7 @@ def main() -> int:
     if eph and any(eph[0] <= p <= eph[1] for p in PORTS.values()):
         print(f'port block overlaps the ephemeral range {eph[0]}-{eph[1]} of this host, refusing to start'); return 2
     prepare()
-    validate = subprocess.run(['agentgateway', '--validate-only', '-f', CONFIG.name], cwd=HERE, capture_output=True, text=True)
+    validate = subprocess.run([binary, '--validate-only', '-f', CONFIG.name], cwd=HERE, capture_output=True, text=True)
     print('native config validation:', (validate.stdout + validate.stderr).strip())
     if validate.returncode != 0:
         return 2
@@ -682,10 +736,11 @@ def main() -> int:
     try:
         mock = lambda name, port: start(name, [sys.executable, str(HERE / 'mock_provider.py'), '--port', str(port),
                                                 '--name', name, '--state', str(RUN / 'state.json')], port)
+        S.default_start_rewrites = default_start_rewrites_config(binary)
         mock('mockcarrier', PORTS['provider'])
         mock('forbidden', PORTS['forbidden'])
         start_gatekeeper()
-        start('agentgateway', ['agentgateway', '-f', CONFIG.name], PORTS['gateway'])
+        start('agentgateway', [binary, '-f', str(RUN_CONFIG.relative_to(HERE))], PORTS['gateway'], env=gateway_env(S.session_key))
         listeners = sh(['ss', '-ltnH'])
         listeners = sorted(l.split()[3] for l in listeners.splitlines() if any(f':{p}' in l for p in PORTS.values()))
 
@@ -714,14 +769,16 @@ def main() -> int:
         'title': 'IDP Gateway P1 PoC: real agentgateway, mock Gatekeeper, mock provider',
         'started_at_utc': started.isoformat(), 'finished_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
         'operator': sh(['git', 'config', 'user.name']), 'host': platform.platform(), 'python': sys.version.split()[0],
-        'command': '.venv/bin/python poc/p1/run_poc.py',
+        'command': ' '.join(['.venv/bin/python', 'poc/p1/run_poc.py'] + sys.argv[1:]),
         'repository_commit': sh(['git', 'rev-parse', 'HEAD']),
         'repository_dirty_files': len([l for l in sh(['git', 'status', '--porcelain']).splitlines() if l.strip()]),
-        'agentgateway': {'version': json.loads(sh(['agentgateway', '--version']) or '{}'),
-                         'binary_sha256': hashlib.sha256(Path(sh(['which', 'agentgateway'])).read_bytes()).hexdigest(),
+        'agentgateway': {'version': version,
+                         'binary_sha256': hashlib.sha256(Path(binary).read_bytes()).hexdigest(),
                          'config_file': 'poc/p1/agentgateway.poc.yaml',
                          'config_sha256': hashlib.sha256(CONFIG.read_bytes()).hexdigest(),
-                         'native_validation': (validate.stdout + validate.stderr).strip()},
+                         'native_validation': (validate.stdout + validate.stderr).strip(),
+                         'session_key_supplied_by': 'SESSION_KEY environment variable, generated per run, not recorded',
+                         'start_without_session_key_rewrites_config_file': S.default_start_rewrites},
         'policy_sha256': hashlib.sha256((HERE / 'policy.poc.json').read_bytes()).hexdigest(),
         'policy_reference_sha256': hashlib.sha256((ROOT / 'scripts' / 'policy_reference.py').read_bytes()).hexdigest(),
         'ports': PORTS, 'host_ephemeral_port_range': ephemeral_range(),
@@ -731,9 +788,9 @@ def main() -> int:
         'formal_acceptance': 'NOT_RUN (unchanged by this PoC)',
         'cases': results,
     }
-    EVIDENCE.parent.mkdir(exist_ok=True)
-    EVIDENCE.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-    print(f"\n{passed}/{len(results)} cases passed; evidence: {EVIDENCE.relative_to(ROOT)}; ports left open: {still_open or 'none'}")
+    evidence_file.parent.mkdir(exist_ok=True)
+    evidence_file.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    print(f"\n{passed}/{len(results)} cases passed; evidence: {evidence_file.relative_to(ROOT)}; ports left open: {still_open or 'none'}")
     return 0 if passed == len(results) else 1
 
 

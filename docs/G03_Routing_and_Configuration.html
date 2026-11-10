@@ -161,7 +161,7 @@ ACTIVE → SUPERSEDED（被更新的 ACTIVE 发布取代，含回滚发布）
 <p>按 <code>pool → provider → provider_account → tenant/service → operation</code> 定义配额域。全局限流依赖专门协调服务时，必须验证多副本一致性和协调器故障行为；本地限流不可被标记为全局精确配额。<code>429</code> 必须明确来源（Gateway/Provider），勿把供应商余额和内部配额混为一谈。对 ExtAuthZ 高风险操作以 fail-closed 为默认；读取缓存允许使用时间窗必须由安全负责人批准，且缓存键包含全部授权输入。</p>
 <h2 id="h-10">7. 示例资产与检查方式</h2>
 <ul>
-<li><code>gateway/config/agentgateway.local.example.yaml</code>：基于官方路由形态的本地<strong>占位样例</strong>，仅使用 loopback upstream，已通过 agentgateway 1.6.0 <code>--validate-only</code> 语法检查但从未启动；实际运行过的配置见 <code>poc/p1/agentgateway.poc.yaml</code>。</li>
+<li><code>gateway/config/agentgateway.local.example.yaml</code>：基于官方路由形态的本地<strong>占位样例</strong>，仅使用 loopback upstream，已通过 agentgateway 1.6.0 与 1.7.0 的 <code>--validate-only</code> 语法检查但从未启动；实际运行过的配置见 <code>poc/p1/agentgateway.poc.yaml</code>。</li>
 <li><code>contracts/gateway/route-intent.schema.json</code>：中立 RouteIntent JSON Schema。</li>
 <li><code>gateway/policies/egress-policy.example.json</code>：经过显式枚举的 Provider Operation 白名单示例。</li>
 <li><code>scripts/validate_baseline.py</code>：离线 JSON/YAML/Markdown 与示例静态检查，不代替官方配置 schema 或运行时验收。</li>

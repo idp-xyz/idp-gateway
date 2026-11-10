@@ -95,7 +95,7 @@ ACTIVE → SUPERSEDED（被更新的 ACTIVE 发布取代，含回滚发布）
 
 ## 7. 示例资产与检查方式
 
-- `gateway/config/agentgateway.local.example.yaml`：基于官方路由形态的本地**占位样例**，仅使用 loopback upstream，已通过 agentgateway 1.6.0 `--validate-only` 语法检查但从未启动；实际运行过的配置见 `poc/p1/agentgateway.poc.yaml`。
+- `gateway/config/agentgateway.local.example.yaml`：基于官方路由形态的本地**占位样例**，仅使用 loopback upstream，已通过 agentgateway 1.6.0 与 1.7.0 的 `--validate-only` 语法检查但从未启动；实际运行过的配置见 `poc/p1/agentgateway.poc.yaml`。
 - `contracts/gateway/route-intent.schema.json`：中立 RouteIntent JSON Schema。
 - `gateway/policies/egress-policy.example.json`：经过显式枚举的 Provider Operation 白名单示例。
 - `scripts/validate_baseline.py`：离线 JSON/YAML/Markdown 与示例静态检查，不代替官方配置 schema 或运行时验收。

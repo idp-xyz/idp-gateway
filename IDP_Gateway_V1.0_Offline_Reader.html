@@ -1070,7 +1070,7 @@ ACTIVE → SUPERSEDED（被更新的 ACTIVE 发布取代，含回滚发布）
 <p>按 <code>pool → provider → provider_account → tenant/service → operation</code> 定义配额域。全局限流依赖专门协调服务时，必须验证多副本一致性和协调器故障行为；本地限流不可被标记为全局精确配额。<code>429</code> 必须明确来源（Gateway/Provider），勿把供应商余额和内部配额混为一谈。对 ExtAuthZ 高风险操作以 fail-closed 为默认；读取缓存允许使用时间窗必须由安全负责人批准，且缓存键包含全部授权输入。</p>
 <h2 id="h-10">7. 示例资产与检查方式</h2>
 <ul>
-<li><code>gateway/config/agentgateway.local.example.yaml</code>：基于官方路由形态的本地<strong>占位样例</strong>，仅使用 loopback upstream，已通过 agentgateway 1.6.0 <code>--validate-only</code> 语法检查但从未启动；实际运行过的配置见 <code>poc/p1/agentgateway.poc.yaml</code>。</li>
+<li><code>gateway/config/agentgateway.local.example.yaml</code>：基于官方路由形态的本地<strong>占位样例</strong>，仅使用 loopback upstream，已通过 agentgateway 1.6.0 与 1.7.0 的 <code>--validate-only</code> 语法检查但从未启动；实际运行过的配置见 <code>poc/p1/agentgateway.poc.yaml</code>。</li>
 <li><code>contracts/gateway/route-intent.schema.json</code>：中立 RouteIntent JSON Schema。</li>
 <li><code>gateway/policies/egress-policy.example.json</code>：经过显式枚举的 Provider Operation 白名单示例。</li>
 <li><code>scripts/validate_baseline.py</code>：离线 JSON/YAML/Markdown 与示例静态检查，不代替官方配置 schema 或运行时验收。</li>
@@ -1256,7 +1256,7 @@ TokenLease(lease_id, account_id, oauth_client_id, audience, scope_set,
 <li>模式 A：Gatekeeper 经可信 ExtAuthZ 返回受限 Header 注入信息（可能包含短期 Provider Token）。只允许 Gateway 授权通道处理，必须禁止日志泄密并验证缓存风险。</li>
 <li>模式 B：Gateway 通过受限本地 Broker/Sidecar 获取 Token 并注入，减少网络传播面，但增加独立部署和通信契约。</li>
 <li>模式 C：固定 Secret 引用通过 agentgateway BackendAuth；适合固定账户，不适合动态租户账户。</li>
-<li><strong>P1 PoC 结果</strong>（agentgateway 1.6.0 + Mock Gatekeeper/Provider，非正式验收）：模式 A 经 HTTP ExtAuthZ 响应头注入跑通并做到双租户账户隔离；模式 C 跑通，但所有租户共用同一账户；模式 B 未测。见 <a href="#poc-p1">P1 PoC 报告</a> 与 <a href="#adr-0008">ADR-0008</a>。</li>
+<li><strong>P1 PoC 结果</strong>（agentgateway 1.6.0 与 1.7.0 + Mock Gatekeeper/Provider，非正式验收）：模式 A 经 HTTP ExtAuthZ 响应头注入跑通并做到双租户账户隔离；模式 C 跑通，但所有租户共用同一账户；模式 B 未测。见 <a href="#poc-p1">P1 PoC 报告</a> 与 <a href="#adr-0008">ADR-0008</a>。</li>
 </ul>
 <p><strong>最初版本不能假设动态凭证插入对所有协议都可原生实现</strong>；必须以真实版本和 extAuthz 回包机制实测，必要时在受控 sidecar 实现，严禁因此开放任意 Header 注入。</p>
 <h2 id="h-7">5. 典型威胁（STRIDE / API Security）</h2>
@@ -2022,8 +2022,8 @@ pkg/contract/                            # 仅公共 API/配置 Schema，不放�
 </article></section><section class="reader-section" id="poc-p1"><div class="topline">POC P1 / 概念验证，非验收</div><article class="article"><h1 id="h-1">P1 PoC — 真实 agentgateway 上的认证、授权与凭证注入</h1>
 <blockquote>
 <p><strong>性质</strong>：技术可行性 PoC，不是验收。<code>tests/acceptance_matrix.csv</code> 的 95 条用例与六个 STD-CP 门禁保持 <code>NOT_RUN</code>。
-<strong>结果</strong>：40 个用例，39 PASS，1 FAIL（<code>P1-SS-04</code>，见"未解决"）。证据：<code>evidence/p1-run.json</code>。
-<strong>环境</strong>：agentgateway <strong>1.6.0</strong>（本机已安装的版本；设计目标 1.7.x 未测）、Mock Gatekeeper、Mock Provider，全部在本机回环地址。</p>
+<strong>结果</strong>：41 个用例，在 agentgateway 1.6.0 和 1.7.0 上各 40 PASS、1 FAIL（都是 <code>P1-SS-04</code>，见"未解决"）。证据：<code>evidence/p1-run-agentgateway-1.6.0.json</code>、<code>evidence/p1-run-agentgateway-1.7.0.json</code>。
+<strong>环境</strong>：agentgateway <strong>1.6.0</strong> 与 <strong>1.7.0</strong>（官方发布的二进制，SHA-256 与发布页公布的一致并记在证据里；同一份配置不加修改在两个版本上运行）、Mock Gatekeeper、Mock Provider，全部在本机回环地址。</p>
 </blockquote>
 <h2 id="h-2">回答了什么问题</h2>
 <p>G04 §4 要求用 PoC 比较三种凭证返回模式，G04 §9 列了 PoC 必须证明的结论。本 PoC 的回答：</p>
@@ -2076,32 +2076,41 @@ pkg/contract/                            # 仅公共 API/配置 Schema，不放�
 <td><strong>未测</strong>。</td>
 <td>—</td>
 </tr>
+<tr>
+<td>换到设计目标 1.7.x 结论还成立吗？</td>
+<td><strong>在 1.7.0 上成立</strong>。同一份配置两个版本都接受；41 个用例的每一项检查和观察到的状态码逐条相同，唯一的差别是下面"默认配置不安全的地方"第 6 项。</td>
+<td>两份证据文件</td>
+</tr>
 </tbody>
 </table>
 <h2 id="h-3">默认配置不安全的地方</h2>
-<p>下面五项在 agentgateway 1.6.0 上<strong>不配置就是不安全的</strong>，都是跑出来的，不是读文档读出来的。第 1、2 项是第一次运行的失败项；第 3、4 项是随后对照 G03 §5 把期望收紧才暴露的；第 5 项的"默认行为"来自一次单独的探测（一条不带任何策略的路由，把 <code>Cookie</code>、<code>X-Forwarded-*</code>、<code>Forwarded</code>、<code>Authorization</code>、<code>Host</code> 全部原样转发），这次探测不在证据文件里，证据文件只证明处理之后这些头不再到达 Provider。现在的 <code>agentgateway.poc.yaml</code> 已逐项处理。</p>
+<p>下面六项<strong>不配置就是不安全的</strong>，都是跑出来的，不是读文档读出来的。前五项的默认行为是在 1.6.0 上观察到的；1.7.0 上验证的是处理之后的配置同样有效，没有重测不处理时的默认行为。第 6 项是 1.7.0 新出现的。第 1、2 项是第一次运行的失败项；第 3、4 项是随后对照 G03 §5 把期望收紧才暴露的；第 5 项的"默认行为"来自一次单独的探测（一条不带任何策略的路由，把 <code>Cookie</code>、<code>X-Forwarded-*</code>、<code>Forwarded</code>、<code>Authorization</code>、<code>Host</code> 全部原样转发），这次探测不在证据文件里，证据文件只证明处理之后这些头不再到达 Provider。现在的 <code>agentgateway.poc.yaml</code> 已逐项处理。</p>
 <ol>
 <li><strong>Host 原样转发</strong>。上游收到的是调用方发来的 <code>Host: egress-api.idp.test</code>。必须为每条路由配置 <code>urlRewrite.authority</code>。</li>
 <li><strong>路径不做规范性检查</strong>。<code>%252e%252e</code>（双重编码）、<code>%00</code>、<code>;x=1</code> 被原样转发到上游。现在由两层拦截：路由 <code>authorization</code> 规则只放行由非保留字符组成、段不以点开头的路径；PDP 参考实现（<code>scripts/policy_reference.py</code>）用同一条规则。无 PDP 的模式 C 路由证明了网关这一层单独有效。带 ExtAuthZ 的路由上 PDP 先被调用，这些请求是被 PDP 拒绝的。</li>
 <li><strong>PDP 放行但没给凭证时，请求照样转发</strong>（不带任何凭证）。现在在 backend 上加了 <code>authorization</code> 规则，没有 <code>Authorization</code> 头就由网关拒绝。</li>
 <li><strong>Provider 的 <code>Location</code>、<code>Set-Cookie</code> 原样回给调用方</strong>。网关不跟随 302，但会把跳转目标交给调用方。现在用 <code>responseHeaderModifier.remove</code> 去掉。</li>
 <li><strong>调用方的 <code>Cookie</code>、<code>X-Forwarded-*</code>、<code>Forwarded</code> 原样传给 Provider</strong>。现在用 <code>requestHeaderModifier.remove</code> 去掉。</li>
+<li><strong>（仅 1.7.0）没有会话密钥时，网关启动会改写自己的配置文件</strong>。<code>config.session.key</code> 未设置时，1.7.0 生成一个密钥并写回启动它的那个文件；1.6.0 不会。第一次在 1.7.0 上运行时，仓库里受版本管理的 <code>agentgateway.poc.yaml</code> 就这样被加了三行（已还原，没有提交）。对按摘要审批、部署后回读对账的配置发布（G03）来说，这意味着运行中的文件不再是批准的那个文件，而且里面多了一个密钥。处理：用环境变量 <code>SESSION_KEY</code> 提供密钥，实测可阻止改写；<code>run_poc.py</code> 另外只让网关从 <code>.run/</code> 下的副本启动，仓库里的文件它碰不到。<code>P1-CF-01</code> 检查网关运行时所用的文件与仓库里的逐字节一致；证据的 <code>start_without_session_key_rewrites_config_file</code> 记录了每个版本在不提供密钥时的实际行为（1.6.0 为 <code>false</code>，1.7.0 为 <code>true</code>）。另外两个单独试过、不在证据文件里的观察：配置文件只读时 1.7.0 只记一条警告然后照常启动；<code>session.key: disabled</code> 只有 1.7.0 接受，1.6.0 会拒绝整份配置，所以两个版本共用的文件里不能这样写。</li>
 </ol>
 <h2 id="h-4">未解决</h2>
 <ul>
-<li><strong><code>P1-SS-04</code> FAIL：带两个 <code>Host</code> 头的请求被接受</strong>（RFC 9112 §3.2 要求 400）。网关用第一个做路由；上游 <code>Host</code> 已被第 1 项改写，所以没有形成越权，但请求本身应当被拒。1.6.0 的配置里没找到拒绝它的办法，需要在入口前置组件处理或向上游确认。</li>
+<li><strong><code>P1-SS-04</code> FAIL：带两个 <code>Host</code> 头的请求被接受</strong>（RFC 9112 §3.2 要求 400）。1.6.0 与 1.7.0 行为相同。网关用第一个做路由，第二个不会到达上游；上游 <code>Host</code> 已被第 1 项改写，所以没有形成越权，但请求本身应当被拒。配置层面没有办法：两个版本的配置 Schema 里都没有相关开关；CEL 规则里也识别不出来，<code>request.headers["host"]</code> 取不到值，<code>request.host</code> 只反映第一个（这是在两个版本上单独试验的结果，不在证据文件里）。需要在入口前置组件处理，或向上游提出。</li>
 <li><strong>请求头是"删黑名单"而不是"放白名单"</strong>。G03 §5 要求只传播 Provider 允许的头。本 PoC 只做到了按名字删除，调用方的任意自定义头（如 <code>X-Client-Trace</code>）仍会到达 Provider。</li>
-<li><strong>监听地址无法限制</strong>。1.6.0 的 <code>gateways.&lt;name&gt;</code> 和 <code>binds[]</code> 都没有绑定地址字段，<code>27611</code> 对本机所有网卡开放（证据里记录为 <code>*:27611</code>）。管理、指标、就绪端口可以也已经绑到 <code>127.0.0.1</code>。</li>
+<li><strong>监听地址无法限制</strong>。1.6.0 和 1.7.0 的配置 Schema 都没有监听器的绑定地址字段，<code>27611</code> 对本机所有网卡开放（两份证据里都记录为 <code>*:27611</code>）。管理、指标、就绪端口可以也已经绑到 <code>127.0.0.1</code>。</li>
 <li><strong>PDP 不可用与策略拒绝无法区分</strong>。PDP 超时或不在时调用方得到 403，与正常拒绝相同；PDP 返回 500 时调用方得到 500。G01 的失败来源区分（<code>GW-FR-043</code>）在这一点上没有满足。</li>
 <li><strong>规范路径规则很严</strong>：不允许 <code>%</code>，所以路径段里不能有需要编码的字符。真实 Provider 的 Operation 如果需要，得按 Operation 单独登记放宽，不能全局放开。</li>
 </ul>
 <h2 id="h-5">没有覆盖</h2>
 <p>Gatekeeper 是 Mock（没有真实身份源、授权库、Secret Manager、Provider 令牌端点）；Provider 是回环 Mock；所有链路都没有 TLS/mTLS，网关到 PDP 用共享密钥代替工作负载 mTLS；单进程，没有多副本、配置滚动、限流、负载；没有 gRPC ExtAuthZ、决策缓存、CONNECT、gRPC 上游、HMAC 签名、mTLS 客户端身份；没有 DNS 重绑定和网络层出口 ACL。完整列表在证据文件的 <code>scope_limits</code>。</p>
+<p>1.7.0 的发布说明里有一项与本 PoC 直接相关但没有试的新能力：<code>backendAuth.key.expression</code>，后端凭证由 CEL 表达式算出，可以取自外部授权服务返回的值。它可能让凭证不必作为请求头经过网关的头处理链，值得在 ADR-0008 批准前与现在的做法比较。</p>
 <h2 id="h-6">运行</h2>
 <pre><code class="language-bash">python3 -m venv .venv &amp;&amp; .venv/bin/pip install -r requirements.txt   # 一次
-.venv/bin/python poc/p1/run_poc.py                                   # 约 20 秒；全部通过才返回 0
+.venv/bin/python poc/p1/run_poc.py                                   # PATH 上的 agentgateway；约 20 秒；全部通过才返回 0
+.venv/bin/python poc/p1/run_poc.py --agentgateway /path/to/agentgateway   # 换一个版本的二进制
 </code></pre>
-<p>需要 <code>agentgateway</code> 在 <code>PATH</code> 上。脚本先检查端口段是否空闲、用 <code>agentgateway --validate-only</code> 校验配置，再启动四个进程，跑完全部停掉。每次运行生成新的签名密钥和 Mock 凭证，放在 <code>poc/p1/.run/</code>（已忽略），不写入证据。</p>
+<p>每个 agentgateway 版本写各自的证据文件 <code>evidence/p1-run-agentgateway-&lt;版本&gt;.json</code>。本机的 1.6.0 在 <code>/usr/local/bin</code>；1.7.0 是从官方发布页下载、核对 SHA-256 后放在用户目录下的，没有替换系统里的 1.6.0。</p>
+<p>脚本先检查端口段是否空闲、用 <code>--validate-only</code> 校验配置，再启动四个进程，跑完全部停掉。网关从 <code>poc/p1/.run/</code> 下的配置副本启动，会话密钥经环境变量 <code>SESSION_KEY</code> 提供（原因见上面第 6 项）。每次运行生成新的签名密钥、会话密钥和 Mock 凭证，放在 <code>poc/p1/.run/</code>（已忽略），不写入证据。</p>
 <table>
 <thead>
 <tr>
@@ -2139,16 +2148,18 @@ pkg/contract/                            # 仅公共 API/配置 Schema，不放�
 <li><code>agentgateway.poc.yaml</code>：原生配置，三条路由（两条模式 A，一条模式 C）。</li>
 <li><code>mock_gatekeeper.py</code>：HTTP ExtAuthZ Mock，决策用 <code>scripts/policy_reference.py</code>；线上形态见 <code>contracts/gatekeeper/openapi.yaml</code> 的 <code>/v1/extauthz/check</code>。</li>
 <li><code>mock_provider.py</code>：记录收到的每个请求；<code>policy.poc.json</code>：两租户两账户的授权数据。</li>
-<li><code>run_poc.py</code>：用例与期望。<code>evidence/p1-run.json</code>：最近一次运行的逐项检查与观察值，含二进制与配置的 SHA-256。</li>
+<li><code>run_poc.py</code>：用例与期望。<code>evidence/p1-run-agentgateway-&lt;版本&gt;.json</code>：该版本最近一次运行的逐项检查与观察值，含二进制与配置的 SHA-256。</li>
 </ul>
 <h2 id="h-8">期望是怎么定的</h2>
 <p>期望取自 G01/G03/G04，写在 <code>run_poc.py</code> 里，不达标记 FAIL，不改期望迁就结果。运行历史：</p>
 <ol>
 <li>第一次运行 37/39。失败的是 Host 转发和路径绕过（上面第 1、2 项），据此改了网关配置和 PDP 参考实现。</li>
 <li>随后对照 G03 §5 <strong>收紧</strong>了三处期望（无凭证时必须由网关拒绝、<code>Location</code> 不得回给调用方、<code>X-Forwarded-*</code> 不得传给 Provider），并新增 <code>P1-SS-04</code>。收紧后暴露出第 3、4 项和重复 <code>Host</code> 的问题；第 5 项的处理与检查是同时加上的。</li>
-<li>当前 39/40。没有任何期望被放宽过。</li>
+<li>在 1.6.0 上定格为 39/40。</li>
+<li>把同一份配置和同一套用例原样拿到 1.7.0 上：同样是 39/40，失败的同样是 <code>P1-SS-04</code>。这次运行暴露了第 6 项，据此新增 <code>P1-CF-01</code>，并把网关改为从副本启动、经环境变量拿会话密钥。</li>
+<li>当前两个版本都是 40/41。没有任何期望被放宽过。</li>
 </ol>
-<p><code>validate_baseline.py</code> 会核对证据里的配置、策略哈希与仓库当前文件一致；改了配置或 <code>policy_reference.py</code> 之后要重跑 PoC。</p>
+<p><code>validate_baseline.py</code> 会核对每份证据里的配置、策略哈希与仓库当前文件一致；改了配置或 <code>policy_reference.py</code> 之后，两个版本都要重跑。</p>
 </article></section><section class="reader-section" id="adr-0001"><div class="topline">ADR-0001 / 架构决策</div><article class="article"><h1 id="h-1">ADR-0001 — agentgateway 作为首选数据面实现</h1>
 <blockquote>
 <p><strong>状态</strong>：Proposed（待具名批准） · <strong>版本</strong> V1.0 · <strong>日期</strong> 2026-11-10<br/>
@@ -2284,18 +2295,19 @@ pkg/contract/                            # 仅公共 API/配置 Schema，不放�
 <li>线上契约见 <code>contracts/gatekeeper/openapi.yaml</code> 的 <code>/v1/extauthz/check</code>，网关侧必须配置的项见 <code>poc/p1/README.md</code> 的"默认配置不安全的地方"。</li>
 </ol>
 <h2 id="h-4">为什么这样决定</h2>
-<p><code>poc/p1</code> 在 agentgateway 1.6.0 上跑通了模式 A：双租户双账户隔离、撤销即时生效、伪造上下文无效、内部 JWT 不到第三方、PDP 故障默认拒绝、非幂等写不重放（40 个用例 39 个通过，证据 <code>poc/p1/evidence/p1-run.json</code>）。模式 C 同时跑通，但两个租户以同一账户到达 Provider，不满足多租户要求。一次往返同时完成授权与凭证下发，不需要第二个接口，也就没有可被重放或转交的句柄。</p>
+<p><code>poc/p1</code> 在 agentgateway 1.6.0 和 1.7.0 上用同一份配置跑通了模式 A：双租户双账户隔离、撤销即时生效、伪造上下文无效、内部 JWT 不到第三方、PDP 故障默认拒绝、非幂等写不重放（两个版本都是 41 个用例 40 个通过，证据在 <code>poc/p1/evidence/</code>）。模式 C 同时跑通，但两个租户以同一账户到达 Provider，不满足多租户要求。一次往返同时完成授权与凭证下发，不需要第二个接口，也就没有可被重放或转交的句柄。</p>
 <h2 id="h-5">被考虑的替代方案</h2>
 <p>模式 B（本地 Broker/Sidecar，未测，增加一个部署单元）；模式 C 作为默认（不能按租户选账户）；保留 <code>prepare</code> + 句柄兑换（多一次往返，且句柄的绑定与兑换语义从未定义）。</p>
 <h2 id="h-6">成本与剩余风险</h2>
 <ul>
 <li>证据来自 Mock Gatekeeper、Mock Provider、无 TLS、单进程；真实 Gatekeeper、工作负载 mTLS、多副本、负载下的行为未验证。</li>
-<li>只验证了 1.6.0。设计目标 1.7.x 必须用同一套 PoC 重跑后才能锁定版本。</li>
+<li>验证了 1.6.0 和 1.7.0，结果逐条相同；具体版本与镜像 digest 尚未锁定，换版本必须用同一套 PoC 重跑。1.7.0 在没有会话密钥时会改写自己的配置文件，部署时必须经 <code>SESSION_KEY</code> 提供密钥（见 <code>poc/p1/README.md</code>）。</li>
+<li>1.7.0 新增的 <code>backendAuth.key.expression</code>（后端凭证由 CEL 表达式取自外部授权的返回值）没有试；它是模式 A 的另一种实现方式，批准前应与响应头方式比较。</li>
 <li>每个请求同步依赖 PDP，延迟与可用性预算未测；决策缓存未启用也未测。</li>
 <li>Provider 凭证经过网关进程内存和 PDP 响应，日志与追踪的脱敏必须单独验证。</li>
 <li>只覆盖 Header 注入。HMAC 签名、mTLS 客户端身份、OAuth 授权码委托仍是设计提案。</li>
 <li>PoC 的遗留问题（重复 <code>Host</code> 头被接受、请求头只能按黑名单删除、监听地址不可限制、PDP 不可用与拒绝不可区分）在批准前需要处置或接受。</li>
 </ul>
 <h2 id="h-7">变更与回退条件</h2>
-<p>需由架构负责人、对应产品 Owner、安全负责人及运行负责人具名复核；在相关 PoC、负向测试、容量与灾备验证未完成前保持 Proposed。若 1.7.x 上同一 PoC 不通过，或真实 Gatekeeper 的延迟/可用性无法满足受批准目标，重新评估模式 B，而非自动维持本决策。</p>
+<p>需由架构负责人、对应产品 Owner、安全负责人及运行负责人具名复核；在相关 PoC、负向测试、容量与灾备验证未完成前保持 Proposed。若最终锁定的版本上同一 PoC 不通过，或真实 Gatekeeper 的延迟/可用性无法满足受批准目标，重新评估模式 B，而非自动维持本决策。</p>
 </article></section><div class="footer">Single File Offline Edition / IDP Gateway V1.0 · Design Draft</div></main></body></html>
