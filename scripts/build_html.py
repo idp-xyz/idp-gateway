@@ -2,17 +2,19 @@
 """Regenerate the HTML mirrors of the Markdown documents.
 
 Markdown is the source; the HTML pages are derived and must not be edited by hand inside
-an article body. Every page is a hand-made shell (header, navigation, footer, styles)
-around a body rendered from one Markdown file. This script re-renders the bodies and
-leaves the shells exactly as they are, so it never redesigns a page. A page that does not
-exist yet is created with a plain shell. The offline reader is one shell around several
-bodies, with images inlined and links pointed at its own sections.
+an article body or a sidebar. Every page is a hand-made shell (header, footer, styles)
+around a body rendered from one Markdown file. This script re-renders the bodies and the
+sidebar navigation and leaves the rest of each shell exactly as it is, so it never
+redesigns a page. A page that does not exist yet is created with a plain shell. The
+offline reader is one shell around several bodies, with images inlined and links pointed
+at its own sections.
 
 Rendering is what produced the delivered pages: python-markdown with tables and fenced
 code, sequential heading ids (h-1, h-2, ...), and links to mirrored .md files turned into
 links to their .html pages.
 
-index.html and portal/prototypes/ have no Markdown source and are not touched.
+index.html has no Markdown source: only its sidebar is generated here.
+portal/prototypes/ is not touched.
 
 Usage:  .venv/bin/python scripts/build_html.py           rewrite whatever is out of date
         .venv/bin/python scripts/build_html.py --check   list what is out of date, exit 1 if anything is
@@ -25,6 +27,7 @@ import markdown
 from bs4 import BeautifulSoup
 
 ROOT = Path(__file__).resolve().parents[1]
+ADRS = sorted(p.stem for p in (ROOT / 'decisions').glob('ADR-*.md'))
 
 # Markdown source -> HTML mirror. To mirror another document, add a line; the page is created on the next run.
 PAGES = {
@@ -37,8 +40,40 @@ PAGES = {
     'portal/spec/Gateway_Operations_UX_Spec_V1.0.md': 'portal/spec/Gateway_Operations_UX_Spec_V1.0.html',
     'portal/spec/Agentgateway_UI_Capability_Matrix_V1.0.md': 'portal/spec/Agentgateway_UI_Capability_Matrix_V1.0.html',
     'poc/p1/README.md': 'poc/p1/README.html',
-    'decisions/ADR-0008.md': 'decisions/ADR-0008.html',
+    'decisions/README.md': 'decisions/README.html',
+    **{f'decisions/{adr}.md': f'decisions/{adr}.html' for adr in ADRS},
 }
+# Pages without a Markdown source whose sidebar is still generated.
+SIDEBAR_ONLY = ['index.html']
+
+# The sidebar of every page that has one: (group title, [(number badge or None, label, target page)]).
+NAV = [
+    ('ENGINEERING BASELINE', [
+        ('G01', '产品需求与范围', 'docs/G01_Requirements.html'),
+        ('G02', '系统架构与 DDD 边界', 'docs/G02_Architecture.html'),
+        ('G03', '路由与配置治理', 'docs/G03_Routing_and_Configuration.html'),
+        ('G04', '认证鉴权与凭证安全', 'docs/G04_Identity_and_Security.html'),
+        ('G05', 'Go 工程与运维', 'docs/G05_Engineering_and_Operations.html'),
+        ('G06', '测试与验收', 'docs/G06_Testing_and_Acceptance.html'),
+    ]),
+    ('POC & DECISIONS', [
+        (None, 'P1 PoC 报告', 'poc/p1/README.html'),
+        (None, 'ADR 决策记录', 'decisions/README.html'),
+    ]),
+    ('GATEWAY OPERATIONS', [
+        (None, '18 页交互式 UI / UX 原型', 'portal/prototypes/gateway-operations.html'),
+    ]),
+]
+
+
+def read(path: str) -> str:
+    return (ROOT / path).read_text(encoding='utf-8')
+
+
+def title_of(source: str) -> str:
+    """Text of the first heading of a Markdown file."""
+    return read(source).lstrip().splitlines()[0].lstrip('# ').strip()
+
 
 READER = 'IDP_Gateway_V1.0_Offline_Reader.html'
 # (anchor id, label in the reader's navigation, line above the section, Markdown source)
@@ -50,12 +85,14 @@ READER_SECTIONS = [
     ('g05', 'G05 · Go 工程与运维', 'G05 / 工程实施', 'docs/G05_Engineering_and_Operations.md'),
     ('g06', 'G06 · 测试与验收', 'G06 / 验证与交付', 'docs/G06_Testing_and_Acceptance.md'),
     ('poc-p1', 'P1 PoC · 凭证注入实测', 'POC P1 / 概念验证，非验收', 'poc/p1/README.md'),
-    ('adr-0008', 'ADR-0008 · 出站凭证兑换', 'ADR-0008 / 决策（PROPOSED）', 'decisions/ADR-0008.md'),
+    *[(adr.lower(), title_of(f'decisions/{adr}.md').replace(' — ', ' · '), f'{adr} / 架构决策', f'decisions/{adr}.md')
+      for adr in ADRS],
 ]
 READER_ANCHOR = {md: sid for sid, _, _, md in READER_SECTIONS}
 
 ARTICLE_OPEN, ARTICLE_CLOSE = '<article class="article">', '</article>'
 SECTION_OPEN = '<section class="reader-section"'
+SIDEBAR = re.compile(r'<aside class="sidebar">.*?</aside>', re.S)
 IMAGE_TYPES = {'.svg': 'image/svg+xml', '.png': 'image/png'}
 EXTERNAL = re.compile(r'^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|//|#)')
 
@@ -64,15 +101,35 @@ NEW_PAGE = ('<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta
             '<link rel="stylesheet" href="{up}assets/site.css"></head><body><header class="site-header">'
             '<a class="brand" href="{up}index.html"><span class="brand-mark">IDP</span> IDP GATEWAY '
             '<span style="color:#99aab8">/</span> Engineering Baseline</a><div class="header-meta">V1.0 · DESIGN DRAFT · '
-            '2026-11-10</div><span class="pill warn">NOT PRODUCTION APPROVED</span></header><main class="page">'
-            '<div class="topline">{topline}</div><p><a href="{up}index.html">← 文档总览</a></p>'
+            '2026-11-10</div><span class="pill warn">NOT PRODUCTION APPROVED</span></header><div class="layout">'
+            '<aside class="sidebar"></aside><main class="page"><div class="topline">{topline}</div>'
             + ARTICLE_OPEN + '{body}' + ARTICLE_CLOSE +
+            '<div class="doc-footer-nav"><a href="{up}index.html">← 文档总览</a></div>'
             '<div class="footer">IDP Gateway V1.0 · 设计候选 · 文件可离线阅读 · 正式验收 / 审批 / 生产验证尚未完成</div>'
-            '</main></body></html>\n')
+            '</main></div></body></html>\n')
 
 
-def read(path: str) -> str:
-    return (ROOT / path).read_text(encoding='utf-8')
+def sidebar(page: str) -> str:
+    here = posixpath.dirname(page) or '.'
+
+    def item(number, label, target):
+        # A README page stands for its whole directory: "ADR 决策记录" stays lit on every ADR page.
+        active = page == target or (posixpath.basename(target) == 'README.html'
+                                    and posixpath.dirname(page) == posixpath.dirname(target))
+        badge = f'<span class="num">{number}</span> ' if number else ''
+        return (f'<a class="nav-item{" active" if active else ""}" href="{posixpath.relpath(target, here)}">'
+                f'{badge}{html.escape(label)}</a>')
+
+    groups = [f'<div class="aside-title">{html.escape(title)}</div>' + ''.join(item(*i) for i in items)
+              for title, items in NAV]
+    return ('<aside class="sidebar">' + '<hr class="aside-sep">'.join(groups) + '<hr class="aside-sep">'
+            f'<a class="nav-item" href="{posixpath.relpath("index.html", here)}">← 总览 / Overview</a>'
+            '<div class="aside-title">CURRENT STATUS</div><div class="pill plain">Runtime tests NOT_RUN</div></aside>')
+
+
+def with_sidebar(text: str, page: str) -> str:
+    """`text` with its sidebar, if it has one, replaced by the current navigation."""
+    return SIDEBAR.sub(lambda _: sidebar(page), text, count=1)
 
 
 def relink(href: str, source_dir: str, page: str) -> str:
@@ -109,18 +166,17 @@ def render(source: str, page: str) -> str:
 
 def build_page(source: str, page: str) -> str:
     body = render(source, page)
-    if not (ROOT / page).is_file():
-        title = BeautifulSoup(body, 'html.parser').find(re.compile(r'^h[1-6]$'))
-        return NEW_PAGE.format(title=html.escape(title.get_text() if title else source),
-                               up='../' * page.count('/'), body=body,
-                               topline=html.escape(' / '.join(Path(source).with_suffix('').parts).upper()))
-    shell = read(page)
+    if (ROOT / page).is_file():
+        shell = read(page)
+    else:
+        shell = NEW_PAGE.format(title=html.escape(title_of(source)), up='../' * page.count('/'), body='',
+                                topline=html.escape(' / '.join(Path(source).with_suffix('').parts).upper()))
     opener, closer = (ARTICLE_OPEN, ARTICLE_CLOSE) if ARTICLE_OPEN in shell else ('<body>', '</body>')
     if shell.count(opener) != 1:
         raise SystemExit(f'{page}: expected exactly one {opener}')
     head, rest = shell.split(opener, 1)
     tail = rest.rsplit(closer, 1)[1]
-    return head + opener + body + closer + tail
+    return with_sidebar(head, page) + opener + body + closer + tail
 
 
 def build_reader() -> str:
@@ -140,6 +196,7 @@ def build_reader() -> str:
 def build_all() -> dict[str, str]:
     """page path -> content it should have."""
     out = {page: build_page(source, page) for source, page in PAGES.items()}
+    out.update({page: with_sidebar(read(page), page) for page in SIDEBAR_ONLY})
     out[READER] = build_reader()
     return out
 

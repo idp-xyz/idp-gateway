@@ -1,0 +1,48 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>架构决策记录（ADR） | IDP Gateway V1.0</title><link rel="stylesheet" href="../assets/site.css"></head><body><header class="site-header"><a class="brand" href="../index.html"><span class="brand-mark">IDP</span> IDP GATEWAY <span style="color:#99aab8">/</span> Engineering Baseline</a><div class="header-meta">V1.0 · DESIGN DRAFT · 2026-11-10</div><span class="pill warn">NOT PRODUCTION APPROVED</span></header><div class="layout"><aside class="sidebar"><div class="aside-title">ENGINEERING BASELINE</div><a class="nav-item" href="../docs/G01_Requirements.html"><span class="num">G01</span> 产品需求与范围</a><a class="nav-item" href="../docs/G02_Architecture.html"><span class="num">G02</span> 系统架构与 DDD 边界</a><a class="nav-item" href="../docs/G03_Routing_and_Configuration.html"><span class="num">G03</span> 路由与配置治理</a><a class="nav-item" href="../docs/G04_Identity_and_Security.html"><span class="num">G04</span> 认证鉴权与凭证安全</a><a class="nav-item" href="../docs/G05_Engineering_and_Operations.html"><span class="num">G05</span> Go 工程与运维</a><a class="nav-item" href="../docs/G06_Testing_and_Acceptance.html"><span class="num">G06</span> 测试与验收</a><hr class="aside-sep"><div class="aside-title">POC &amp; DECISIONS</div><a class="nav-item" href="../poc/p1/README.html">P1 PoC 报告</a><a class="nav-item active" href="README.html">ADR 决策记录</a><hr class="aside-sep"><div class="aside-title">GATEWAY OPERATIONS</div><a class="nav-item" href="../portal/prototypes/gateway-operations.html">18 页交互式 UI / UX 原型</a><hr class="aside-sep"><a class="nav-item" href="../index.html">← 总览 / Overview</a><div class="aside-title">CURRENT STATUS</div><div class="pill plain">Runtime tests NOT_RUN</div></aside><main class="page"><div class="topline">DECISIONS / README</div><article class="article"><h1 id="h-1">架构决策记录（ADR）</h1>
+<blockquote>
+<p>每项决策的状态写在各篇正文开头。截至 2026-11-10，8 项全部是 <strong>Proposed（待具名批准）</strong>：它们是设计建议，不是已经执行的技术审批、生产基线或运行验收。</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>编号</th>
+<th>决策</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="ADR-0001.html">ADR-0001</a></td>
+<td>agentgateway 作为首选数据面实现</td>
+</tr>
+<tr>
+<td><a href="ADR-0002.html">ADR-0002</a></td>
+<td>Ingress / Egress / AI 分离部署</td>
+</tr>
+<tr>
+<td><a href="ADR-0003.html">ADR-0003</a></td>
+<td>Gatekeeper 为 IAM 与外部凭证权威</td>
+</tr>
+<tr>
+<td><a href="ADR-0004.html">ADR-0004</a></td>
+<td>外部 API 默认经过统一 L7 Egress</td>
+</tr>
+<tr>
+<td><a href="ADR-0005.html">ADR-0005</a></td>
+<td>取消独立 BIP 产品</td>
+</tr>
+<tr>
+<td><a href="ADR-0006.html">ADR-0006</a></td>
+<td>Fabric 发布批准与 Gateway 运行配置解耦</td>
+</tr>
+<tr>
+<td><a href="ADR-0007.html">ADR-0007</a></td>
+<td>零信任策略与失败默认拒绝</td>
+</tr>
+<tr>
+<td><a href="ADR-0008.html">ADR-0008</a></td>
+<td>出站凭证经 HTTP ExtAuthZ 响应头按请求注入</td>
+</tr>
+</tbody>
+</table>
+<p>ADR-0001 至 0007 随原始设计基线交付。ADR-0008 是其后依据 <a href="../poc/p1/README.html">P1 PoC 报告</a> 的实测结果提出的。</p>
+</article><div class="doc-footer-nav"><a href="../index.html">← 文档总览</a></div><div class="footer">IDP Gateway V1.0 · 设计候选 · 文件可离线阅读 · 正式验收 / 审批 / 生产验证尚未完成</div></main></div></body></html>

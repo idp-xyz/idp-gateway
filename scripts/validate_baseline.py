@@ -41,9 +41,15 @@ def check(key,fn):
 def exists():
  expected=['README.md','governance/project-manifest.json','tests/acceptance_matrix.csv']
  expected += [f'docs/{t}' for t in ['G01_Requirements.md','G02_Architecture.md','G03_Routing_and_Configuration.md','G04_Identity_and_Security.md','G05_Engineering_and_Operations.md','G06_Testing_and_Acceptance.md']]
- expected += [f'decisions/ADR-{i:04d}.md' for i in range(1,9)]
+ expected += [f'decisions/ADR-{i:04d}.md' for i in range(1,9)]+['decisions/README.md']
  assert all((R/f).is_file() for f in expected),[f for f in expected if not(R/f).is_file()]
- return f'{len(expected)} required baseline files'
+ # The ADR list and the ADR count on index.html are written by hand; keep them equal to the files.
+ adrs=[f.name for f in files('ADR-*.md')];listing=(R/'decisions/README.md').read_text(encoding='utf-8')
+ unlisted=[a for a in adrs if f']({a})' not in listing]
+ assert not unlisted,f'decisions/README.md does not list {unlisted}'
+ metric=f'<strong>{len(adrs):02d}</strong><span>ADR 待具名批准</span>'
+ assert metric in (R/'index.html').read_text(encoding='utf-8'),f'index.html does not show {len(adrs)} ADRs'
+ return f'{len(expected)} required baseline files; {len(adrs)} ADRs listed in decisions/README.md and counted on index.html'
 check('required_files',exists)
 
 def markdown_links():

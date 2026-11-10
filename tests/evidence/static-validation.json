@@ -1,28 +1,28 @@
 {
   "title": "IDP Gateway V1.0 offline static validation",
-  "executed_at_utc": "2026-11-10T12:56:50.308924+00:00",
+  "executed_at_utc": "2026-11-10T13:02:22.818022+00:00",
   "python_version": "3.12.3",
   "scope": "offline files, schemas, example data, traceability only",
   "checks": [
     {
       "check": "required_files",
       "status": "PASS",
-      "detail": "17 required baseline files"
+      "detail": "18 required baseline files; 8 ADRs listed in decisions/README.md and counted on index.html"
     },
     {
       "check": "markdown_relative_links",
       "status": "PASS",
-      "detail": "28 Markdown files, 44 local links"
+      "detail": "29 Markdown files, 54 local links"
     },
     {
       "check": "html_relative_links",
       "status": "PASS",
-      "detail": "13 HTML pages, 149 local asset/href refs"
+      "detail": "21 HTML pages, 297 local asset/href refs"
     },
     {
       "check": "html_mirrors_current",
       "status": "PASS",
-      "detail": "10 pages and the offline reader match their Markdown sources"
+      "detail": "18 pages and the offline reader match their Markdown sources"
     },
     {
       "check": "json_schema_and_examples",
