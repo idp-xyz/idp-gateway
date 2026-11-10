@@ -1,0 +1,229 @@
+# P1 PoC — native agentgateway configuration, written for and validated by the 1.6.0 binary.
+#
+# Real:  the agentgateway data plane (JWT validation, HTTP ExtAuthZ, header handling, routing).
+# Mock:  Gatekeeper PDP/Broker (mock_gatekeeper.py) and the provider (mock_provider.py).
+# Not covered: TLS/mTLS on any hop, real Secret Manager, multi-replica, load. Loopback only.
+#
+# Run through run_poc.py: it creates the .run/ files referenced below and starts the
+# gateway with poc/p1 as working directory (relative paths resolve against the cwd).
+#
+# Port block 47611-47617 is reserved for this PoC:
+#   47611 gateway listener   47612 mock provider      47613 mock Gatekeeper
+#   47614 gateway admin      47615 gateway stats      47616 gateway readiness
+#   47617 "forbidden" target that no route may ever reach
+#
+# The 1.6.0 schema has no bind-address field for a gateway listener: 47611 listens on every
+# interface of the machine for as long as the PoC runs. Admin, stats and readiness are
+# pinned to loopback below.
+config:
+  adminAddr: 127.0.0.1:47614
+  statsAddr: 127.0.0.1:47615
+  readinessAddr: 127.0.0.1:47616
+
+gateways:
+  egress-test:
+    port: 47611
+    protocol: HTTP
+    # Caller authentication (G04 §0 item 1). Strict: a request without a valid token is rejected.
+    # After validation the gateway removes the token from the request, so the caller's IDP JWT
+    # is not what travels on to the PDP or the provider.
+    jwtAuth:
+      mode: strict
+      issuer: https://gatekeeper.idp.test
+      audiences: [idp-egress-gateway]
+      jwks:
+        file: .run/jwks.json
+
+routes:
+# ---------------------------------------------------------------------------------------
+# Mode A (G04 §4): per-request credential chosen by the PDP and injected by the gateway.
+# ---------------------------------------------------------------------------------------
+- name: mockcarrier-tracking-get
+  gateways: [egress-test]
+  hostnames: ["egress-api.idp.test"]
+  matches:
+  - path:
+      pathPrefix: /providers/mockcarrier/v1/tracking
+    method: GET
+  policies:
+    # Canonical-path allowlist (G03 §5 "URI 改写"). Only /segment/segment... built from
+    # unreserved characters is routable: no percent sign (so no encoded or double-encoded
+    # dot or slash), no empty, "." or ".." segment, no trailing slash, no ";params".
+    # scripts/policy_reference.py applies the same rule on the PDP side; keep them identical.
+    authorization:
+      rules:
+      - allow: 'request.path.matches("^(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$")'
+    extAuthz:
+      host: 127.0.0.1:47613
+      failureMode: deny
+      # The only caller-supplied header the PDP sees. It is a *request* for an account,
+      # never an authorization fact; the PDP re-checks it against the tenant's grants.
+      includeRequestHeaders:
+      - x-provider-account
+      policies:
+        # Stand-in for workload mTLS: the gateway authenticates itself to the PDP.
+        backendAuth:
+          key:
+            file: .run/gateway-workload.key
+        http:
+          requestTimeout: 1s
+      protocol:
+        http:
+          path: '"/v1/extauthz/check"'
+          # Trusted context: built by the gateway from the *validated* token and from
+          # route constants. Nothing here is copied from caller-controlled headers.
+          addRequestHeaders:
+            x-idp-verified-subject: jwt.sub
+            x-idp-verified-tenant: jwt.tenant_id
+            x-idp-verified-env: jwt.env
+            x-idp-route-id: '"mockcarrier-tracking-get"'
+            x-idp-provider-id: '"mockcarrier"'
+            x-idp-operation-id: '"tracking.get"'
+            x-idp-environment: '"TEST"'
+            x-idp-method: request.method
+            x-idp-path: request.path
+          # Upstream authentication (G04 §0 item 3): the provider credential the PDP
+          # released for this decision is copied onto the upstream request.
+          includeResponseHeaders:
+          - authorization
+    urlRewrite:
+      # G03 §5: Host/:authority must be the approved upstream, never what the caller sent.
+      authority:
+        full: 127.0.0.1:47612
+      path:
+        prefix: /v1/tracking
+    # G03 §5: provider redirects and cookies are not handed to the business client.
+    responseHeaderModifier:
+      remove:
+      - location
+      - set-cookie
+    timeout:
+      requestTimeout: 2s
+  backends:
+  - host: 127.0.0.1:47612
+    policies:
+      # Fail closed if the PDP allowed but released no credential: the caller's token was
+      # already removed, so an Authorization header here can only have come from the PDP.
+      authorization:
+        rules:
+        - allow: 'request.headers["authorization"].startsWith("Bearer ")'
+      requestHeaderModifier:
+        remove:
+        - x-provider-account
+        - cookie
+        - x-forwarded-host
+        - x-forwarded-for
+        - x-forwarded-proto
+        - forwarded
+        - x-idp-verified-subject
+        - x-idp-verified-tenant
+        - x-idp-verified-env
+
+- name: mockcarrier-labels-create
+  gateways: [egress-test]
+  hostnames: ["egress-api.idp.test"]
+  matches:
+  - path:
+      pathPrefix: /providers/mockcarrier/v1/labels
+    method: POST
+  policies:
+    authorization:
+      rules:
+      - allow: 'request.path.matches("^(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$")'
+    extAuthz:
+      host: 127.0.0.1:47613
+      failureMode: deny
+      includeRequestHeaders:
+      - x-provider-account
+      policies:
+        backendAuth:
+          key:
+            file: .run/gateway-workload.key
+        http:
+          requestTimeout: 1s
+      protocol:
+        http:
+          path: '"/v1/extauthz/check"'
+          addRequestHeaders:
+            x-idp-verified-subject: jwt.sub
+            x-idp-verified-tenant: jwt.tenant_id
+            x-idp-verified-env: jwt.env
+            x-idp-route-id: '"mockcarrier-labels-create"'
+            x-idp-provider-id: '"mockcarrier"'
+            x-idp-operation-id: '"labels.create"'
+            x-idp-environment: '"TEST"'
+            x-idp-method: request.method
+            x-idp-path: request.path
+          includeResponseHeaders:
+          - authorization
+    urlRewrite:
+      authority:
+        full: 127.0.0.1:47612
+      path:
+        prefix: /v1/labels
+    responseHeaderModifier:
+      remove:
+      - location
+      - set-cookie
+    # No retry policy on purpose: a non-idempotent write must reach the provider at most once.
+    timeout:
+      requestTimeout: 2s
+  backends:
+  - host: 127.0.0.1:47612
+    policies:
+      authorization:
+        rules:
+        - allow: 'request.headers["authorization"].startsWith("Bearer ")'
+      requestHeaderModifier:
+        remove:
+        - x-provider-account
+        - cookie
+        - x-forwarded-host
+        - x-forwarded-for
+        - x-forwarded-proto
+        - forwarded
+        - x-idp-verified-subject
+        - x-idp-verified-tenant
+        - x-idp-verified-env
+
+# ---------------------------------------------------------------------------------------
+# Mode C (G04 §4): one fixed credential attached by the gateway. Included to show what it
+# can and cannot do: every tenant leaves the gateway as the same provider account.
+# ---------------------------------------------------------------------------------------
+- name: mockcarrier-rates-get-static
+  gateways: [egress-test]
+  hostnames: ["egress-api.idp.test"]
+  matches:
+  - path:
+      pathPrefix: /providers/mockcarrier/v1/rates
+    method: GET
+  policies:
+    # No PDP on this route, so this rule is the only path check there is.
+    authorization:
+      rules:
+      - allow: 'request.path.matches("^(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$")'
+    urlRewrite:
+      authority:
+        full: 127.0.0.1:47612
+      path:
+        prefix: /v1/rates
+    responseHeaderModifier:
+      remove:
+      - location
+      - set-cookie
+    timeout:
+      requestTimeout: 2s
+  backends:
+  - host: 127.0.0.1:47612
+    policies:
+      backendAuth:
+        key:
+          file: .run/static-provider.key
+      requestHeaderModifier:
+        remove:
+        - x-provider-account
+        - cookie
+        - x-forwarded-host
+        - x-forwarded-for
+        - x-forwarded-proto
+        - forwarded

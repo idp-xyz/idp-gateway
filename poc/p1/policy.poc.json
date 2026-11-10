@@ -1,0 +1,44 @@
+{
+  "version": "poc-p1",
+  "default_decision": "DENY",
+  "registered_operations": [
+    {
+      "route_id": "mockcarrier-tracking-get",
+      "provider_id": "mockcarrier",
+      "operation_id": "tracking.get",
+      "environment": "TEST",
+      "method": "GET",
+      "path_prefix": "/providers/mockcarrier/v1/tracking",
+      "upstream_hostname": "mockcarrier.example",
+      "port": 443,
+      "credential_binding_ref": "gatekeeper:mockcarrier-test",
+      "allowed_tenants": ["tenant-blue", "tenant-green"],
+      "accounts_by_tenant": {
+        "tenant-blue": ["account-blue"],
+        "tenant-green": ["account-green"]
+      },
+      "allowed_service_ids": ["parcel-service", "cargo-service"]
+    },
+    {
+      "route_id": "mockcarrier-labels-create",
+      "provider_id": "mockcarrier",
+      "operation_id": "labels.create",
+      "environment": "TEST",
+      "method": "POST",
+      "path_prefix": "/providers/mockcarrier/v1/labels",
+      "upstream_hostname": "mockcarrier.example",
+      "port": 443,
+      "credential_binding_ref": "gatekeeper:mockcarrier-test",
+      "allowed_tenants": ["tenant-blue", "tenant-green"],
+      "accounts_by_tenant": {
+        "tenant-blue": ["account-blue"],
+        "tenant-green": ["account-green"]
+      },
+      "allowed_service_ids": ["parcel-service"]
+    }
+  ],
+  "allow_request_redirects": false,
+  "enforce_tls_upstream": true,
+  "gateway_may_retry_non_idempotent": false,
+  "notes": "PoC fixture evaluated by scripts/policy_reference.py inside the mock Gatekeeper. The upstream_hostname is nominal: the PoC upstream is a loopback mock, with no TLS."
+}
