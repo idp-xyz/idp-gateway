@@ -1352,8 +1352,10 @@ def main() -> int:
                 fn(c)
             except Exception as e:
                 c.check(f'case raised {type(e).__name__}: {e}', False)
-            # Observation, not a check: over which HTTP version the gateway asked.
-            S.pdp_protocols.update(e.get('proto') for e in pdp_log() if e.get('peer_identity') == pki.ID['gateway'] and e.get('proto'))
+            # Observation, not a check: over which HTTP version the gateway asked. P1-AZ-11 is left
+            # out: there the runner itself calls the PDP with the gateway's certificate.
+            if cid != 'P1-AZ-11':
+                S.pdp_protocols.update(e.get('proto') for e in pdp_log() if e.get('peer_identity') == pki.ID['gateway'] and e.get('proto'))
             ok = bool(c.checks) and all(x['ok'] for x in c.checks)
             results.append({**record, 'result': 'PASS' if ok else 'FAIL',
                             'checks': c.checks, 'observed': c.observed, 'indicative_for': list(maps_to)})
