@@ -1,0 +1,11 @@
+# Offline validation (scripts/validate_baseline.py, tests/contracts, tests/security)
+PyYAML>=6.0
+jsonschema>=4.10
+beautifulsoup4>=4.12
+
+# P1 PoC harness (poc/p1): signs test JWTs and publishes the matching JWKS
+PyJWT>=2.7
+cryptography>=41
+
+# Browser checks of the offline Console mock (tests/ui, tests/ux) additionally need
+# `playwright` plus a Chromium build; they are not installed by this file.
