@@ -1005,11 +1005,16 @@ def compose_config(binary: str) -> dict:
         v = subprocess.run([binary, '--validate-only', '-f', str(RUN_CONFIG.relative_to(HERE))], cwd=HERE, capture_output=True, text=True)
         return v.returncode == 0, (v.stdout + v.stderr).strip()
 
+    # Both files end with their `routes` list, so the overlay's items can follow the base
+    # file's as text: what the gateway reads is the reviewed bytes, not a re-serialisation.
     base = CONFIG.read_bytes()
+    _, key, items = OVERLAY.read_bytes().partition(b'\nroutes:\n')
+    if not key or not items.startswith(b'- name:'):
+        raise SystemExit(f'{OVERLAY.name}: expected a single top-level "routes:" list')
     base_ok, base_said = validate(base)
-    overlay_ok, overlay_said = validate(base + b'\n' + OVERLAY.read_bytes()) if base_ok else (False, 'not tried')
+    overlay_ok, overlay_said = validate(base + b'\n' + items) if base_ok else (False, 'not tried')
     S.overlay_accepted = overlay_ok
-    S.config_bytes = base + b'\n' + OVERLAY.read_bytes() if overlay_ok else base
+    S.config_bytes = base + b'\n' + items if overlay_ok else base
     RUN_CONFIG.write_bytes(S.config_bytes)
     state = {'admin_secret': S.admin, 'ports': PORTS, 'tls_dir': str(TLS),
              'config_digest': 'sha256:' + hashlib.sha256(S.config_bytes).hexdigest(),

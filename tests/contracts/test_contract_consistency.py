@@ -68,7 +68,7 @@ class CredentialRedemption(unittest.TestCase):
     def poc_routes(self):
         """Every PoC route with ExtAuthZ: the base file plus the route only 1.7.0 accepts."""
         routes = (yaml.safe_load(text('poc/p1/agentgateway.poc.yaml'))['routes']
-                  + yaml.safe_load(text('poc/p1/agentgateway.poc.key-expression.yaml')))
+                  + yaml.safe_load(text('poc/p1/agentgateway.poc.key-expression.yaml'))['routes'])
         routes = [r for r in routes if 'extAuthz' in r.get('policies', {})]
         self.assertEqual(len(routes), 4)
         return routes

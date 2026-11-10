@@ -1,7 +1,8 @@
 # P1 PoC — one more route for agentgateway.poc.yaml. NOT a configuration file on its own:
-# run_poc.py appends these list items to the `routes` of agentgateway.poc.yaml, and only
-# when the binary's validator accepts the result. 1.7.0 does; 1.6.0 rejects
+# run_poc.py appends the items under `routes` below to the `routes` of agentgateway.poc.yaml,
+# and only when the binary's validator accepts the result. 1.7.0 does; 1.6.0 rejects
 # backendAuth.key.expression, and the cases for this route are then reported as SKIP.
+# Keep `routes` the only key of this file.
 #
 # Same PDP, same ExtAuthZ exchange and same answer as the Mode A routes. What differs is
 # how the gateway takes the credential out of that answer:
@@ -9,6 +10,7 @@
 #   this route     `metadata` reads it into extauthz.credential, and
 #                  backendAuth.key.expression places that value on the upstream request.
 
+routes:
 - name: mockcarrier-pickups-get-expression
   gateways: [egress-test]
   hostnames: ["egress-api.idp.test"]

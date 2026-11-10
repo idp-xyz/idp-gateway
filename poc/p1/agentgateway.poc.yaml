@@ -11,8 +11,9 @@
 # gateway with poc/p1 as working directory (relative paths resolve against the cwd).
 #
 # A second file, agentgateway.poc.key-expression.yaml, holds one more route that only the
-# 1.7.0 schema accepts. run_poc.py appends it to the copy the gateway is started from when
-# the binary's own validator accepts the result. Keep `routes` the last key of this file.
+# 1.7.0 schema accepts. run_poc.py appends that route to the copy the gateway is started
+# from when the binary's own validator accepts the result. Keep `routes` the last key of
+# this file.
 #
 # There is deliberately no config.session.key here. 1.7.0 started without one generates a
 # key and WRITES IT INTO THE CONFIG FILE it was started from. run_poc.py therefore starts
