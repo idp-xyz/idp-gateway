@@ -25,7 +25,7 @@
 | [G05 工程运维](docs/G05_Engineering_and_Operations.md) | Go DDD 结构、观测、CI/CD、SLO、HA、Runbook |
 | [G06 验收交付](docs/G06_Testing_and_Acceptance.md) | 需求→测试追溯、门禁、真实证据规范 |
 
-**其它资产**：`decisions/ADR-0001..0008.md`、`poc/p1/`（P1 PoC）、`governance/project-manifest.json`、`contracts/` (OpenAPI/JSON Schema)、`gateway/config/`（仅示意）、`gateway/policies/`、`tests/acceptance_matrix.csv`、`scripts/validate_baseline.py`。
+**其它资产**：`decisions/ADR-0001..0008.md`、`poc/p1/`（P1 PoC）、`governance/project-manifest.json`、`contracts/` (OpenAPI/JSON Schema)、`gateway/config/`（仅示意）、`gateway/policies/`、`tests/acceptance_matrix.csv`、`scripts/validate_baseline.py`、`scripts/build_html.py`。
 
 ## 离线静态验证
 
@@ -40,7 +40,9 @@ python3 -m unittest discover -s tests/security -p 'test_*.py'
 
 ## 阅读顺序
 
-建议从离线 [index.html](index.html) 进入；浏览器不联网也能打开正文和本包生成的 SVG 图。源 Markdown 和 HTML 一一对应。
+建议从离线 [index.html](index.html) 进入；浏览器不联网也能打开正文和本包生成的 SVG 图。也可以只打开单文件的 [离线阅读器](IDP_Gateway_V1.0_Offline_Reader.html)。
+
+Markdown 是源，HTML 是生成物：改了 Markdown 之后运行 `.venv/bin/python scripts/build_html.py`，它重新生成各页面的正文和离线阅读器的各章节，页面外壳（页眉、导航、样式）保持不动；`validate_baseline.py` 会在 HTML 落后于 Markdown 时报错。要给另一份 Markdown 生成页面，在该脚本的 `PAGES` 里加一行。`index.html` 和 `portal/prototypes/` 没有 Markdown 源，是手工维护的。
 
 ## Gateway Operations UI/UX（同版增补）
 

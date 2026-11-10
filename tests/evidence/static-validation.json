@@ -1,6 +1,6 @@
 {
   "title": "IDP Gateway V1.0 offline static validation",
-  "executed_at_utc": "2026-11-10T12:34:58.722324+00:00",
+  "executed_at_utc": "2026-11-10T12:56:50.308924+00:00",
   "python_version": "3.12.3",
   "scope": "offline files, schemas, example data, traceability only",
   "checks": [
@@ -12,12 +12,17 @@
     {
       "check": "markdown_relative_links",
       "status": "PASS",
-      "detail": "28 Markdown files, 41 local links"
+      "detail": "28 Markdown files, 44 local links"
     },
     {
       "check": "html_relative_links",
       "status": "PASS",
-      "detail": "11 HTML pages, 137 local asset/href refs"
+      "detail": "13 HTML pages, 149 local asset/href refs"
+    },
+    {
+      "check": "html_mirrors_current",
+      "status": "PASS",
+      "detail": "10 pages and the offline reader match their Markdown sources"
     },
     {
       "check": "json_schema_and_examples",
@@ -66,7 +71,7 @@
     }
   ],
   "summary": {
-    "pass": 12,
+    "pass": 13,
     "fail": 0
   },
   "gatekeeper_runtime": "NOT_RUN",

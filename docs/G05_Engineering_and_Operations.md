@@ -146,7 +146,7 @@ UI 实施：单一 IDP Console 按协议能力模块化实现，后端使用 Gat
 
 **性能与隐私验收**：测量开启/关闭捕获时的 CPU、内存、请求/响应 P95/P99、带宽、存储成本；限制单报文大小和采样率；日志注入与跨租户读取负面用例必须通过。默认 Body 捕获为关闭；任何生产临时捕获需自动过期与审计。
 
-官方参考： https://agentgateway.dev/docs/standalone/latest/documentation/observability/access-logs/view/ ； https://agentgateway.dev/docs/standalone/latest/documentation/configuration/traffic-management/extproc/ ； https://agentgateway.dev/docs/standalone/latest/documentation/operations/trace-requests/ 。
+官方参考： <https://agentgateway.dev/docs/standalone/latest/documentation/observability/access-logs/view/> ； <https://agentgateway.dev/docs/standalone/latest/documentation/configuration/traffic-management/extproc/> ； <https://agentgateway.dev/docs/standalone/latest/documentation/operations/trace-requests/> 。
 
 
 ## 11. 补强后的实施包与运维基线

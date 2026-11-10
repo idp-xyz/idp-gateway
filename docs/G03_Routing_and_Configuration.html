@@ -235,7 +235,7 @@ ACTIVE → SUPERSEDED（被更新的 ACTIVE 发布取代，含回滚发布）
 </ul>
 <h3 id="h-17">10.3 协议兼容矩阵</h3>
 <p>参考 <code>tests/protocol-compatibility.csv</code>，各能力的执行状态初始为 <code>NOT_RUN</code>。对 gRPC 需测 HTTP/2、unary、client/server/bidi streams、metadata/trailer/status；对 HTTP 测 chunked、SSE、二进制、大包、HEAD/OPTIONS、路径规范化和编码；超时取消和连接清理亦需验证。支持清单应随 agentgateway 镜像 digest 固定。</p>
-<h2>请求 / 响应映射的证据和变更边界</h2>
+<h2 id="h-18">请求 / 响应映射的证据和变更边界</h2>
 <p>每次受管 L7 代理调用视作两个逻辑通信 Hop：<code>Caller ↔ Gateway</code> 与 <code>Gateway ↔ Upstream</code>。Gateway 能够改变外发 Request 的目标路径、Host、Header、认证材料，以及返回给 Caller 的 Response 状态、Header 和错误体。因此仅展示“第三方 HTTP 200”不足以判断客户端是否收到了 HTTP 200；两条 Hop 必须分别呈现 Request 与 Response，并在单一 Trace 下关联。</p>
 <ul>
 <li>采集阶段必须声明是<strong>转换前还是转换后</strong>的报文；请求签名、凭证注入、编码与代理转码的顺序必须通过固定 agentgateway 版本的真实 PoC 验证。</li>

@@ -73,6 +73,14 @@ def html_links():
  return f'{len(pages)} HTML pages, {count} local asset/href refs'
 check('html_relative_links',html_links)
 
+def html_mirrors():
+ """The HTML pages are generated from Markdown; a page that differs from its source is stale."""
+ import build_html
+ stale=build_html.out_of_date()
+ assert not stale,f'out of date, run scripts/build_html.py: {stale}'
+ return f'{len(build_html.PAGES)} pages and the offline reader match their Markdown sources'
+check('html_mirrors_current',html_mirrors)
+
 def json_and_schema():
  n=0
  for f in files('*.json'):
@@ -203,6 +211,9 @@ def poc_p1_evidence():
  s=e['summary'];results=[c['result'] for c in e['cases']]
  assert s['cases']==len(results) and s['pass']==results.count('PASS') and s['fail']==results.count('FAIL')
  failed=[c['id'] for c in e['cases'] if c['result']!='PASS']
+ # index.html has no Markdown source, so the result it quotes is checked here.
+ quoted=f"{s['cases']} 条用例通过 {s['pass']} 条"
+ assert quoted in (R/'index.html').read_text(encoding='utf-8'),f'index.html does not say "{quoted}"'
  return (f"PoC evidence matches current config/policy: {s['pass']}/{s['cases']} cases PASS on agentgateway "
          f"{e['agentgateway']['version'].get('version')}; FAIL: {', '.join(failed) or 'none'}; not acceptance evidence")
 check('poc_p1_evidence_current',poc_p1_evidence)

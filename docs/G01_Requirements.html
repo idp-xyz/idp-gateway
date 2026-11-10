@@ -578,7 +578,7 @@
 <li><strong>用户体验</strong>：Console 应提供“配置/授权/流量/报文/发布”关联诊断，但生产配置写入仍由唯一受控 Publisher 管理；原生 UI 保留受控排障能力。</li>
 </ol>
 <p><strong>实现状态</strong>：本版本已补充中立契约、静态检查和 Mock UI；未实现真实 Agentgateway/Gatekeeper/Provider 连接，所有正式运行验收仍为 NOT_RUN。</p>
-<h2>Message Inspector：请求与响应配对验收边界</h2>
+<h2 id="h-14">Message Inspector：请求与响应配对验收边界</h2>
 <p>Gateway Console 的一次 Trace 必须按<strong>客户端 ↔ Gateway</strong>及<strong>Gateway ↔ 上游</strong>两条通信链路呈现对应 Request/Response 四个观察点，而不是只查看响应或只查看单侧流水。每个观测报文分别显示 Method / Request Target / HTTP Version（请求）、Status / gRPC Status（响应）、Headers / Metadata、Body 样本、捕获状态、脱敏状态、截断标记、大小、Trace ID 与关联请求 ID。</p>
 <ul>
 <li>401/403/429 前置拒绝：标记 <code>NOT_SENT</code>，上游响应为 <code>NOT_OBSERVED/NOT_REACHED</code>，<strong>不得捏造第三方响应</strong>。</li>

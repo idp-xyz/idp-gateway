@@ -276,7 +276,7 @@ pkg/contract/                            # 仅公共 API/配置 Schema，不放�
 </ul>
 <h3 id="h-19">11.4 不得宣称的生产能力</h3>
 <p>目前<strong>没有</strong>真实 agentgateway 原生配置验证、网络安全、动态 Secret Injection、负载、蓝绿发布或可信报文捕获结果。全部运行门禁和生产调试均 <code>NOT_RUN</code>。</p>
-<h2>双 Hop Request / Response 观测实现规范</h2>
+<h2 id="h-20">双 Hop Request / Response 观测实现规范</h2>
 <p>在与 agentgateway 固定版本进行真实验证后，BFF 的 Message Inspector Read Model 应按两个 Hop 将四个 Observation 组织在一条 Trace 中：<code>INGRESS_REQUEST</code>、<code>EGRESS_REQUEST</code>、<code>UPSTREAM_RESPONSE</code>、<code>DOWNSTREAM_RESPONSE</code>。响应与请求按 Trace ID、Route ID、Config Digest、Tenant Ref、Client Request ID 和 Provider Request ID 关联。</p>
 <p>每份观测记录需要显式的 <code>capture_status</code>（包含 <code>METADATA_ONLY</code>、<code>CAPTURED_SANITIZED</code>、<code>NOT_SENT</code>、<code>NOT_OBSERVED</code>、<code>TRUNCATED</code>、<code>NOT_CAPTURED</code>）、正文长度和截断标记。按 HTTP Method/Target、响应 Status、Headers、Body、Content-Type、HTTP/gRPC Metadata 和 Trailers 分类输出，避免将捕获未发生误显示成空报文。</p>
 <p>生产默认只记录元数据，Body 捕获按审批设置 TTL、范围、大小、采样、加密存储与到期删除。UI 侧任何复制、导出与查询都必须经服务器端 ABAC 校验并审计。真正的性能开销与采集能力需要在代理配置、ExtProc/Telemetry 顺序及大包/流式协议测试中确认，不能由离线 UI 推断。</p>

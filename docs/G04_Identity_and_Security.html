@@ -103,7 +103,7 @@ TokenLease(lease_id, account_id, oauth_client_id, audience, scope_set,
 <li>模式 A：Gatekeeper 经可信 ExtAuthZ 返回受限 Header 注入信息（可能包含短期 Provider Token）。只允许 Gateway 授权通道处理，必须禁止日志泄密并验证缓存风险。</li>
 <li>模式 B：Gateway 通过受限本地 Broker/Sidecar 获取 Token 并注入，减少网络传播面，但增加独立部署和通信契约。</li>
 <li>模式 C：固定 Secret 引用通过 agentgateway BackendAuth；适合固定账户，不适合动态租户账户。</li>
-<li><strong>P1 PoC 结果</strong>（agentgateway 1.6.0 + Mock Gatekeeper/Provider，非正式验收）：模式 A 经 HTTP ExtAuthZ 响应头注入跑通并做到双租户账户隔离；模式 C 跑通，但所有租户共用同一账户；模式 B 未测。见 <code>poc/p1/README.md</code> 与 <code>decisions/ADR-0008.md</code>。</li>
+<li><strong>P1 PoC 结果</strong>（agentgateway 1.6.0 + Mock Gatekeeper/Provider，非正式验收）：模式 A 经 HTTP ExtAuthZ 响应头注入跑通并做到双租户账户隔离；模式 C 跑通，但所有租户共用同一账户；模式 B 未测。见 <a href="../poc/p1/README.html">P1 PoC 报告</a> 与 <a href="../decisions/ADR-0008.html">ADR-0008</a>。</li>
 </ul>
 <p><strong>最初版本不能假设动态凭证插入对所有协议都可原生实现</strong>；必须以真实版本和 extAuthz 回包机制实测，必要时在受控 sidecar 实现，严禁因此开放任意 Header 注入。</p>
 <h2 id="h-7">5. 典型威胁（STRIDE / API Security）</h2>
@@ -323,7 +323,7 @@ TokenLease(lease_id, account_id, oauth_client_id, audience, scope_set,
 <h3 id="h-17">11.2 安全按需诊断</h3>
 <p><code>gateway/policies/diagnostic-capture.schema.json</code> 与 <code>contracts/gateway/diagnostic-event.schema.json</code> 定义 CaptureGrant 与四阶段证据。默认只收集元数据；如需正文，CaptureGrant 必须具备 Route、Tenant、用途、审批人、开始/结束时间、保留期、消息大小上限和脱敏规则，并且<strong>开始时刻严格早于到期时刻</strong>（见离线语义校验及真实服务端验收）。</p>
 <p>所有捕获和导出都需要后端 ABAC 与不可变审计；对二进制/gRPC Streaming 只记录有界元数据而不承诺完整正文。开发者无权借由 Agentgateway 原生 UI 或日志绕过这层保护。</p>
-<h2>Message Inspector 请求 / 响应成对诊断的安全界限</h2>
+<h2 id="h-18">Message Inspector 请求 / 响应成对诊断的安全界限</h2>
 <p>成对报文展示不是授权的例外。<code>Request Headers</code>、<code>Response Headers</code>、<code>Request Body</code>、<code>Response Body</code> 四类证据均需按主体、租户、应用、环境、路由与用途独立授权；前端 Viewer 的按钮隐藏绝不能替代服务端策略校验。</p>
 <p>默认不捕获 Body；当审批后采集时，必须在持久化、Telemetry Export、索引和导出前进行字段删除或不可逆脱敏，覆盖 <code>Authorization</code>、<code>Proxy-Authorization</code>、<code>Cookie/Set-Cookie</code>、API Key、Token、Secret、敏感 Query 参数、地址电话和其他 PII。正文采样需按大小、时间和数据类别限制；二进制及流式协议仅展示元数据，除非明确批准受控解码。</p>
 <p>任何 <code>NOT_OBSERVED</code> 不得替换为“空 HTTP 200”；任何下游 Gateway 生成的 504 不得记录为第三方返回的 HTTP 504。报文的时间戳、采集点位置与脱敏策略版本属于审计证据。</p>
