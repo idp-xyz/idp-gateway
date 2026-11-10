@@ -34,6 +34,10 @@
 
 - **Fabric**：发布 Intent 的 `RouteIntent` 应引用统一 `contracts/gateway/route-intent.schema.json`；Ingress / Egress / AI 采用分支模型，不能要求所有接口具有 ProviderAccount。新增 `policy_bundle_ref`、编译产物摘要、期望 generation、Canary/Observed 的回读关联；Fabric 不负责直接编译 agentgateway 原生配置。
 - **Gatekeeper**：原 `credentials/materialize` 仅适合狭窄 Header 注入；新增候选 `/v1/egress/credentials/prepare` 类型化 CredentialUse（Header Injection / Trusted Request Signer / mTLS Identity Reference）。所有 API 仅为提案，必须完成真实 ExtAuthZ/BackendAuth 版本与协议兼容测试；不能将这份内部 OpenAPI 误当 agentgateway 原生 ExtAuthZ wire 协议。
+- **P1 PoC 之后的修正（同为提案，待目标系统 Owner 接收）**：
+  - Gatekeeper 需要提供的是一个 **HTTP ExtAuthZ 端点**（`contracts/gatekeeper/openapi.yaml` 的 `/v1/extauthz/check`）：允许时在响应头里按请求下发 Provider 凭证，只接受已认证的网关工作负载调用。`credentials/materialize` 不实现，`secure_binding_handle` 不签发；`credentials/prepare` 只返回计划、不返回秘密。依据与剩余风险见 `decisions/ADR-0008.md`，证据来自 Mock Gatekeeper，不是 Gatekeeper 的实现。
+  - 决策结构新增必填 `revocation_epoch`，决策请求新增 `method`、`path`、`config_digest` 与可选 `delegated_subject`。
+  - Fabric 提交的请求体是 `RoutePublicationIntent` 信封（`idempotency_key`、`release_ref`、`target_id` + 内嵌 `intent`），发布状态以同一契约里的 `ReleaseState` 为唯一词表。
 - **运营**：Gateway Console 的 Quota、Circuit、Desired/Applied/Observed、CaptureGrant 数据分别由运行时、发布器、Gatekeeper 和安全证据服务提供；UI 本身不决定 ProviderAccount 权限、不成为第二个配置发布主。
 - **安全**：默认不捕获正文；诊断读取和导出在服务端按角色、租户、审批用途及时间窗检查。需明确采集点和真正外发报文是否在签名/重写后被观察到。
 - **证据**：本次只更新 Gateway 自身设计，不写入或修改原 API Fabric F01–F08 或 Gatekeeper 正式仓库；任何跨系统模型/流程变更需目标系统 Owner 明确接收并签字。

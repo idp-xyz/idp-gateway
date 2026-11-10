@@ -1,5 +1,7 @@
 # IDP Gateway V1.0 — Quality & Delivery Report
 
+> **阅读提示**：本报告正文记录的是**原始交付时**的状态，数字（11 项静态检查、15/23 项离线测试、7 项 ADR 等）未改动，以保留当时的记录。交付之后的变化见文末"交付之后的变更"。
+
 > **日期**：2026-11-10 · **范围**：本机生成的设计交付包（静态材料），非真实网关服务认证。  
 > **规范来源**：IDP-SCG-STD-001 V1.0 (2026-11-09)。
 
@@ -67,3 +69,13 @@
 - `contracts/gateway/diagnostic-event.paired-200.example.json` 展示成对结构；字段与 Schema 的离线校验并不构成生产采集能力验证。
 - 新增 4 条 UX 正式验收（072–075）；正式验收矩阵 **75 条均 NOT_RUN**。
 - ChatGPT 文件下载服务的实际客户端可达性无法通过 ZIP 自检证明；文件大小、校验和与解压属于不同层面的检查。
+
+## 交付之后的变更（2026-11-10，git 历史可查）
+
+原始交付内容是提交 `b1e6fe9`，以下均为其后的提交。
+
+- **正文里与实际不符的两处**：原文"路由/策略离线契约测试 15/15"，交付时 `tests/contracts/` 实际有 19 个测试（15 个路由预检 + 4 个诊断事件）。原文引用的浏览器检查记录（`tests/evidence/*-browser-tests.txt`）的生成脚本不在交付物里，这些记录无法在本仓库重跑。
+- **当前可重跑的离线检查**：`scripts/validate_baseline.py` 12 项；`tests/contracts` 55 个、`tests/security` 35 个测试。新增的测试固定了评审中发现的绕过与契约矛盾，对应的参考实现和 Schema 已改为白名单式。
+- **"仍待决策的架构风险"第 1 项**有了 PoC 级别的回答：`poc/p1` 在 agentgateway 1.6.0 + Mock Gatekeeper/Provider 上跑通了经 HTTP ExtAuthZ 的按请求凭证注入与双租户账户隔离（40 个用例 39 个通过，1 个未解决）。这不是验收：Gatekeeper 是 Mock，版本不是设计目标 1.7.x。结论、网关上必须显式配置的五处、未解决项见 `poc/p1/README.md`，据此提出 `decisions/ADR-0008.md`（Proposed）。
+- **"未执行"清单的现状**：其中"agentgateway 真实二进制加载配置、JWKS、ExtAuthZ、后端 Token 动态注入"已在上述 PoC 中用 Mock 对端跑过；gRPC Streaming 及清单其余各项仍未执行。
+- **不变的**：95 条运行验收、75 条 UX 验收、STD-CP1～CP6 全部 `NOT_RUN`；ADR 共 8 项，全部 Proposed；Manifest 未获采用批准。

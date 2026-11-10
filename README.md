@@ -68,13 +68,13 @@ python3 -m unittest discover -s tests/security -p 'test_*.py'
 
 - **50 FR / 19 NFR**；**95 条**运行验收、**75 条** UX 正式验收；原来的 G01–G06 与历史编号保持不变。
 - 新的 RouteIntent `oneOf` 分支（INGRESS/EGRESS/AI）、三组合法示例及错误配置反例；Fabric OpenAPI 改为引用这份唯一的契约权威。
-- Gatekeeper `credentials/prepare` 类型化候选契约（OAuth2/API Key、Signer、mTLS Reference）；`materialize` 标记为不完整的旧候选，**不允许直接部署**。
+- Gatekeeper `credentials/prepare` 类型化候选契约（OAuth2/API Key、Signer、mTLS Reference）；`materialize` 标记为不完整的旧候选，**不允许直接部署**。P1 PoC 之后，Header 注入类凭证的下发路径改定为 ExtAuthZ 允许响应头，见 `decisions/ADR-0008.md`（Proposed）。
 - `gateway/policies/traffic-policy.*`、`diagnostic-capture.*`、`credential-binding.*` 与四阶段诊断事件 Schema。
 - `scripts/preflight_intents.py`：**静态预检，不输出原生代理配置**；`tests/contracts/` 与 `tests/security/` 中有更多可执行负向测试。
 - `governance/gap-remediation-matrix.csv`（15 个缺口）、协议清单、故障演练、`operations/incident-runbook.md`。
 - Console 在 Traffic Explorer 同页新增 ProviderAccount Quota、Upstream Health 和 Config Drift 的**合成 Mock 视图**。
 
-**重要**：这批改善只完成设计、契约、离线 Mock 和检查；真实 agentgateway Native Schema/二进制、Gatekeeper Credential Broker、环境网络策略、限流协调器与安全报文采集均未实现、未联测。
+**重要**：这批改善只完成设计、契约、离线 Mock 和检查；真实 Gatekeeper Credential Broker、环境网络策略、限流协调器与安全报文采集均未实现、未联测。agentgateway 二进制此后只在 P1 PoC 中用过（1.6.0，对接 Mock Gatekeeper/Provider，见 `poc/p1/README.md`）；设计目标 1.7.x 与由 RouteIntent 编译原生配置的 Publisher 仍未实现、未验证。
 
 
 ## 新增离线测试与文档入口
