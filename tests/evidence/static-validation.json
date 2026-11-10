@@ -1,6 +1,6 @@
 {
   "title": "IDP Gateway V1.0 offline static validation",
-  "executed_at_utc": "2026-11-10T13:02:22.818022+00:00",
+  "executed_at_utc": "2026-11-10T13:29:52.762331+00:00",
   "python_version": "3.12.3",
   "scope": "offline files, schemas, example data, traceability only",
   "checks": [
@@ -17,7 +17,7 @@
     {
       "check": "html_relative_links",
       "status": "PASS",
-      "detail": "21 HTML pages, 297 local asset/href refs"
+      "detail": "21 HTML pages, 298 local asset/href refs"
     },
     {
       "check": "html_mirrors_current",
@@ -27,7 +27,7 @@
     {
       "check": "json_schema_and_examples",
       "status": "PASS",
-      "detail": "25 JSON files parsed; 6 additional example schemas and negative route samples validated"
+      "detail": "26 JSON files parsed; 6 additional example schemas and negative route samples validated"
     },
     {
       "check": "yaml_syntax_not_runtime",
@@ -67,7 +67,7 @@
     {
       "check": "poc_p1_evidence_current",
       "status": "PASS",
-      "detail": "PoC evidence matches current config/policy: 39/40 cases PASS on agentgateway 1.6.0; FAIL: P1-SS-04; not acceptance evidence"
+      "detail": "PoC evidence matches current config/policy on agentgateway 1.6.0: 40/41 PASS, FAIL: P1-SS-04; 1.7.0: 40/41 PASS, FAIL: P1-SS-04; not acceptance evidence"
     }
   ],
   "summary": {
