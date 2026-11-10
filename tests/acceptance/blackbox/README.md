@@ -122,7 +122,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
 6. 网关到 PDP 的共享密钥换成双向 TLS，`P1-AZ-11`、`P1-CR-03` 的期望随之收紧（原来查"没有密钥就 401"，现在查"没有证书连不上，证书身份不是网关就 401"），新增 `P1-TL-01`、`P1-CR-04`；加入模式 B（`P1-MB-01..04`）和 `key.expression` 路由（`P1-KX-01..03`）。新增的 9 个用例在 `run.py` 里第一次运行就全部通过；在此之前，mTLS 和 `key.expression` 的配置写法已经在单独的试验里试过。当时 1.7.0 为 49/50，1.6.0 为 46/47 加 3 个 SKIP。
 7. 为 `P1-SS-04` 加了前置 nginx 和 `P1-FP-01..04`。`P1-SS-04` 本身没有动，仍然 FAIL。新增的 4 个用例第一次运行就通过；之后只给 `P1-FP-01` 加了一条对照检查（单个 `Host` 的请求确实会在网关日志里留下记录），用来说明"网关日志没有新增"这条检查不是空的。当前 1.7.0 为 53/54，1.6.0 为 50/51 加 3 个 SKIP。
 
-8. PDP 从 Python Mock 换成本仓库的 `gateway-authz`（Go，验收构建）。网关配置里只改了注释，用例和期望没有动。换完第一次运行 37/54：`run.py` 直接调 PDP 时从来不发 `Host` 头，Python Mock 不在乎，Go 的 HTTP 服务端按 RFC 9112 §3.2 答 400，于是控制接口全部失效，靠它们注入故障和读取记录的用例跟着失败。改的是 `run.py` 的客户端（补上 `Host` 头），不是期望。结果见本文开头。
+8. PDP 从 Python Mock 换成本仓库的 `gateway-authz`（Go，验收构建）。网关配置里只改了注释，用例和期望没有动。换完第一次运行 37/54：`run.py` 直接调 PDP 时从来不发 `Host` 头，Python Mock 不在乎，Go 的 HTTP 服务端按 RFC 9112 §3.2 答 400，于是控制接口全部失效，靠它们注入故障和读取记录的用例跟着失败。改的是 `run.py` 的客户端（补上 `Host` 头），不是期望。之后两个版本的结果与换之前逐项相同：1.7.0 的 273 项检查、1.6.0 的 254 项检查，没有一项变化。一个不在检查里的差别：网关到 `gateway-authz` 协商出的是 HTTP/2，到 Python Mock 时是 HTTP/1.1（证据的 `gateway_authz.http_versions_seen_from_the_gateway`）。
 
 没有任何期望被放宽过。
 

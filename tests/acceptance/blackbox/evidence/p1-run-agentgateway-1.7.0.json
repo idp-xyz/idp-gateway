@@ -1,14 +1,14 @@
 {
-  "title": "IDP Gateway P1 PoC: real agentgateway, mock Gatekeeper, mock provider",
-  "started_at_utc": "2026-11-10T14:43:50.940549+00:00",
-  "finished_at_utc": "2026-11-10T14:44:27.689148+00:00",
+  "title": "IDP Gateway black-box suite: real agentgateway, gateway-authz (acceptance build), mock provider",
+  "started_at_utc": "2026-11-10T16:07:21.007214+00:00",
+  "finished_at_utc": "2026-11-10T16:07:52.895297+00:00",
   "operator": "tops",
-  "host": "Linux-6.18.54.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "host": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "python": "3.12.3",
-  "command": ".venv/bin/python poc/p1/run_poc.py --agentgateway /home/tops/.local/opt/agentgateway/1.7.0/agentgateway",
-  "repository_commit": "d99432044a1d3c70e4b72e6c8b59fa948909b2b0",
+  "command": ".venv/bin/python tests/acceptance/blackbox/run.py --agentgateway /home/tops/.local/opt/agentgateway/1.7.0/agentgateway",
+  "repository_commit": "b6094bc9c844e3a68d0b939c279639317e94332f",
   "repository_dirty_files": 0,
-  "repository_dirty_files_ignores": "poc/p1/evidence/",
+  "repository_dirty_files_ignores": "tests/acceptance/blackbox/evidence/",
   "agentgateway": {
     "version": {
       "version": "1.7.0",
@@ -20,29 +20,42 @@
       "crypto_fips": false
     },
     "binary_sha256": "1b2fc01a2de29ca113bbb6258b5cae7b1eb3c724071c09d687a449132f2f42f8",
-    "config_file": "poc/p1/agentgateway.poc.yaml",
-    "config_sha256": "6dc9ce33f83cb1dec318d200f2efb0c833ecdb47ce4579359a5567a73e7875a6",
+    "config_file": "tests/acceptance/blackbox/agentgateway.poc.yaml",
+    "config_sha256": "924adb0c5951c894a2e2f3e76c278f4064ed7cfc86db4c825a727901e1a1ba1d",
     "native_validation": "Configuration is valid!",
-    "overlay_file": "poc/p1/agentgateway.poc.key-expression.yaml",
-    "overlay_sha256": "e26f83f41e06e98797cb491dc987773c61bffc3d594caa95bfc6152d62ceac51",
+    "overlay_file": "tests/acceptance/blackbox/agentgateway.poc.key-expression.yaml",
+    "overlay_sha256": "28a1fa6f3d14133cb8f182892d7f1125cd3ad6e3cc77baaf293e7adb7b77cbdc",
     "overlay_accepted_by_this_binary": true,
     "overlay_native_validation": "Configuration is valid!",
     "session_key_supplied_by": "SESSION_KEY environment variable, generated per run, not recorded",
     "start_without_session_key_rewrites_config_file": true
   },
-  "policy_sha256": "9ca34740520402720319ad206413c94340670194b3a0e4a2440dd0ea602519d3",
-  "policy_reference_sha256": "9ed04728bc51c402143b6c1848b56abac08edafa26fed516409f6610494fe208",
+  "policy_sha256": "44ce8acf064e0d30c06ea7842d20a51077a711e7e364a24bee9f4c98ebcb096a",
+  "runner_sha256": "134cfbf806dd543a1af9daf4403907c1eb705ef633f04b09d67ff8c7b9fe220f",
+  "gateway_authz": {
+    "what_ran": "cmd/gateway-authz built with the acceptance tag; not the product build",
+    "build_command": "go build -trimpath -tags acceptance -o tests/acceptance/blackbox/.run/gateway-authz ./cmd/gateway-authz",
+    "go": "go version go1.26.8 linux/amd64",
+    "source_sha256": "4dd6bcd84d1bee5ab39bc9c9e4308785ef7f2dc284de150b3ba6fffe149af11a",
+    "source_sha256_covers": "go.mod and every non-test .go file under cmd/ and internal/",
+    "binary_sha256": "74a03e69c6a2aa1ec196b9a53b03ef0a1b276726bc7a28d614e11f488fb6ed96",
+    "policy_from": "tests/acceptance/blackbox/policy.poc.json",
+    "credentials_from": "a file written for the run, not recorded",
+    "revocations": "in memory",
+    "http_versions_seen_from_the_gateway": [
+      "HTTP/2.0"
+    ]
+  },
   "mocks_sha256": {
-    "mock_gatekeeper.py": "1b5e32699dcfd395f321c39b8bca9a8b912fcb29cc947db0323a9760662912c6",
-    "mock_broker.py": "d06e02006c80f2b2b7cca78409e5dd91672e2e6f22c5b0b9aa58eb65d064a7bf",
-    "mock_provider.py": "96bf49c3f3789821f5acc218771afd6986393dc939eec2bf6f3fd645caf1b846",
+    "mock_broker.py": "13566ddb1dd1f7da5e43e38b9f7d5199c1f2c903d95d2029b60df9fa675c1000",
+    "mock_provider.py": "db99b02f11123c7648eab9a1e9d6f4d1f1df655191874e92f0a73a4f5ae58dc0",
     "pki.py": "5eb56bde345deac0556abf4698813ec24bcec836470c049ffd2a5f46ae8d8aa3"
   },
   "front_proxy": {
     "image": "public.ecr.aws/nginx/nginx-unprivileged:stable-alpine@sha256:c3fc8fa482be50ef709c6438eb1bc98d50dbfe5a9b48be90711b8814f4dfd701",
     "version": "nginx version: nginx/1.30.6",
-    "config_file": "poc/p1/front.nginx.conf",
-    "config_sha256": "a375c60b78c7b2f665fb2711b41e89393bc0226ebe871cbc59e53d93853d3f5c",
+    "config_file": "tests/acceptance/blackbox/front.nginx.conf",
+    "config_sha256": "183524010feb404be5dac3275c86f8231858b2f5337485390c624429f08a5731",
     "runs_as": "container on the host network, unprivileged user, read-only root, no capabilities"
   },
   "workload_identities": {
@@ -87,7 +100,8 @@
     "skip": 0
   },
   "scope_limits": [
-    "Gatekeeper is a mock written for this PoC: no real identity provider, grants store, Secret Manager or provider token endpoint. No Gatekeeper implementation was available to test against; what is exercised is the gateway's side of the contract.",
+    "The PDP is this repository's gateway-authz, built with the `acceptance` tag: the product code plus the test controls this runner uses (request log, fault modes, revoke/restore). The product build, which has none of them, is not what ran. Where a case says \"Gatekeeper\" or \"PDP\" it means this process.",
+    "gateway-authz reads its policy and its credentials from files written for the run and keeps revocations in memory. No identity provider, grants store, Secret Manager or provider token endpoint is involved, and the deployed Gatekeeper is not called: the caller tokens are signed by a key made for the run.",
     "The provider is a loopback mock; no carrier sandbox was called.",
     "Mutual TLS is real on the gateway-to-PDP and broker-to-PDP hops only, with a CA and certificates made for the run: no SPIFFE Workload API, no rotation, no certificate revocation. Caller-to-gateway and gateway-to-provider are plain HTTP.",
     "The local broker (Mode B) is a mock with a JSON file as its store. The gateway reaches it over loopback HTTP and proves itself with a key file, standing in for a Unix socket or pod-local restriction; that restriction itself is untested.",
@@ -865,8 +879,8 @@
       ],
       "observed": {
         "tls_handshakes_refused_by_the_pdp": [
-          "PEER_DID_NOT_RETURN_A_CERTIFICATE",
-          "CERTIFICATE_VERIFY_FAILED"
+          "tls: client didn't provide a certificate",
+          "tls: failed to verify certificate: x509: certificate signed by unknown authority"
         ]
       },
       "indicative_for": [
@@ -1115,7 +1129,7 @@
       ],
       "observed": {
         "status": 500,
-        "seconds": 0.001
+        "seconds": 0.002
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1791,7 +1805,7 @@
             503
           ]
         },
-        "seconds_slow": 2.002,
+        "seconds_slow": 2.003,
         "provider_hits": 3
       },
       "indicative_for": [
@@ -2147,19 +2161,19 @@
       "observed": {
         "Gatekeeper answers 500": {
           "status": 503,
-          "seconds": 0.05
+          "seconds": 0.004
         },
         "Gatekeeper slower than the broker waits": {
           "status": 503,
-          "seconds": 0.707
+          "seconds": 0.747
         },
         "Gatekeeper down": {
           "status": 503,
-          "seconds": 0.046
+          "seconds": 0.002
         },
         "broker down": {
           "status": 403,
-          "seconds": 0.002
+          "seconds": 0.001
         }
       },
       "indicative_for": [
@@ -2421,7 +2435,7 @@
       ],
       "observed": {
         "start_without_session_key_rewrites_config_file": true,
-        "reviewed_configuration": "poc/p1/agentgateway.poc.yaml + poc/p1/agentgateway.poc.key-expression.yaml"
+        "reviewed_configuration": "tests/acceptance/blackbox/agentgateway.poc.yaml + tests/acceptance/blackbox/agentgateway.poc.key-expression.yaml"
       },
       "indicative_for": [
         "GW-NAT-004",
