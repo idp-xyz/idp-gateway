@@ -1,12 +1,12 @@
 {
   "title": "IDP Gateway P1 PoC: real agentgateway, mock Gatekeeper, mock provider",
-  "started_at_utc": "2026-11-10T14:09:02.699400+00:00",
-  "finished_at_utc": "2026-11-10T14:09:28.443325+00:00",
+  "started_at_utc": "2026-11-10T14:11:30.814830+00:00",
+  "finished_at_utc": "2026-11-10T14:11:56.726459+00:00",
   "operator": "tops",
   "host": "Linux-6.18.54.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "python": "3.12.3",
   "command": ".venv/bin/python poc/p1/run_poc.py",
-  "repository_commit": "98d6e5702dd8fdda2d3eec409c4106a5135d7628",
+  "repository_commit": "add4b9cf4d02851cc24192157491f1604fe26a6b",
   "repository_dirty_files": 0,
   "repository_dirty_files_ignores": "poc/p1/evidence/",
   "agentgateway": {
@@ -21,12 +21,12 @@
     },
     "binary_sha256": "496ed27e6a96b55a9ad7cabe5c2be7172511f44a3cb113e533d22bf93a7f079d",
     "config_file": "poc/p1/agentgateway.poc.yaml",
-    "config_sha256": "facf1182d2a724b31398d6e7ce94da2b74836a9f0d3c6ae20df4e94466b2273a",
+    "config_sha256": "0e66fec3c9addb9027750ecb9626e4cd88f9b6c0b914b480c928efe46c65efee",
     "native_validation": "Configuration is valid!",
     "overlay_file": "poc/p1/agentgateway.poc.key-expression.yaml",
-    "overlay_sha256": "821cd61495b09b1fff7f94f731b6fe3c711afe66ab553093b4e784cd6a106371",
+    "overlay_sha256": "e26f83f41e06e98797cb491dc987773c61bffc3d594caa95bfc6152d62ceac51",
     "overlay_accepted_by_this_binary": false,
-    "overlay_native_validation": "Error: routes[4]: data did not match any variant of untagged enum BackendAuthCompat at line 337 column 3",
+    "overlay_native_validation": "Error: routes[4]: data did not match any variant of untagged enum BackendAuthCompat at line 327 column 3",
     "session_key_supplied_by": "SESSION_KEY environment variable, generated per run, not recorded",
     "start_without_session_key_rewrites_config_file": false
   },
@@ -1131,7 +1131,7 @@
       ],
       "observed": {
         "status": 403,
-        "seconds": 1.002
+        "seconds": 1.003
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1299,7 +1299,7 @@
       ],
       "observed": {
         "status": 504,
-        "seconds": 2.002,
+        "seconds": 2.001,
         "provider_hits": 1
       },
       "indicative_for": [
@@ -1838,7 +1838,7 @@
       "observed": {
         "Gatekeeper answers 500": {
           "status": 503,
-          "seconds": 0.051
+          "seconds": 0.052
         },
         "Gatekeeper slower than the broker waits": {
           "status": 503,
@@ -1846,7 +1846,7 @@
         },
         "Gatekeeper down": {
           "status": 503,
-          "seconds": 0.051
+          "seconds": 0.045
         },
         "broker down": {
           "status": 403,

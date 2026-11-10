@@ -1,6 +1,6 @@
 {
   "title": "IDP Gateway V1.0 offline static validation",
-  "executed_at_utc": "2026-11-10T14:09:52.821921+00:00",
+  "executed_at_utc": "2026-11-10T14:12:24.285382+00:00",
   "python_version": "3.12.3",
   "scope": "offline files, schemas, example data, traceability only",
   "checks": [
@@ -31,8 +31,8 @@
     },
     {
       "check": "yaml_syntax_not_runtime",
-      "status": "FAIL",
-      "detail": "AssertionError: /home/tops/workspace/idp-gateway/poc/p1/agentgateway.poc.key-expression.yaml"
+      "status": "PASS",
+      "detail": "5 YAML syntax checks; no native agentgateway runtime/schema tests"
     },
     {
       "check": "acceptance_coverage_not_run",
@@ -71,8 +71,8 @@
     }
   ],
   "summary": {
-    "pass": 12,
-    "fail": 1
+    "pass": 13,
+    "fail": 0
   },
   "gatekeeper_runtime": "NOT_RUN",
   "agentgateway_runtime": "NOT_RUN",
