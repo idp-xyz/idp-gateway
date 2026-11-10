@@ -1,12 +1,12 @@
 {
   "title": "IDP Gateway P1 PoC: real agentgateway, mock Gatekeeper, mock provider",
-  "started_at_utc": "2026-11-10T13:29:33.030379+00:00",
-  "finished_at_utc": "2026-11-10T13:29:51.729455+00:00",
+  "started_at_utc": "2026-11-10T14:09:28.698725+00:00",
+  "finished_at_utc": "2026-11-10T14:09:52.070015+00:00",
   "operator": "tops",
   "host": "Linux-6.18.54.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "python": "3.12.3",
   "command": ".venv/bin/python poc/p1/run_poc.py --agentgateway /home/tops/.local/opt/agentgateway/1.7.0/agentgateway",
-  "repository_commit": "e456a1e9c2b4ef4b905944c08e687daa1b9cd564",
+  "repository_commit": "98d6e5702dd8fdda2d3eec409c4106a5135d7628",
   "repository_dirty_files": 0,
   "repository_dirty_files_ignores": "poc/p1/evidence/",
   "agentgateway": {
@@ -21,13 +21,30 @@
     },
     "binary_sha256": "1b2fc01a2de29ca113bbb6258b5cae7b1eb3c724071c09d687a449132f2f42f8",
     "config_file": "poc/p1/agentgateway.poc.yaml",
-    "config_sha256": "2931950e9db10c1f51f3cefe58da5ff4f03c31f5f04b13acaf4fff65609c86f5",
+    "config_sha256": "facf1182d2a724b31398d6e7ce94da2b74836a9f0d3c6ae20df4e94466b2273a",
     "native_validation": "Configuration is valid!",
+    "overlay_file": "poc/p1/agentgateway.poc.key-expression.yaml",
+    "overlay_sha256": "821cd61495b09b1fff7f94f731b6fe3c711afe66ab553093b4e784cd6a106371",
+    "overlay_accepted_by_this_binary": true,
+    "overlay_native_validation": "Configuration is valid!",
     "session_key_supplied_by": "SESSION_KEY environment variable, generated per run, not recorded",
     "start_without_session_key_rewrites_config_file": true
   },
-  "policy_sha256": "cea9113a8256cfcf47907549fa4715a0813050e12bd051da8d98ffe58d673438",
+  "policy_sha256": "9ca34740520402720319ad206413c94340670194b3a0e4a2440dd0ea602519d3",
   "policy_reference_sha256": "9ed04728bc51c402143b6c1848b56abac08edafa26fed516409f6610494fe208",
+  "mocks_sha256": {
+    "mock_gatekeeper.py": "1b5e32699dcfd395f321c39b8bca9a8b912fcb29cc947db0323a9760662912c6",
+    "mock_broker.py": "d06e02006c80f2b2b7cca78409e5dd91672e2e6f22c5b0b9aa58eb65d064a7bf",
+    "mock_provider.py": "96bf49c3f3789821f5acc218771afd6986393dc939eec2bf6f3fd645caf1b846",
+    "pki.py": "5eb56bde345deac0556abf4698813ec24bcec836470c049ffd2a5f46ae8d8aa3"
+  },
+  "workload_identities": {
+    "gatekeeper": "spiffe://idp.test/gatekeeper",
+    "gateway": "spiffe://idp.test/egress/agentgateway",
+    "broker": "spiffe://idp.test/egress/credential-broker",
+    "operator": "spiffe://idp.test/poc/operator",
+    "business-app": "spiffe://idp.test/apps/parcel-service"
+  },
   "ports": {
     "gateway": 27611,
     "provider": 27612,
@@ -35,7 +52,8 @@
     "admin": 27614,
     "stats": 27615,
     "readiness": 27616,
-    "forbidden": 27617
+    "forbidden": 27617,
+    "broker": 27618
   },
   "host_ephemeral_port_range": [
     44620,
@@ -48,21 +66,25 @@
     "127.0.0.1:27614",
     "127.0.0.1:27615",
     "127.0.0.1:27616",
-    "127.0.0.1:27617"
+    "127.0.0.1:27617",
+    "127.0.0.1:27618"
   ],
   "ports_left_open_after_run": [],
   "summary": {
-    "cases": 41,
-    "pass": 40,
-    "fail": 1
+    "cases": 50,
+    "run": 50,
+    "pass": 49,
+    "fail": 1,
+    "skip": 0
   },
   "scope_limits": [
-    "Gatekeeper is a mock: no real identity provider, grants store, Secret Manager or provider token endpoint.",
+    "Gatekeeper is a mock written for this PoC: no real identity provider, grants store, Secret Manager or provider token endpoint. No Gatekeeper implementation was available to test against; what is exercised is the gateway's side of the contract.",
     "The provider is a loopback mock; no carrier sandbox was called.",
-    "No TLS or mTLS on any hop. The gateway-to-PDP channel is authenticated by a shared key standing in for workload mTLS.",
+    "Mutual TLS is real on the gateway-to-PDP and broker-to-PDP hops only, with a CA and certificates made for the run: no SPIFFE Workload API, no rotation, no certificate revocation. Caller-to-gateway and gateway-to-provider are plain HTTP.",
+    "The local broker (Mode B) is a mock with a JSON file as its store. The gateway reaches it over loopback HTTP and proves itself with a key file, standing in for a Unix socket or pod-local restriction; that restriction itself is untested.",
     "Single gateway process: nothing here speaks to multi-replica behaviour, config rollout, quotas or load.",
     "The result holds for the agentgateway build named in this file only; each version tested has its own evidence file.",
-    "HTTP ExtAuthZ only. gRPC ExtAuthZ, decision caching, CONNECT, gRPC upstreams, HMAC signing and mTLS client identities are untested.",
+    "HTTP ExtAuthZ only. gRPC ExtAuthZ, decision caching, CONNECT, gRPC upstreams, HMAC signing and mTLS towards providers are untested.",
     "DNS rebinding and network-layer egress ACLs are untested: the upstream is a fixed loopback address.",
     "This is PoC evidence. It does not change any NOT_RUN acceptance case or STD-CP gate."
   ],
@@ -782,36 +804,61 @@
     },
     {
       "id": "P1-AZ-11",
-      "title": "business app calls the PDP/Broker directly, without the gateway",
-      "expectation": "401 and no provider credential in the answer",
+      "title": "something other than the gateway calls the PDP/Broker directly",
+      "expectation": "without a certificate from the workload CA there is no TLS session; with one, 401 and no provider credential unless the certificate is the gateway's",
       "result": "PASS",
       "checks": [
         {
-          "check": "no credential: 401",
+          "check": "no client certificate: no HTTP response",
           "ok": true
         },
         {
-          "check": "no credential: no provider credential returned",
+          "check": "no client certificate: no provider credential returned",
           "ok": true
         },
         {
-          "check": "wrong credential: 401",
+          "check": "a certificate with the gateway's identity from another CA: no HTTP response",
           "ok": true
         },
         {
-          "check": "wrong credential: no provider credential returned",
+          "check": "a certificate with the gateway's identity from another CA: no provider credential returned",
           "ok": true
         },
         {
-          "check": "a valid caller JWT instead of the workload key: 401",
+          "check": "the PDP refused both TLS handshakes",
           "ok": true
         },
         {
-          "check": "a valid caller JWT instead of the workload key: no provider credential returned",
+          "check": "...and handled no request from either",
+          "ok": true
+        },
+        {
+          "check": "a business app's own workload certificate, with a valid caller JWT: 401",
+          "ok": true
+        },
+        {
+          "check": "a business app's own workload certificate, with a valid caller JWT: no provider credential returned",
+          "ok": true
+        },
+        {
+          "check": "the local broker's certificate: 401",
+          "ok": true
+        },
+        {
+          "check": "the local broker's certificate: no provider credential returned",
+          "ok": true
+        },
+        {
+          "check": "control: the same request under the gateway's certificate is allowed",
           "ok": true
         }
       ],
-      "observed": {},
+      "observed": {
+        "tls_handshakes_refused_by_the_pdp": [
+          "PEER_DID_NOT_RETURN_A_CERTIFICATE",
+          "CERTIFICATE_VERIFY_FAILED"
+        ]
+      },
       "indicative_for": [
         "GW-ST-018",
         "GW-AT-021",
@@ -931,7 +978,7 @@
           "ok": true
         },
         {
-          "check": "no workload key in response",
+          "check": "no broker key in response",
           "ok": true
         }
       ],
@@ -953,7 +1000,7 @@
     {
       "id": "P1-CR-03",
       "title": "what the PDP receives",
-      "expectation": "the gateway workload key, not the caller's JWT",
+      "expectation": "the gateway's workload identity, from its client certificate; not the caller's JWT, and no bearer credential of any kind",
       "result": "PASS",
       "checks": [
         {
@@ -965,13 +1012,20 @@
           "ok": true
         },
         {
-          "check": "Authorization is the gateway workload key",
+          "check": "no Authorization header at all",
+          "ok": true
+        },
+        {
+          "check": "the caller is the gateway workload, by its verified client certificate",
+          "ok": true
+        },
+        {
+          "check": "the session is TLS 1.2 or later",
           "ok": true
         }
       ],
       "observed": {
         "pdp_saw_header_names": [
-          "authorization",
           "host",
           "x-idp-environment",
           "x-idp-method",
@@ -982,7 +1036,11 @@
           "x-idp-verified-env",
           "x-idp-verified-subject",
           "x-idp-verified-tenant"
-        ]
+        ],
+        "pdp_saw_peer": {
+          "identity": "spiffe://idp.test/egress/agentgateway",
+          "tls_version": "TLSv1.3"
+        }
       },
       "indicative_for": [
         "GW-AT-021",
@@ -1073,7 +1131,7 @@
       ],
       "observed": {
         "status": 403,
-        "seconds": 1.003
+        "seconds": 1.002
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1107,6 +1165,46 @@
       "indicative_for": [
         "GW-ST-008",
         "GW-NAT-006",
+        "GW-FR-047"
+      ]
+    },
+    {
+      "id": "P1-TL-01",
+      "title": "a server on the PDP port that is not Gatekeeper",
+      "expectation": "the gateway does not accept its certificate: it is sent no request, nothing reaches the provider, and service resumes with the real PDP",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "neither request succeeds",
+          "ok": true
+        },
+        {
+          "check": "the impostor was sent no request by the gateway",
+          "ok": true
+        },
+        {
+          "check": "provider received nothing",
+          "ok": true
+        },
+        {
+          "check": "control: the impostor allows whoever accepts its certificate",
+          "ok": true
+        },
+        {
+          "check": "after the real PDP is back: allowed again",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "statuses_while_impersonated": [
+          403,
+          403
+        ]
+      },
+      "indicative_for": [
+        "GW-ST-018",
+        "GW-ST-008",
+        "GW-FR-021",
         "GW-FR-047"
       ]
     },
@@ -1537,13 +1635,474 @@
       ]
     },
     {
+      "id": "P1-MB-01",
+      "title": "local broker (Mode B): each tenant leaves with its own account",
+      "expectation": "the same isolation as Mode A, while Gatekeeper is asked for a decision only and nothing it sends contains a provider credential",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "status is 200",
+          "ok": true
+        },
+        {
+          "check": "provider answered as account-blue",
+          "ok": true
+        },
+        {
+          "check": "provider received exactly one request",
+          "ok": true
+        },
+        {
+          "check": "provider received exactly the account-blue credential",
+          "ok": true
+        },
+        {
+          "check": "logical path rewritten to provider path",
+          "ok": true
+        },
+        {
+          "check": "status is 200",
+          "ok": true
+        },
+        {
+          "check": "provider answered as account-green",
+          "ok": true
+        },
+        {
+          "check": "provider received exactly one request",
+          "ok": true
+        },
+        {
+          "check": "provider received exactly the account-green credential",
+          "ok": true
+        },
+        {
+          "check": "logical path rewritten to provider path",
+          "ok": true
+        },
+        {
+          "check": "Gatekeeper was asked once per request, on the decision endpoint only",
+          "ok": true
+        },
+        {
+          "check": "...by the broker workload, not the gateway",
+          "ok": true
+        },
+        {
+          "check": "the broker recorded both answers",
+          "ok": true
+        },
+        {
+          "check": "no provider credential in the headers or body of anything Gatekeeper sent",
+          "ok": true
+        },
+        {
+          "check": "both answers are valid DecisionResponse documents (contracts/gatekeeper/authz-decision.schema.json)",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "status": 200,
+        "provider_saw_target": [
+          "/v1/manifests/MAN-2"
+        ],
+        "gatekeeper_was_asked": [
+          {
+            "target": "/v1/egress/authorizations/decision",
+            "by": "spiffe://idp.test/egress/credential-broker"
+          },
+          {
+            "target": "/v1/egress/authorizations/decision",
+            "by": "spiffe://idp.test/egress/credential-broker"
+          }
+        ],
+        "credential_handles": [
+          "gatekeeper:mockcarrier-test/account-blue",
+          "gatekeeper:mockcarrier-test/account-green"
+        ]
+      },
+      "indicative_for": [
+        "GW-AT-006",
+        "GW-NAT-001",
+        "GW-AT-033",
+        "GW-FR-006",
+        "GW-FR-033"
+      ]
+    },
+    {
+      "id": "P1-MB-02",
+      "title": "Mode B: denial and revocation are still Gatekeeper's",
+      "expectation": "another tenant's account, a token for another environment and a revoked account are each refused on that request; nothing is forwarded",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "tenant-blue asks for account-green: 403 ACCOUNT_NOT_GRANTED",
+          "ok": true
+        },
+        {
+          "check": "tenant-blue asks for account-green: provider received nothing",
+          "ok": true
+        },
+        {
+          "check": "token issued for PROD on the TEST pool: 403 ENVIRONMENT_MISMATCH",
+          "ok": true
+        },
+        {
+          "check": "token issued for PROD on the TEST pool: provider received nothing",
+          "ok": true
+        },
+        {
+          "check": "first blue request after account-blue is revoked: 403 ACCOUNT_REVOKED",
+          "ok": true
+        },
+        {
+          "check": "first blue request after account-blue is revoked: provider received nothing",
+          "ok": true
+        },
+        {
+          "check": "green still allowed with its own account",
+          "ok": true
+        },
+        {
+          "check": "after restore: blue allowed again",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "tenant-blue asks for account-green": {
+          "status": 403,
+          "reason_code": "ACCOUNT_NOT_GRANTED"
+        },
+        "token issued for PROD on the TEST pool": {
+          "status": 403,
+          "reason_code": "ENVIRONMENT_MISMATCH"
+        },
+        "first blue request after account-blue is revoked": {
+          "status": 403,
+          "reason_code": "ACCOUNT_REVOKED"
+        }
+      },
+      "indicative_for": [
+        "GW-AT-004",
+        "GW-AT-026",
+        "GW-AT-028",
+        "GW-ST-026",
+        "GW-FR-004",
+        "GW-FR-026",
+        "GW-FR-028"
+      ]
+    },
+    {
+      "id": "P1-MB-03",
+      "title": "Mode B: Gatekeeper or the broker unavailable",
+      "expectation": "every such request is rejected and never reaches the provider (fail closed); service resumes when both are back",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "Gatekeeper answers 500: not a success status",
+          "ok": true
+        },
+        {
+          "check": "Gatekeeper answers 500: provider received nothing",
+          "ok": true
+        },
+        {
+          "check": "Gatekeeper slower than the broker waits: not a success status",
+          "ok": true
+        },
+        {
+          "check": "Gatekeeper slower than the broker waits: provider received nothing",
+          "ok": true
+        },
+        {
+          "check": "Gatekeeper down: not a success status",
+          "ok": true
+        },
+        {
+          "check": "Gatekeeper down: provider received nothing",
+          "ok": true
+        },
+        {
+          "check": "broker down: not a success status",
+          "ok": true
+        },
+        {
+          "check": "broker down: provider received nothing",
+          "ok": true
+        },
+        {
+          "check": "after both are back: allowed again",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "Gatekeeper answers 500": {
+          "status": 503,
+          "seconds": 0.047
+        },
+        "Gatekeeper slower than the broker waits": {
+          "status": 503,
+          "seconds": 0.704
+        },
+        "Gatekeeper down": {
+          "status": 503,
+          "seconds": 0.05
+        },
+        "broker down": {
+          "status": 403,
+          "seconds": 0.002
+        }
+      },
+      "indicative_for": [
+        "GW-ST-008",
+        "GW-NAT-006",
+        "GW-AT-047",
+        "GW-FR-047"
+      ]
+    },
+    {
+      "id": "P1-MB-04",
+      "title": "another local process calls the broker directly",
+      "expectation": "without the gateway's local key: 401, no provider credential, and Gatekeeper is not even asked",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "no key: 401",
+          "ok": true
+        },
+        {
+          "check": "no key: no provider credential returned",
+          "ok": true
+        },
+        {
+          "check": "wrong key: 401",
+          "ok": true
+        },
+        {
+          "check": "wrong key: no provider credential returned",
+          "ok": true
+        },
+        {
+          "check": "a valid caller JWT instead of the key: 401",
+          "ok": true
+        },
+        {
+          "check": "a valid caller JWT instead of the key: no provider credential returned",
+          "ok": true
+        },
+        {
+          "check": "Gatekeeper was not asked",
+          "ok": true
+        },
+        {
+          "check": "control: whoever presents the content of the key file is given a credential",
+          "ok": true
+        }
+      ],
+      "observed": {},
+      "indicative_for": [
+        "GW-ST-018",
+        "GW-AT-021",
+        "GW-FR-021"
+      ]
+    },
+    {
+      "id": "P1-KX-01",
+      "title": "credential placed by backendAuth.key.expression instead of header copying",
+      "expectation": "the same result as on the Mode A routes: each tenant leaves with exactly its own account's credential",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "status is 200",
+          "ok": true
+        },
+        {
+          "check": "provider answered as account-blue",
+          "ok": true
+        },
+        {
+          "check": "provider received exactly one request",
+          "ok": true
+        },
+        {
+          "check": "provider received exactly the account-blue credential",
+          "ok": true
+        },
+        {
+          "check": "logical path rewritten to provider path",
+          "ok": true
+        },
+        {
+          "check": "IDP JWT appears in no header value",
+          "ok": true
+        },
+        {
+          "check": "no x-idp-*, x-provider-account or cookie header",
+          "ok": true
+        },
+        {
+          "check": "no provider credential in what the caller received",
+          "ok": true
+        },
+        {
+          "check": "status is 200",
+          "ok": true
+        },
+        {
+          "check": "provider answered as account-green",
+          "ok": true
+        },
+        {
+          "check": "provider received exactly one request",
+          "ok": true
+        },
+        {
+          "check": "provider received exactly the account-green credential",
+          "ok": true
+        },
+        {
+          "check": "logical path rewritten to provider path",
+          "ok": true
+        },
+        {
+          "check": "PDP consulted once per request, by the gateway workload",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "status": 200,
+        "provider_saw_target": [
+          "/v1/pickups/PCK-2"
+        ],
+        "provider_saw_header_names": [
+          "authorization",
+          "host"
+        ]
+      },
+      "indicative_for": [
+        "GW-AT-006",
+        "GW-NAT-001",
+        "GW-AT-008",
+        "GW-FR-006",
+        "GW-FR-008"
+      ]
+    },
+    {
+      "id": "P1-KX-02",
+      "title": "key.expression route: PDP allows but releases no credential",
+      "expectation": "the gateway itself refuses to forward; no Authorization header of any kind reaches the provider",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "caller does not get a success",
+          "ok": true
+        },
+        {
+          "check": "caller JWT did not reach the provider",
+          "ok": true
+        },
+        {
+          "check": "no Authorization header reached the provider",
+          "ok": true
+        },
+        {
+          "check": "provider received nothing (rejected at the gateway)",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "status": 403,
+        "provider_hits": 0,
+        "rejected_by": "gateway"
+      },
+      "indicative_for": [
+        "GW-ST-009",
+        "GW-AT-043",
+        "GW-FR-006",
+        "GW-FR-043"
+      ]
+    },
+    {
+      "id": "P1-KX-03",
+      "title": "key.expression route: denial and revocation",
+      "expectation": "another tenant's account and a revoked account are each refused on that request; nothing is forwarded",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "tenant-blue asks for account-green: 403",
+          "ok": true
+        },
+        {
+          "check": "first blue request after revocation: 403",
+          "ok": true
+        },
+        {
+          "check": "provider received nothing in either case",
+          "ok": true
+        },
+        {
+          "check": "after restore: blue allowed again",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "first_request_after_revoke": {
+          "status": 403,
+          "reason_code": "ACCOUNT_REVOKED"
+        }
+      },
+      "indicative_for": [
+        "GW-AT-004",
+        "GW-AT-026",
+        "GW-FR-004",
+        "GW-FR-026"
+      ]
+    },
+    {
+      "id": "P1-CR-04",
+      "title": "what the gateway has written to its log during this run",
+      "expectation": "no provider credential, caller JWT, broker key or session key in any line, including the lines for failed credential handling",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "every route answered 200 just before the log was read",
+          "ok": true
+        },
+        {
+          "check": "the log covers the run (more lines than there are cases)",
+          "ok": true
+        },
+        {
+          "check": "no provider credential",
+          "ok": true
+        },
+        {
+          "check": "no caller JWT",
+          "ok": true
+        },
+        {
+          "check": "no broker key and no session key",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "log_lines": 117,
+        "routes_exercised": 4
+      },
+      "indicative_for": [
+        "GW-AT-007",
+        "GW-FR-007",
+        "GW-NFR-05"
+      ]
+    },
+    {
       "id": "P1-CF-01",
       "title": "the gateway and its own configuration file",
       "expectation": "given its session key through the environment, the gateway leaves the file it was started from byte-identical to the reviewed configuration",
       "result": "PASS",
       "checks": [
         {
-          "check": "the file the gateway is running from is byte-identical to poc/p1/agentgateway.poc.yaml",
+          "check": "the file the gateway is running from is byte-identical to the reviewed configuration",
           "ok": true
         },
         {
@@ -1552,7 +2111,8 @@
         }
       ],
       "observed": {
-        "start_without_session_key_rewrites_config_file": true
+        "start_without_session_key_rewrites_config_file": true,
+        "reviewed_configuration": "poc/p1/agentgateway.poc.yaml + poc/p1/agentgateway.poc.key-expression.yaml"
       },
       "indicative_for": [
         "GW-NAT-004",
