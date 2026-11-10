@@ -100,13 +100,12 @@
           },
           "sanitized_headers": {
             "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            },
+            "description": "Allowlist, not a blocklist: a header that is not named in $defs.sanitized_header_name is not evidence. Names are recorded in lowercase.",
             "propertyNames": {
-              "not": {
-                "pattern": "^(?:[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[pP][rR][oO][xX][yY]\\-[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[sS][eE][tT]\\-[cC][oO][oO][kK][iI][eE]|[xX]\\-[aA][pP][iI]\\-[kK][eE][yY]|[xX]\\-[aA][uU][tT][hH]\\-[tT][oO][kK][eE][nN])$"
-              }
+              "$ref": "#/$defs/sanitized_header_name"
+            },
+            "additionalProperties": {
+              "$ref": "#/$defs/sanitized_header_value"
             }
           },
           "body_sha256": {
@@ -194,7 +193,107 @@
             "minimum": 0,
             "maximum": 16
           }
+        },
+        "if": {
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "NOT_SENT",
+                "NOT_OBSERVED"
+              ]
+            }
+          }
+        },
+        "then": {
+          "description": "A message that was not sent or not observed has no status code, headers or body to report.",
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "http_status"
+                ]
+              },
+              {
+                "required": [
+                  "grpc_status"
+                ]
+              },
+              {
+                "required": [
+                  "sanitized_headers"
+                ]
+              },
+              {
+                "required": [
+                  "body_sha256"
+                ]
+              },
+              {
+                "required": [
+                  "body_sample_sanitized"
+                ]
+              },
+              {
+                "required": [
+                  "bytes_observed"
+                ]
+              },
+              {
+                "required": [
+                  "body_total_bytes"
+                ]
+              },
+              {
+                "required": [
+                  "body_captured_bytes"
+                ]
+              },
+              {
+                "required": [
+                  "content_type"
+                ]
+              },
+              {
+                "required": [
+                  "provider_request_id_sanitized"
+                ]
+              }
+            ]
+          }
         }
+      }
+    }
+  },
+  "$defs": {
+    "sanitized_header_name": {
+      "description": "Same set as ALLOWED_HEADERS in scripts/diagnostic_reference.py; tests/contracts/test_bypass_regressions.py keeps them equal.",
+      "enum": [
+        "content-type",
+        "traceparent",
+        "x-correlation-id",
+        "x-provider-request-id",
+        "x-request-id"
+      ]
+    },
+    "sanitized_header_value": {
+      "description": "Printable ASCII, under 256 characters, and not shaped like a credential. A heuristic backstop: redaction happens before the event is built, not here.",
+      "type": "string",
+      "maxLength": 255,
+      "not": {
+        "anyOf": [
+          {
+            "pattern": "[^\\u0020-\\u007e]"
+          },
+          {
+            "pattern": "^(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Bb][Aa][Ss][Ii][Cc]|[Dd][Ii][Gg][Ee][Ss][Tt]|[Nn][Ee][Gg][Oo][Tt][Ii][Aa][Tt][Ee])\\s"
+          },
+          {
+            "pattern": "eyJ[A-Za-z0-9_-]{8,}\\.eyJ"
+          }
+        ]
       }
     }
   }

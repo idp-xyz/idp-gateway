@@ -18,7 +18,7 @@
       "request_target": "/providers/mockcarrier/v1/tracking/DEMO-1",
       "http_version": "HTTP/1.1",
       "sanitized_headers": {
-        "X-Correlation-ID": "trace-mock-200"
+        "x-correlation-id": "trace-mock-200"
       },
       "body_capture_status": "EMPTY",
       "body_total_bytes": 0,
@@ -35,7 +35,7 @@
       "request_target": "/v1/tracking/DEMO-1",
       "http_version": "HTTP/1.1",
       "sanitized_headers": {
-        "X-Correlation-ID": "trace-mock-200"
+        "x-correlation-id": "trace-mock-200"
       },
       "body_capture_status": "DISABLED",
       "truncated": false
@@ -48,8 +48,8 @@
       "timestamp": "2026-11-10T08:21:00Z",
       "http_status": 200,
       "sanitized_headers": {
-        "Content-Type": "application/json",
-        "X-Provider-Request-ID": "DEMO-REQ-001"
+        "content-type": "application/json",
+        "x-provider-request-id": "DEMO-REQ-001"
       },
       "body_capture_status": "METADATA_ONLY",
       "truncated": false,
@@ -63,8 +63,8 @@
       "timestamp": "2026-11-10T08:21:00Z",
       "http_status": 200,
       "sanitized_headers": {
-        "Content-Type": "application/json",
-        "X-Correlation-ID": "trace-mock-200"
+        "content-type": "application/json",
+        "x-correlation-id": "trace-mock-200"
       },
       "body_capture_status": "METADATA_ONLY",
       "truncated": false

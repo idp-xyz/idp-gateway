@@ -4,8 +4,21 @@ NOT a real authorization server. Verified identity must come from authentication
 middleware in a real deployment. Never deploy this helper or trust caller fields.
 """
 from __future__ import annotations
+import re
 from dataclasses import dataclass
 from typing import Mapping, Any
+
+# A path is canonical when it is /segment/segment... and every segment is made of
+# unreserved characters and does not start with a dot. That leaves no percent sign (so no
+# encoded or double-encoded dot, slash or NUL), no empty, "." or ".." segment, no trailing
+# slash and no ";params". Anything else is denied rather than normalised: the PDP must not
+# guess how the gateway or the provider will decode it. The PoC gateway route applies the
+# same expression (poc/p1/agentgateway.poc.yaml); keep the two identical.
+CANONICAL_PATH = re.compile(r'(?:/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+')
+
+
+def is_canonical_path(path: Any) -> bool:
+    return isinstance(path, str) and CANONICAL_PATH.fullmatch(path) is not None
 
 @dataclass(frozen=True)
 class TrustedPrincipal:
@@ -41,14 +54,16 @@ def evaluate(policy: Mapping[str, Any], principal: TrustedPrincipal | None, requ
         return deny('ENVIRONMENT_MISMATCH')
     if request.target_override is not None or request.trusted_host_header:
         return deny('ARBITRARY_TARGET_DENIED')
-    if not request.path.startswith('/') or '://' in request.path or any(i in request.path.lower() for i in ('%2f','%5c','%2e','\\','..','//')):
+    if not is_canonical_path(request.path):
         return deny('PATH_NOT_CANONICAL')
     if request.method not in {'GET','POST','PUT','PATCH','DELETE'}:
         return deny('METHOD_NOT_ALLOWED')
     for row in policy.get('registered_operations', []):
         match=(request.provider_id == row.get('provider_id') and request.operation_id==row.get('operation_id') and
                request.environment==row.get('environment') and request.method==row.get('method'))
-        prefix=row.get('path_prefix','')
+        prefix=row.get('path_prefix')
+        if not is_canonical_path(prefix):
+            continue  # a row that does not name a canonical prefix authorises nothing
         path_matches=(request.path==prefix or request.path.startswith(prefix+'/'))
         if not(match and path_matches):
             continue

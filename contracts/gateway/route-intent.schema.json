@@ -207,6 +207,9 @@
             "required": [
               "provider_id"
             ]
+          },
+          {
+            "$ref": "#/$defs/carries_egress_only_field"
           }
         ]
       }
@@ -302,9 +305,49 @@
             "required": [
               "provider_id"
             ]
+          },
+          {
+            "$ref": "#/$defs/carries_egress_only_field"
           }
         ]
       }
     }
-  ]
+  ],
+  "$defs": {
+    "carries_egress_only_field": {
+      "description": "Matches an intent that names an upstream or a provider operation. Only the EGRESS branch may: an INGRESS or AI intent with an upstream would be an egress route that skipped the egress checks.",
+      "anyOf": [
+        {
+          "required": [
+            "upstream_hostname"
+          ]
+        },
+        {
+          "required": [
+            "upstream_port"
+          ]
+        },
+        {
+          "required": [
+            "upstream_tls"
+          ]
+        },
+        {
+          "required": [
+            "upstream_sni"
+          ]
+        },
+        {
+          "required": [
+            "redirect_policy"
+          ]
+        },
+        {
+          "required": [
+            "operation_id"
+          ]
+        }
+      ]
+    }
+  }
 }
