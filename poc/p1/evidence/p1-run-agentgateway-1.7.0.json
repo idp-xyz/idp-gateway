@@ -1,12 +1,12 @@
 {
   "title": "IDP Gateway P1 PoC: real agentgateway, mock Gatekeeper, mock provider",
-  "started_at_utc": "2026-11-10T14:11:56.966266+00:00",
-  "finished_at_utc": "2026-11-10T14:12:23.545321+00:00",
+  "started_at_utc": "2026-11-10T14:43:50.940549+00:00",
+  "finished_at_utc": "2026-11-10T14:44:27.689148+00:00",
   "operator": "tops",
   "host": "Linux-6.18.54.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "python": "3.12.3",
   "command": ".venv/bin/python poc/p1/run_poc.py --agentgateway /home/tops/.local/opt/agentgateway/1.7.0/agentgateway",
-  "repository_commit": "add4b9cf4d02851cc24192157491f1604fe26a6b",
+  "repository_commit": "d99432044a1d3c70e4b72e6c8b59fa948909b2b0",
   "repository_dirty_files": 0,
   "repository_dirty_files_ignores": "poc/p1/evidence/",
   "agentgateway": {
@@ -21,7 +21,7 @@
     },
     "binary_sha256": "1b2fc01a2de29ca113bbb6258b5cae7b1eb3c724071c09d687a449132f2f42f8",
     "config_file": "poc/p1/agentgateway.poc.yaml",
-    "config_sha256": "0e66fec3c9addb9027750ecb9626e4cd88f9b6c0b914b480c928efe46c65efee",
+    "config_sha256": "6dc9ce33f83cb1dec318d200f2efb0c833ecdb47ce4579359a5567a73e7875a6",
     "native_validation": "Configuration is valid!",
     "overlay_file": "poc/p1/agentgateway.poc.key-expression.yaml",
     "overlay_sha256": "e26f83f41e06e98797cb491dc987773c61bffc3d594caa95bfc6152d62ceac51",
@@ -38,6 +38,13 @@
     "mock_provider.py": "96bf49c3f3789821f5acc218771afd6986393dc939eec2bf6f3fd645caf1b846",
     "pki.py": "5eb56bde345deac0556abf4698813ec24bcec836470c049ffd2a5f46ae8d8aa3"
   },
+  "front_proxy": {
+    "image": "public.ecr.aws/nginx/nginx-unprivileged:stable-alpine@sha256:c3fc8fa482be50ef709c6438eb1bc98d50dbfe5a9b48be90711b8814f4dfd701",
+    "version": "nginx version: nginx/1.30.6",
+    "config_file": "poc/p1/front.nginx.conf",
+    "config_sha256": "a375c60b78c7b2f665fb2711b41e89393bc0226ebe871cbc59e53d93853d3f5c",
+    "runs_as": "container on the host network, unprivileged user, read-only root, no capabilities"
+  },
   "workload_identities": {
     "gatekeeper": "spiffe://idp.test/gatekeeper",
     "gateway": "spiffe://idp.test/egress/agentgateway",
@@ -53,7 +60,8 @@
     "stats": 27615,
     "readiness": 27616,
     "forbidden": 27617,
-    "broker": 27618
+    "broker": 27618,
+    "front": 27620
   },
   "host_ephemeral_port_range": [
     44620,
@@ -67,13 +75,14 @@
     "127.0.0.1:27615",
     "127.0.0.1:27616",
     "127.0.0.1:27617",
-    "127.0.0.1:27618"
+    "127.0.0.1:27618",
+    "127.0.0.1:27620"
   ],
   "ports_left_open_after_run": [],
   "summary": {
-    "cases": 50,
-    "run": 50,
-    "pass": 49,
+    "cases": 54,
+    "run": 54,
+    "pass": 53,
     "fail": 1,
     "skip": 0
   },
@@ -82,6 +91,7 @@
     "The provider is a loopback mock; no carrier sandbox was called.",
     "Mutual TLS is real on the gateway-to-PDP and broker-to-PDP hops only, with a CA and certificates made for the run: no SPIFFE Workload API, no rotation, no certificate revocation. Caller-to-gateway and gateway-to-provider are plain HTTP.",
     "The local broker (Mode B) is a mock with a JSON file as its store. The gateway reaches it over loopback HTTP and proves itself with a key file, standing in for a Unix socket or pod-local restriction; that restriction itself is untested.",
+    "The front proxy is one nginx build with a minimal configuration, there to show that a component in front can refuse what the gateway accepts (P1-SS-04). Four cases go through it; the others address the gateway listener directly, which stays reachable. Whether the eventual entry component behaves like this nginx has to be tested on that component.",
     "Single gateway process: nothing here speaks to multi-replica behaviour, config rollout, quotas or load.",
     "The result holds for the agentgateway build named in this file only; each version tested has its own evidence file.",
     "HTTP ExtAuthZ only. gRPC ExtAuthZ, decision caching, CONNECT, gRPC upstreams, HMAC signing and mTLS towards providers are untested.",
@@ -1105,7 +1115,7 @@
       ],
       "observed": {
         "status": 500,
-        "seconds": 0.002
+        "seconds": 0.001
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1131,7 +1141,7 @@
       ],
       "observed": {
         "status": 403,
-        "seconds": 1.003
+        "seconds": 1.002
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1593,6 +1603,305 @@
       ]
     },
     {
+      "id": "P1-FP-01",
+      "title": "request carrying two Host headers, sent through the front proxy",
+      "expectation": "400 from the front proxy, as RFC 9112 §3.2 requires; the gateway, the PDP and the provider see nothing",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "every attempt answered 400",
+          "ok": true
+        },
+        {
+          "check": "...by the front proxy itself (its own error page)",
+          "ok": true
+        },
+        {
+          "check": "the gateway logged no request",
+          "ok": true
+        },
+        {
+          "check": "provider received nothing",
+          "ok": true
+        },
+        {
+          "check": "forbidden target received nothing",
+          "ok": true
+        },
+        {
+          "check": "PDP was not consulted",
+          "ok": true
+        },
+        {
+          "check": "control: the same request with one Host header is served",
+          "ok": true
+        },
+        {
+          "check": "control: ...and that one the gateway did log",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "statuses": {
+          "logical host first, forbidden target second": 400,
+          "forbidden target first, logical host second": 400,
+          "the same Host header twice": 400,
+          "two Host headers on a write": 400,
+          "no Host header at all": 400
+        },
+        "gateway_listener_without_host_header": 400
+      },
+      "indicative_for": [
+        "GW-ST-017",
+        "GW-FR-034"
+      ]
+    },
+    {
+      "id": "P1-FP-02",
+      "title": "ordinary traffic through the front proxy",
+      "expectation": "what holds at the gateway listener holds behind the front proxy: caller authentication, account isolation, what the provider receives, the request body",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "status is 200",
+          "ok": true
+        },
+        {
+          "check": "provider answered as account-blue",
+          "ok": true
+        },
+        {
+          "check": "provider received exactly one request",
+          "ok": true
+        },
+        {
+          "check": "provider received exactly the account-blue credential",
+          "ok": true
+        },
+        {
+          "check": "logical path rewritten to provider path",
+          "ok": true
+        },
+        {
+          "check": "IDP JWT appears in no header value",
+          "ok": true
+        },
+        {
+          "check": "nothing the front proxy or the caller added about itself reaches the provider",
+          "ok": true
+        },
+        {
+          "check": "Host is the registered upstream authority",
+          "ok": true
+        },
+        {
+          "check": "caller's ordinary header preserved",
+          "ok": true
+        },
+        {
+          "check": "PDP saw tenant-blue and the path as the caller sent it",
+          "ok": true
+        },
+        {
+          "check": "status is 200",
+          "ok": true
+        },
+        {
+          "check": "provider answered as account-green",
+          "ok": true
+        },
+        {
+          "check": "provider received exactly one request",
+          "ok": true
+        },
+        {
+          "check": "provider received exactly the account-green credential",
+          "ok": true
+        },
+        {
+          "check": "logical path rewritten to provider path",
+          "ok": true
+        },
+        {
+          "check": "no token: 401",
+          "ok": true
+        },
+        {
+          "check": "tenant-blue asking for account-green: 403",
+          "ok": true
+        },
+        {
+          "check": "unregistered path: 404",
+          "ok": true
+        },
+        {
+          "check": "...and none of those three reached the provider",
+          "ok": true
+        },
+        {
+          "check": "POST a label: 201, received once, body byte-for-byte",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "status": 200,
+        "provider_saw_target": [
+          "/v1/tracking/TRK-2"
+        ],
+        "provider_saw_header_names": [
+          "authorization",
+          "host",
+          "x-client-trace"
+        ]
+      },
+      "indicative_for": [
+        "GW-AT-006",
+        "GW-AT-008",
+        "GW-AT-009",
+        "GW-NAT-001",
+        "GW-FR-006",
+        "GW-FR-008",
+        "GW-FR-009"
+      ]
+    },
+    {
+      "id": "P1-FP-03",
+      "title": "writes through the front proxy when the provider fails",
+      "expectation": "the caller gets the gateway's 504 or 5xx and the provider received each write exactly once: the front proxy replays nothing",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "provider slower than the gateway's budget: 504 at about 2s",
+          "ok": true
+        },
+        {
+          "check": "provider drops the connection: 5xx each time",
+          "ok": true
+        },
+        {
+          "check": "three writes sent, three received",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "statuses": {
+          "slow": 504,
+          "dropped": [
+            503,
+            503
+          ]
+        },
+        "seconds_slow": 2.002,
+        "provider_hits": 3
+      },
+      "indicative_for": [
+        "GW-AT-012",
+        "GW-ST-011",
+        "GW-FR-012"
+      ]
+    },
+    {
+      "id": "P1-FP-04",
+      "title": "caller tries to choose the upstream or bend the path, through the front proxy",
+      "expectation": "the forbidden target receives nothing and no bent path reaches the provider, whichever of the two hops stops it",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "forbidden target received nothing",
+          "ok": true
+        },
+        {
+          "check": "provider never saw the forbidden authority in any header",
+          "ok": true
+        },
+        {
+          "check": "no variant reached the provider",
+          "ok": true
+        },
+        {
+          "check": "no variant answered 2xx",
+          "ok": true
+        },
+        {
+          "check": "forbidden target received nothing after the path variants",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "statuses": {
+          "absolute-form request target": 404,
+          "absolute-form target, logical path": 404,
+          "Host header names the forbidden target": 404,
+          "X-Forwarded-Host": 200
+        },
+        "variants": {
+          "/providers/mockcarrier/v1/tracking/../../admin/hits": {
+            "status": 403,
+            "provider_saw": [],
+            "stopped_by": "pdp"
+          },
+          "/providers/mockcarrier/v1/tracking/%2e%2e/%2e%2e/admin/hits": {
+            "status": 403,
+            "provider_saw": [],
+            "stopped_by": "pdp"
+          },
+          "/providers/mockcarrier/v1/tracking/..%2fadmin": {
+            "status": 403,
+            "provider_saw": [],
+            "stopped_by": "pdp"
+          },
+          "/providers/mockcarrier/v1/tracking/%252e%252e/admin": {
+            "status": 403,
+            "provider_saw": [],
+            "stopped_by": "pdp"
+          },
+          "/providers/mockcarrier/v1/tracking//admin": {
+            "status": 403,
+            "provider_saw": [],
+            "stopped_by": "pdp"
+          },
+          "/providers/mockcarrier/v1/tracking/TRK-1%00": {
+            "status": 400,
+            "provider_saw": [],
+            "stopped_by": "front proxy"
+          },
+          "/providers/mockcarrier/v1/tracking/TRK-1;x=1": {
+            "status": 403,
+            "provider_saw": [],
+            "stopped_by": "pdp"
+          },
+          "/providers/mockcarrier/v1/tracking/./TRK-1": {
+            "status": 403,
+            "provider_saw": [],
+            "stopped_by": "pdp"
+          },
+          "/providers/mockcarrier/v1/rates/../../admin/hits": {
+            "status": 403,
+            "provider_saw": [],
+            "stopped_by": "gateway"
+          },
+          "/providers/mockcarrier/v1/rates/%252e%252e/admin": {
+            "status": 403,
+            "provider_saw": [],
+            "stopped_by": "gateway"
+          },
+          "/providers/mockcarrier/v1/rates//x": {
+            "status": 403,
+            "provider_saw": [],
+            "stopped_by": "gateway"
+          }
+        }
+      },
+      "indicative_for": [
+        "GW-AT-005",
+        "GW-ST-003",
+        "GW-ST-017",
+        "GW-AT-034",
+        "GW-FR-005",
+        "GW-FR-034"
+      ]
+    },
+    {
       "id": "P1-MC-01",
       "title": "static gateway-attached credential (Mode C)",
       "expectation": "works without a PDP call, but both tenants reach the provider as the same account",
@@ -1838,19 +2147,19 @@
       "observed": {
         "Gatekeeper answers 500": {
           "status": 503,
-          "seconds": 0.047
+          "seconds": 0.05
         },
         "Gatekeeper slower than the broker waits": {
           "status": 503,
-          "seconds": 0.706
+          "seconds": 0.707
         },
         "Gatekeeper down": {
           "status": 503,
-          "seconds": 0.045
+          "seconds": 0.046
         },
         "broker down": {
           "status": 403,
-          "seconds": 0.001
+          "seconds": 0.002
         }
       },
       "indicative_for": [
@@ -2086,7 +2395,7 @@
         }
       ],
       "observed": {
-        "log_lines": 117,
+        "log_lines": 142,
         "routes_exercised": 4
       },
       "indicative_for": [

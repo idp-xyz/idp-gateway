@@ -1,6 +1,6 @@
 {
   "title": "IDP Gateway V1.0 offline static validation",
-  "executed_at_utc": "2026-11-10T14:12:24.285382+00:00",
+  "executed_at_utc": "2026-11-10T14:44:28.290431+00:00",
   "python_version": "3.12.3",
   "scope": "offline files, schemas, example data, traceability only",
   "checks": [
@@ -12,7 +12,7 @@
     {
       "check": "markdown_relative_links",
       "status": "PASS",
-      "detail": "29 Markdown files, 54 local links"
+      "detail": "30 Markdown files, 54 local links"
     },
     {
       "check": "html_relative_links",
@@ -67,7 +67,7 @@
     {
       "check": "poc_p1_evidence_current",
       "status": "PASS",
-      "detail": "PoC evidence matches current config/policy on agentgateway 1.6.0: 46/47 PASS, FAIL: P1-SS-04, SKIP: 3; 1.7.0: 49/50 PASS, FAIL: P1-SS-04, SKIP: 0; not acceptance evidence"
+      "detail": "PoC evidence matches current config/policy on agentgateway 1.6.0: 50/51 PASS, FAIL: P1-SS-04, SKIP: 3; 1.7.0: 53/54 PASS, FAIL: P1-SS-04, SKIP: 0; not acceptance evidence"
     }
   ],
   "summary": {
