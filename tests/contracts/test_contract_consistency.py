@@ -1,4 +1,4 @@
-"""The contracts must agree with each other and with what the PoC mock actually speaks.
+"""The contracts must agree with each other and with what gateway-authz and the black-box suite actually speak.
 
 These tests pin the four contradictions found in review so they cannot come back:
 two definitions of the decision artefact, a publication API without the envelope G03 §4
@@ -181,14 +181,57 @@ class ReleaseStates(unittest.TestCase):
                         self.assertIn('ReleaseState', line, 'console label used without pointing at the canonical states')
 
 
-class PocMockSpeaksTheContract(unittest.TestCase):
+class ServiceSpeaksTheContract(unittest.TestCase):
+    """What gateway-authz puts on the wire, read from its source, against the contract.
+
+    The Go tests cover behaviour. These only compare names: the JSON fields of the structs the
+    handler encodes and decodes, and the header names it reads.
+    """
+    HANDLER = text('internal/egressauthz/adapters/httpapi/handler.go')
+
+    def fields(self, struct):
+        """-> {json field: (is a pointer, has omitempty)} of a Go struct in the handler."""
+        body = re.search(rf'^type {struct} struct \{{\n(.*?)^\}}', self.HANDLER, re.S | re.M)
+        self.assertIsNotNone(body, f'struct {struct} not found in the handler')
+        found = {name: (kind.startswith('*'), bool(omit))
+                 for kind, name, omit in re.findall(r'^\s+\w+\s+(\S+)\s+`json:"([a-z_]+)(,omitempty)?"`', body[1], re.M)}
+        self.assertTrue(found, f'no JSON fields read from struct {struct}')
+        return found
+
     def test_denial_body_fields(self):
-        """The mock's denial body must carry the fields ExtAuthzDenial requires."""
-        required = set(GATEKEEPER['components']['schemas']['ExtAuthzDenial']['required'])
-        tree = ast.parse(text('tests/acceptance/blackbox/mock_gatekeeper.py'))
-        keys = {k.value for node in ast.walk(tree) if isinstance(node, ast.Dict)
-                for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)}
-        self.assertLessEqual(required, keys)
+        denial = GATEKEEPER['components']['schemas']['ExtAuthzDenial']
+        sent = self.fields('denialBody')
+        self.assertEqual(set(sent), set(denial['required']))
+        self.assertFalse(any(omit for _, omit in sent.values()), 'a required field may be left out')
+
+    def test_trusted_context_headers(self):
+        """The service reads exactly the headers the contract documents, and the gateway routes send."""
+        documented = {p['name'] for p in GATEKEEPER['paths']['/v1/extauthz/check']['get']['parameters']}
+        read = {value.lower() for value in re.findall(r'^\s+header\w+\s+= "([^"]+)"', self.HANDLER, re.M)}
+        self.assertEqual(read, documented)
+
+    def test_decision_request_fields(self):
+        """Unknown fields are refused by the decoder, so the struct is the whole of what is accepted."""
+        request = GATEKEEPER['components']['schemas']['DecisionRequest']
+        accepted = self.fields('decisionRequest')
+        self.assertIn('DisallowUnknownFields', self.HANDLER)
+        self.assertIs(request['additionalProperties'], False)
+        self.assertEqual(set(accepted), set(request['properties']))
+        self.assertEqual({name for name, (pointer, _) in accepted.items() if pointer}, set(request['required']))
+
+    def test_decision_response_fields(self):
+        sent = self.fields('decisionResponse')
+        self.assertLessEqual(set(sent), set(DECISION_SCHEMA['properties']))
+        self.assertEqual({name for name, (_, omit) in sent.items() if not omit}, set(DECISION_SCHEMA['required']))
+        self.assertIn('credential_handle', sent)
+
+    def test_canonical_path_rule_is_the_same_everywhere(self):
+        """One expression: in the service, in the offline preflight and (checked by the Go tests) on the gateway routes."""
+        service = re.search(r'CanonicalPathPattern = `([^`]+)`', text('internal/egressauthz/domain/path.go'))
+        preflight = re.search(r"CANONICAL_PATH=re\.compile\(r'([^']+)'\)", text('scripts/preflight_intents.py'))
+        self.assertIsNotNone(service)
+        self.assertIsNotNone(preflight)
+        self.assertEqual('^' + preflight[1] + '$', service[1])
 
 
 if __name__ == '__main__':

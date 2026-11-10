@@ -74,5 +74,5 @@
   "allow_request_redirects": false,
   "enforce_tls_upstream": true,
   "gateway_may_retry_non_idempotent": false,
-  "notes": "PoC fixture evaluated by scripts/policy_reference.py inside the mock Gatekeeper. The upstream_hostname is nominal: the PoC upstream is a loopback mock, with no TLS."
+  "notes": "Fixture for the black-box suite, loaded by gateway-authz. The upstream_hostname is nominal: the upstream is a loopback mock, with no TLS."
 }

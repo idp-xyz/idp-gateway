@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
-"""P1 PoC runner: a real agentgateway between a mock Gatekeeper and a mock provider.
+"""Black-box runner: a real agentgateway between this repository's gateway-authz and a mock provider.
 
-Starts the processes (gateway, mock Gatekeeper, mock local broker, mock provider and a
-target no route may reach), drives requests through the gateway, checks what the PDP, the
-broker and the provider actually received, and writes one evidence file. Expectations are
-taken from G01/G03/G04 and are fixed in this file before the run; a case that does not
-meet its expectation is reported as FAIL, not adjusted. A case for a route the binary's
-own validator does not accept is reported as SKIP.
+Builds cmd/gateway-authz, starts the processes (gateway, gateway-authz, mock local broker,
+mock provider and a target no route may reach), drives requests through the gateway, checks
+what the PDP, the broker and the provider actually received, and writes one evidence file.
+Expectations are taken from G01/G03/G04 and are fixed in this file before the run; a case
+that does not meet its expectation is reported as FAIL, not adjusted. A case for a route the
+binary's own validator does not accept is reported as SKIP.
+
+The PDP on the "gatekeeper" port is gateway-authz built with the `acceptance` tag: the same
+code as the product build plus the controls this runner needs (see what it received, make it
+answer 500, slow, or without a credential, revoke an account). Case titles, port names and
+certificate names still say "Gatekeeper" and "PDP" from the time a Python mock stood there.
 
 Usage (from the repository root):
     .venv/bin/python tests/acceptance/blackbox/run.py                              the agentgateway on PATH
     .venv/bin/python tests/acceptance/blackbox/run.py --agentgateway /path/to/bin  another build of it
+    .venv/bin/python tests/acceptance/blackbox/run.py --check-evidence             are the evidence files about the current tree?
 Each agentgateway version writes its own evidence file, tests/acceptance/blackbox/evidence/p1-run-agentgateway-<version>.json.
 """
 from __future__ import annotations
@@ -188,9 +194,43 @@ def stop(name: str, port: int | None = None):
         wait_port(port, up=False)
 
 
+AUTHZ_BINARY = RUN / 'gateway-authz'
+AUTHZ_BUILD = ['build', '-trimpath', '-tags', 'acceptance', '-o', 'tests/acceptance/blackbox/.run/gateway-authz', './cmd/gateway-authz']
+MOCKS = ('mock_broker.py', 'mock_provider.py', 'pki.py')
+
+
+def find_go() -> str | None:
+    return shutil.which('go') or next((p for p in ('/usr/local/go/bin/go',) if Path(p).exists()), None)
+
+
+def authz_source_sha256() -> str:
+    """One digest over what gateway-authz is built from: go.mod and every non-test Go file under cmd/ and internal/."""
+    files = [ROOT / 'go.mod'] + [p for top in ('cmd', 'internal') for p in (ROOT / top).rglob('*.go') if not p.name.endswith('_test.go')]
+    lines = sorted(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.relative_to(ROOT).as_posix()}\n' for p in files)
+    return hashlib.sha256(''.join(lines).encode()).hexdigest()
+
+
+def build_authz(go: str) -> str:
+    """Build the acceptance flavour of gateway-authz into .run/. -> what the toolchain said, '' on success."""
+    AUTHZ_BINARY.unlink(missing_ok=True)   # never run a binary left over from another tree
+    built = subprocess.run([go, *AUTHZ_BUILD], cwd=ROOT, capture_output=True, text=True, timeout=600)
+    if built.returncode != 0 or not AUTHZ_BINARY.exists():
+        return (built.stdout + built.stderr).strip() or 'no binary produced'
+    os.chmod(AUTHZ_BINARY, 0o700)
+    return ''
+
+
 def start_gatekeeper():
-    start('gatekeeper', [sys.executable, str(HERE / 'mock_gatekeeper.py'), '--port', str(PORTS['gatekeeper']),
-                         '--policy', str(HERE / 'policy.poc.json'), '--state', str(RUN / 'state.json')], PORTS['gatekeeper'])
+    """The PDP on the gatekeeper port: this repository's gateway-authz, acceptance build."""
+    env = {**os.environ, 'GATEWAY_AUTHZ_ACCEPTANCE_ADMIN_SECRET': S.admin,
+           'GATEWAY_AUTHZ_ACCEPTANCE_OPERATOR_IDENTITY': pki.ID['operator'],
+           'GATEWAY_AUTHZ_ACCEPTANCE_SLOW_SECONDS': str(PDP_SLOW_SECONDS)}
+    start('gateway-authz', [str(AUTHZ_BINARY), '--listen', f"127.0.0.1:{PORTS['gatekeeper']}",
+                            '--tls-cert', str(TLS / 'gatekeeper.crt'), '--tls-key', str(TLS / 'gatekeeper.key'),
+                            '--client-ca', str(TLS / 'ca.crt'), '--policy', str(HERE / 'policy.poc.json'),
+                            '--credentials', str(RUN / 'authz-credentials.json'),
+                            '--gateway-identity', pki.ID['gateway'], '--broker-identity', pki.ID['broker']],
+          PORTS['gatekeeper'], env=env)
 
 
 def start_broker():
@@ -312,6 +352,7 @@ class S:  # per-run secrets; never written to the evidence file
     default_start_rewrites = None  # default_start_rewrites_config()
     overlay_accepted = False       # does the binary's validator accept the key-expression route?
     config_bytes = b''             # what the gateway is started from
+    pdp_protocols: set = set()     # HTTP versions the gateway spoke to the PDP
 
 
 CASES: list[tuple] = []
@@ -343,8 +384,9 @@ broker_log = lambda: body_json(send(PORTS['broker'], 'GET', '/admin/log', ADMIN(
 
 
 def pdp(method: str, target: str, headers=(), body: bytes | None = None, cert: str | None = 'operator', ca: str = 'ca') -> dict:
-    """A direct call to the Gatekeeper port, presenting the named certificate (None: no certificate)."""
-    return send(PORTS['gatekeeper'], method, target, headers, body, tls=(cert, ca))
+    """A direct call to the Gatekeeper port, presenting the named certificate (None: no certificate).
+    send() writes no Host header of its own, and gateway-authz answers 400 to an HTTP/1.1 request without one."""
+    return send(PORTS['gatekeeper'], method, target, [('Host', pki.GATEKEEPER_NAME)] + list(headers), body, tls=(cert, ca))
 
 
 pdp_state = lambda: body_json(pdp('GET', '/admin/log', ADMIN()))
@@ -626,7 +668,7 @@ pdp_failure('P1-FC-02', 'PDP slower than the gateway\'s 1s authorization timeout
 @case('P1-FC-03', 'PDP process is down', 'request is rejected and never reaches the provider; service resumes when the PDP is back',
       ('GW-ST-008', 'GW-NAT-006', 'GW-FR-047'))
 def _(c):
-    stop('gatekeeper', PORTS['gatekeeper'])
+    stop('gateway-authz', PORTS['gatekeeper'])
     try:
         r = gw('GET', TRACKING + '/TRK-1', blue())
         c.note('status_while_down', r['status'])
@@ -641,7 +683,7 @@ def _(c):
       'the gateway does not accept its certificate: it is sent no request, nothing reaches the provider, and service resumes with the real PDP',
       ('GW-ST-018', 'GW-ST-008', 'GW-FR-021', 'GW-FR-047'))
 def _(c):
-    stop('gatekeeper', PORTS['gatekeeper'])
+    stop('gateway-authz', PORTS['gatekeeper'])
     impostor = Impostor()
     try:
         r = gw('GET', TRACKING + '/TRK-1', blue())
@@ -998,7 +1040,7 @@ def _(c):
     refused('Gatekeeper answers 500')
     pdp_admin('/admin/mode?value=slow')
     refused('Gatekeeper slower than the broker waits')
-    stop('gatekeeper', PORTS['gatekeeper'])
+    stop('gateway-authz', PORTS['gatekeeper'])
     try:
         refused('Gatekeeper down')
     finally:
@@ -1120,8 +1162,12 @@ def _(c):
 # main
 # --------------------------------------------------------------------------------------
 SCOPE_LIMITS = [
-    'Gatekeeper is a mock written for this PoC: no real identity provider, grants store, Secret Manager or provider token '
-    'endpoint. No Gatekeeper implementation was available to test against; what is exercised is the gateway\'s side of the contract.',
+    'The PDP is this repository\'s gateway-authz, built with the `acceptance` tag: the product code plus the test controls '
+    'this runner uses (request log, fault modes, revoke/restore). The product build, which has none of them, is not what ran. '
+    'Where a case says "Gatekeeper" or "PDP" it means this process.',
+    'gateway-authz reads its policy and its credentials from files written for the run and keeps revocations in memory. '
+    'No identity provider, grants store, Secret Manager or provider token endpoint is involved, and the deployed Gatekeeper '
+    'is not called: the caller tokens are signed by a key made for the run.',
     'The provider is a loopback mock; no carrier sandbox was called.',
     'Mutual TLS is real on the gateway-to-PDP and broker-to-PDP hops only, with a CA and certificates made for the run: '
     'no SPIFFE Workload API, no rotation, no certificate revocation. Caller-to-gateway and gateway-to-provider are plain HTTP.',
@@ -1156,6 +1202,8 @@ def prepare():
     # The broker's own store: handle (credential binding / account) -> provider token.
     binding = json.loads((HERE / 'policy.poc.json').read_text(encoding='utf-8'))['registered_operations'][0]['credential_binding_ref']
     (RUN / 'broker-store.json').write_text(json.dumps({f'{binding}/{a}': t for a, t in S.token.items()}), encoding='utf-8')
+    # gateway-authz's credential file has the same shape: handle -> bearer token.
+    (RUN / 'authz-credentials.json').write_text(json.dumps({f'{binding}/{a}': t for a, t in S.token.items()}), encoding='utf-8')
     for f in RUN.iterdir():
         if f.is_file():
             os.chmod(f, 0o600)
@@ -1199,11 +1247,47 @@ def ephemeral_range() -> tuple[int, int] | None:
         return None
 
 
+def input_digests() -> dict:
+    """What a run depends on besides the agentgateway binary, as recorded in every evidence file."""
+    sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+    return {('agentgateway', 'config_sha256'): sha(CONFIG), ('agentgateway', 'overlay_sha256'): sha(OVERLAY),
+            ('policy_sha256',): sha(HERE / 'policy.poc.json'), ('runner_sha256',): sha(Path(__file__).resolve()),
+            ('front_proxy', 'config_sha256'): sha(FRONT_CONF), ('gateway_authz', 'source_sha256'): authz_source_sha256(),
+            **{('mocks_sha256', f): sha(HERE / f) for f in MOCKS}}
+
+
+def check_evidence() -> int:
+    """Compare the digests recorded in each evidence file with the files as they are now."""
+    now, stale = input_digests(), 0
+    for f in sorted((HERE / 'evidence').glob('*.json')):
+        recorded = json.loads(f.read_text(encoding='utf-8'))
+        differs = []
+        for keys, value in now.items():
+            node = recorded
+            for key in keys:
+                node = node.get(key) if isinstance(node, dict) else None
+            if node != value:
+                differs.append('.'.join(keys))
+        s = recorded.get('summary', {})
+        print(f"{'STALE' if differs else 'OK   '}  {f.name}  ({s.get('pass')}/{s.get('run')} passed, commit {str(recorded.get('repository_commit'))[:7]})")
+        for key in differs:
+            print(f'        differs from that run: {key}')
+        stale += bool(differs)
+    return 1 if stale else 0
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description='P1 PoC runner')
+    ap = argparse.ArgumentParser(description='black-box runner')
     ap.add_argument('--agentgateway', default='agentgateway', metavar='BINARY',
                     help='agentgateway binary to test (default: the one on PATH)')
+    ap.add_argument('--check-evidence', action='store_true',
+                    help='run nothing; report whether each evidence file was produced from the files as they are now')
     args = ap.parse_args()
+    if args.check_evidence:
+        return check_evidence()
+    go = find_go()
+    if not go:
+        print('go toolchain not found (needed to build cmd/gateway-authz)'); return 2
     binary = shutil.which(args.agentgateway)
     if not binary:
         print(f'agentgateway binary not found: {args.agentgateway}'); return 2
@@ -1229,6 +1313,11 @@ def main() -> int:
     front_version = (front_version.stdout + front_version.stderr).strip()
     print('front proxy:', front_version)
     prepare()
+    build_said = build_authz(go)
+    if build_said:
+        print('gateway-authz did not build:', build_said); return 2
+    go_version = sh([go, 'version'])
+    print('gateway-authz (acceptance build):', go_version)
     validation = compose_config(binary)
     print('native config validation:', validation['base_said'])
     if not validation['base_ok']:
@@ -1263,6 +1352,8 @@ def main() -> int:
                 fn(c)
             except Exception as e:
                 c.check(f'case raised {type(e).__name__}: {e}', False)
+            # Observation, not a check: over which HTTP version the gateway asked.
+            S.pdp_protocols.update(e.get('proto') for e in pdp_log() if e.get('peer_identity') == pki.ID['gateway'] and e.get('proto'))
             ok = bool(c.checks) and all(x['ok'] for x in c.checks)
             results.append({**record, 'result': 'PASS' if ok else 'FAIL',
                             'checks': c.checks, 'observed': c.observed, 'indicative_for': list(maps_to)})
@@ -1283,7 +1374,7 @@ def main() -> int:
     passed = sum(r['result'] == 'PASS' for r in results)
     skipped = sum(r['result'] == 'SKIP' for r in results)
     evidence = {
-        'title': 'IDP Gateway P1 PoC: real agentgateway, mock Gatekeeper, mock provider',
+        'title': 'IDP Gateway black-box suite: real agentgateway, gateway-authz (acceptance build), mock provider',
         'started_at_utc': started.isoformat(), 'finished_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
         'operator': sh(['git', 'config', 'user.name']), 'host': platform.platform(), 'python': sys.version.split()[0],
         'command': ' '.join(['.venv/bin/python', 'tests/acceptance/blackbox/run.py'] + sys.argv[1:]),
@@ -1306,9 +1397,17 @@ def main() -> int:
                          'session_key_supplied_by': 'SESSION_KEY environment variable, generated per run, not recorded',
                          'start_without_session_key_rewrites_config_file': S.default_start_rewrites},
         'policy_sha256': hashlib.sha256((HERE / 'policy.poc.json').read_bytes()).hexdigest(),
-        'policy_reference_sha256': hashlib.sha256((ROOT / 'scripts' / 'policy_reference.py').read_bytes()).hexdigest(),
-        'mocks_sha256': {f: hashlib.sha256((HERE / f).read_bytes()).hexdigest()
-                         for f in ('mock_gatekeeper.py', 'mock_broker.py', 'mock_provider.py', 'pki.py')},
+        'runner_sha256': hashlib.sha256(Path(__file__).resolve().read_bytes()).hexdigest(),
+        'gateway_authz': {'what_ran': 'cmd/gateway-authz built with the acceptance tag; not the product build',
+                          'build_command': 'go ' + ' '.join(AUTHZ_BUILD), 'go': go_version,
+                          'source_sha256': authz_source_sha256(),
+                          'source_sha256_covers': 'go.mod and every non-test .go file under cmd/ and internal/',
+                          'binary_sha256': hashlib.sha256(AUTHZ_BINARY.read_bytes()).hexdigest(),
+                          'policy_from': 'tests/acceptance/blackbox/policy.poc.json',
+                          'credentials_from': 'a file written for the run, not recorded',
+                          'revocations': 'in memory',
+                          'http_versions_seen_from_the_gateway': sorted(S.pdp_protocols)},
+        'mocks_sha256': {f: hashlib.sha256((HERE / f).read_bytes()).hexdigest() for f in MOCKS},
         'front_proxy': {'image': FRONT_IMAGE, 'version': front_version, 'config_file': 'tests/acceptance/blackbox/front.nginx.conf',
                         'config_sha256': hashlib.sha256(FRONT_CONF.read_bytes()).hexdigest(),
                         'runs_as': 'container on the host network, unprivileged user, read-only root, no capabilities'},

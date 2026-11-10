@@ -1,9 +1,13 @@
-# 测试资产与真实证据约束
+# 测试
 
-`acceptance_matrix.csv` 含 95 个场景，覆盖 G01 的 50 项功能需求（GW-AT，50 个）与 19 项非功能需求（GW-NAT，19 个），另有 26 个额外风险/反例（GW-ST）。所有真实网关集成、Provider、负载、HA 和安全测试当前 **NOT_RUN**。
+| 位置 | 是什么 | 怎么跑 |
+|---|---|---|
+| 各 Go 包旁的 `*_test.go` | 单元测试 | `go test ./...` |
+| `acceptance/acceptance_matrix.csv` 等三张矩阵 | 正式验收用例（95 个场景：GW-AT 50、GW-NAT 19、GW-ST 26）、协议兼容清单、故障演练清单。全部 **NOT_RUN** | 尚未执行 |
+| `acceptance/blackbox/` | 对着真实 agentgateway 的黑盒用例，被测的 PDP 是本仓的 `gateway-authz` | 见该目录 README |
+| `contracts/` | 契约之间、契约与黑盒配置之间的一致性；RouteIntent 预检与诊断事件的反例 | `python -m unittest discover -s tests/contracts -p 'test_*.py'` |
+| `security/` | 诊断采集授权参考实现的反例 | `python -m unittest discover -s tests/security -p 'test_*.py'` |
 
-可运行的离线检查：`python3 scripts/validate_baseline.py`、`python3 -m unittest discover -s tests/contracts -p 'test_*.py'` 与 `python3 -m unittest discover -s tests/security -p 'test_*.py'`（依赖见根目录 `requirements.txt`），只验证示例策略、静态结构和安全判定参考逻辑，并不代替真实 Gatekeeper/agentgateway/提供商端到端测试。输出证据 `tests/evidence/static-validation.json` 是本地执行报告。
+黑盒用例通过不改变验收矩阵里任何用例的 `NOT_RUN`。验收用例离开 `NOT_RUN` 时必须填写指向仓库内文件的 `evidence_uri`。
 
-`test_bypass_regressions.py`（两个目录各一份）固定了评审中发现的绕过：它们先对着交付时的实现写成失败用例，再把参考实现从"拒绝看起来坏的"改成"只接受已知好的"。`tests/contracts/test_contract_consistency.py` 固定契约之间的一致性。
-
-在真实 agentgateway 上运行的 PoC 在 `poc/p1/`，它的证据不改变本目录任何用例的 `NOT_RUN`。验收用例离开 `NOT_RUN` 时必须填写指向仓库内文件的 `evidence_uri`。
+`contracts/` 与 `security/` 里的 Python 检查对应 `scripts/` 下还没有移植成 Go 的参考实现（RouteIntent 预检、诊断采集）。出站判定规则已经移植，Go 版本及其测试在 `internal/egressauthz/domain`。

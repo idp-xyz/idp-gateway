@@ -3,8 +3,10 @@
 #
 # Real:  the agentgateway data plane (JWT validation, HTTP ExtAuthZ, header handling, routing,
 #        and its side of the mutual TLS session with the PDP).
-# Mock:  Gatekeeper PDP/Broker (mock_gatekeeper.py), the local broker (mock_broker.py) and
-#        the provider (mock_provider.py). Certificates come from a CA made for each run.
+# Ours:  the PDP on 27613 is this repository's cmd/gateway-authz (acceptance build). The names
+#        below still call it Gatekeeper: gatekeeper.idp.test, .run/tls/gatekeeper.*.
+# Mock:  the local broker (mock_broker.py) and the provider (mock_provider.py). Certificates
+#        come from a CA made for each run.
 # Not covered: TLS towards callers or the provider, real Secret Manager, multi-replica, load.
 #
 # Run through run.py: it creates the .run/ files referenced below and starts the
@@ -22,7 +24,7 @@
 # file shared by both versions: 1.7.0 accepts it, 1.6.0 rejects it.
 #
 # Ports 27611-27618 and 27620 are reserved for this PoC:
-#   27611 gateway listener   27612 mock provider      27613 mock Gatekeeper (TLS)
+#   27611 gateway listener   27612 mock provider      27613 gateway-authz (TLS)
 #   27614 gateway admin      27615 gateway stats      27616 gateway readiness
 #   27617 "forbidden" target that no route may ever reach
 #   27618 mock local broker (Mode B)
@@ -69,7 +71,8 @@ routes:
     # Canonical-path allowlist (G03 §5 "URI 改写"). Only /segment/segment... built from
     # unreserved characters is routable: no percent sign (so no encoded or double-encoded
     # dot or slash), no empty, "." or ".." segment, no trailing slash, no ";params".
-    # scripts/policy_reference.py applies the same rule on the PDP side; keep them identical.
+    # gateway-authz applies the same rule (internal/egressauthz/domain, CanonicalPathPattern);
+    # internal/architecture has a test that fails when the two differ.
     authorization:
       rules:
       - allow: 'request.path.matches("^(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$")'

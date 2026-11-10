@@ -11,10 +11,14 @@ from pathlib import Path
 from typing import Any
 from jsonschema import Draft202012Validator, FormatChecker
 
-sys.path.insert(0,str(Path(__file__).resolve().parent))
-from policy_reference import is_canonical_path
-
 ROOT=Path(__file__).resolve().parents[1]
+# The canonical-path rule of the egress policy. The implementation that decides requests is
+# internal/egressauthz/domain (CanonicalPathPattern); tests/contracts checks the two are the same.
+CANONICAL_PATH=re.compile(r'(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+')
+
+
+def is_canonical_path(path:Any)->bool:
+    return isinstance(path,str) and CANONICAL_PATH.fullmatch(path) is not None
 # The upstream rule is an allowlist: an EGRESS intent passes only if it matches a row of the
 # provider registry. In a deployment that registry is API Fabric's approved provider catalogue;
 # offline it defaults to the example below. The reserved-name lists that follow are kept as a

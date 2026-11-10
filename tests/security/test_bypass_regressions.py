@@ -3,6 +3,9 @@
 Each test was written against the helper as delivered and failed there; the helper was
 then changed from "reject what looks bad" to "accept only what is known good".
 OFFLINE reference tests, not Gateway/Gatekeeper integration tests.
+
+The path-bypass regressions that used to be here were about the egress policy rules. Those
+rules are Go now, and so are their tests: internal/egressauthz/domain/policy_test.go.
 """
 import copy, json, sys, unittest
 from datetime import datetime
@@ -12,72 +15,14 @@ R = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(R / 'scripts'))
 import diagnostic_reference
 from diagnostic_reference import authorize_capture
-from policy_reference import EgressRequest, TrustedPrincipal, evaluate
 
-POLICY = json.loads((R / 'contracts/gateway/policies/egress-policy.example.json').read_text(encoding='utf-8'))
 GRANT = json.loads((R / 'contracts/gateway/policies/diagnostic-capture.example.json').read_text(encoding='utf-8'))
-PREFIX = '/providers/mockcarrier/v1/tracking'
 NOW = datetime.fromisoformat('2026-11-10T08:05:00+00:00')
-
-
-def decide(path=PREFIX + '/123', policy=POLICY):
-    principal = TrustedPrincipal(service_id='parcel-service', tenant_id='tenant-blue', verified=True, environment='TEST')
-    request = EgressRequest(provider_id='mockcarrier', operation_id='tracking.get', account_id='account-blue',
-                            path=path, method='GET', environment='TEST')
-    return evaluate(policy, principal, request)
 
 
 def approve(grant):
     return authorize_capture(grant, trusted_route='gwi-example-001', trusted_tenant='tenant-blue',
                              trusted_environment='TEST', now=NOW)
-
-
-class PolicyPathBypass(unittest.TestCase):
-    def test_canonical_paths_still_allowed(self):
-        for path in [PREFIX, PREFIX + '/TRK-1', PREFIX + '/a.b_c~d-e', PREFIX + '/1/events']:
-            with self.subTest(path=path):
-                self.assertEqual(decide(path).result, 'ALLOW')
-
-    def test_non_canonical_paths_denied(self):
-        cases = {
-            'double-encoded dot segment': PREFIX + '/%252e%252e/admin',
-            'double-encoded slash': PREFIX + '/%252e%252e%252fadmin',
-            'encoded NUL': PREFIX + '/TRK-1%00',
-            'raw NUL': PREFIX + '/TRK-1\x00',
-            'path parameter': PREFIX + '/TRK-1;x=1',
-            'single-dot segment': PREFIX + '/./TRK-1',
-            'hidden segment': PREFIX + '/.git',
-            'trailing slash': PREFIX + '/TRK-1/',
-            'query inside path': PREFIX + '/TRK-1?admin=1',
-            'fragment': PREFIX + '/TRK-1#x',
-            'space': PREFIX + '/TRK 1',
-            'tab': PREFIX + '/TRK\t1',
-            'newline': PREFIX + '/TRK-1\nX-Injected: 1',
-            'non-ASCII look-alike dots': PREFIX + '/\uff0e\uff0e/admin',
-            'encoded space': PREFIX + '/TRK%201',
-            'at sign': PREFIX + '/user@evil.example',
-        }
-        for label, path in cases.items():
-            with self.subTest(case=label):
-                d = decide(path)
-                self.assertEqual((d.result, d.reason), ('DENY', 'PATH_NOT_CANONICAL'))
-                self.assertIsNone(d.credential_binding_ref)
-
-    def test_row_without_path_prefix_matches_nothing(self):
-        for label, mutate in {
-            'missing': lambda row: row.pop('path_prefix'),
-            'empty': lambda row: row.update(path_prefix=''),
-            'root': lambda row: row.update(path_prefix='/'),
-            'null': lambda row: row.update(path_prefix=None),
-            'not canonical': lambda row: row.update(path_prefix='/providers/../providers/mockcarrier/v1/tracking'),
-        }.items():
-            with self.subTest(path_prefix=label):
-                policy = copy.deepcopy(POLICY)
-                mutate(policy['registered_operations'][0])
-                for path in [PREFIX + '/123', '/anything/else', '/']:
-                    d = decide(path, policy)
-                    self.assertEqual(d.result, 'DENY')
-                    self.assertIsNone(d.credential_binding_ref)
 
 
 class CaptureGrantBypass(unittest.TestCase):
