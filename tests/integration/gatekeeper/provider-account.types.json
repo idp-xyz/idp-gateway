@@ -1,0 +1,24 @@
+[
+  {
+    "type": "provider_account",
+    "relations": {
+      "org": { "this": {} },
+      "caller": { "this": {} },
+      "use": {
+        "intersection": {
+          "child": [
+            { "computedUserset": { "relation": "caller" } },
+            { "tupleToUserset": { "tupleset": { "relation": "org" }, "computedUserset": { "relation": "member" } } }
+          ]
+        }
+      }
+    },
+    "metadata": {
+      "relations": {
+        "org": { "directly_related_user_types": [ { "type": "org" } ] },
+        "caller": { "directly_related_user_types": [ { "type": "user" } ] },
+        "use": { "directly_related_user_types": [] }
+      }
+    }
+  }
+]

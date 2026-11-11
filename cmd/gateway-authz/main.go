@@ -1,7 +1,8 @@
 // Command gateway-authz 是出站请求的判定与凭证服务，agentgateway 的 ExtAuthZ 目标。
 //
 // 它在请求路径上：只用标准库，不连数据库。第一版从文件读登记表和凭证，撤销状态放在
-// 内存里，这三样都是占位（见 docs/adr/ADR-0009.md）。
+// 内存里，这三样都是占位（见 docs/adr/ADR-0009.md）。账户的使用授权可以再交给
+// Gatekeeper 的 PDP 确认一遍（--gatekeeper-url），不配置时只看登记表。
 package main
 
 import (
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"go.idp.xyz/idp-gateway/internal/egressauthz/adapters/filestore"
+	"go.idp.xyz/idp-gateway/internal/egressauthz/adapters/gatekeeper"
 	"go.idp.xyz/idp-gateway/internal/egressauthz/adapters/httpapi"
 	"go.idp.xyz/idp-gateway/internal/egressauthz/adapters/memory"
 	"go.idp.xyz/idp-gateway/internal/egressauthz/application"
@@ -49,6 +51,8 @@ type options struct {
 	credentials     string
 	gatewayIdentity string
 	brokerIdentity  string
+	gatekeeperURL   string
+	gatekeeperToken string
 }
 
 func parse(args []string, output io.Writer) (options, error) {
@@ -70,6 +74,8 @@ func parse(args []string, output io.Writer) (options, error) {
 	add(&o.credentials, "credentials", "凭证文件（JSON：凭证句柄 -> Bearer 令牌），权限须为 0600 或更严", true)
 	add(&o.gatewayIdentity, "gateway-identity", "网关工作负载的身份（证书里的 URI）：可以要判定和凭证", true)
 	add(&o.brokerIdentity, "broker-identity", "本地 Broker 工作负载的身份：只能要判定；不设则没有这样的调用方", false)
+	add(&o.gatekeeperURL, "gatekeeper-url", "Gatekeeper PDP 的地址；设了它，登记表放行的请求还要 Gatekeeper 确认账户的使用授权", false)
+	add(&o.gatekeeperToken, "gatekeeper-token-file", "访问 Gatekeeper PDP 的 Bearer 令牌文件，权限须为 0600 或更严", false)
 	if err := flags.Parse(args); err != nil {
 		return o, err
 	}
@@ -87,6 +93,9 @@ func parse(args []string, output io.Writer) (options, error) {
 	}
 	if o.brokerIdentity == o.gatewayIdentity {
 		return o, errors.New("--broker-identity must differ from --gateway-identity: the broker may not ask for credentials")
+	}
+	if (o.gatekeeperURL == "") != (o.gatekeeperToken == "") {
+		return o, errors.New("--gatekeeper-url and --gatekeeper-token-file go together")
 	}
 	return o, nil
 }
@@ -112,9 +121,25 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 		return err
 	}
 
+	// 账户的使用授权：默认只看登记表；配置了 Gatekeeper 就每次再问它一遍。
+	grantSource := "policy"
+	var options []application.Option
+	if o.gatekeeperURL != "" {
+		token, err := gatekeeper.LoadToken(o.gatekeeperToken)
+		if err != nil {
+			return err
+		}
+		grants, err := gatekeeper.New(gatekeeper.Config{BaseURL: o.gatekeeperURL, Token: token})
+		if err != nil {
+			return err
+		}
+		grantSource = "policy+gatekeeper"
+		options = append(options, application.WithGrants(grants))
+	}
+
 	revocations := &memory.Revocations{}
 	callers := httpapi.Callers{Gateway: o.gatewayIdentity, Broker: o.brokerIdentity}
-	service := application.New(policy, credentials, revocations)
+	service := application.New(policy, credentials, revocations, options...)
 	var handler http.Handler = httpapi.New(service, callers, logger)
 	var serverLog io.Writer = &serverLogWriter{logger: logger}
 	handler, serverLog, err = install(handler, serverLog, seams{listen: o.listen, callers: callers, revocations: revocations, logger: logger})
@@ -138,7 +163,7 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 	}
 	logger.Info("gateway-authz listening", "addr", listener.Addr().String(), "build", buildFlavor,
 		"policy_version", policy.Version, "operations", len(policy.Operations), "credentials", credentials.Len(),
-		"gateway_identity", o.gatewayIdentity, "broker_identity", o.brokerIdentity)
+		"gateway_identity", o.gatewayIdentity, "broker_identity", o.brokerIdentity, "grants", grantSource)
 	if ready != nil {
 		ready(listener.Addr())
 	}

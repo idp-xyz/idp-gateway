@@ -1,4 +1,5 @@
-// Package ports 是出站判定对外部依赖的要求：凭证从哪里取，撤销状态从哪里读。
+// Package ports 是出站判定对外部依赖的要求：凭证从哪里取，撤销状态从哪里读，
+// 账户的使用授权向谁问。
 package ports
 
 import (
@@ -23,6 +24,13 @@ type Revocations interface {
 	State(ctx context.Context, accountID string) (revoked bool, epoch uint64, err error)
 	// Epoch 返回当前的撤销代次。
 	Epoch(ctx context.Context) (uint64, error)
+}
+
+// Grants 回答某个调用方此刻有没有被授予某个 Provider 账户的使用权。授权数据不在本服务里。
+type Grants interface {
+	// MayUse 报告租户 tenantID 名下的调用方 subject 能否使用 accountID。
+	// 问不出结果时返回错误：调用方不得把错误当成"没有授权"，更不得当成"有授权"。
+	MayUse(ctx context.Context, subject, tenantID, accountID string) (bool, error)
 }
 
 // Handle 是凭证句柄：凭证绑定加账户。它出现在只返回判定的接口里，本身不是凭证。

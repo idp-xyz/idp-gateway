@@ -1,5 +1,5 @@
 // Package application 把一次出站判定串起来：选定账户、按登记表判定、查撤销状态，
-// 需要时取出凭证。它不知道请求是经哪种协议来的。
+// 配置了授权来源时再问一次账户的使用授权，需要时取出凭证。它不知道请求是经哪种协议来的。
 package application
 
 import (
@@ -18,6 +18,7 @@ const (
 	ReasonAccountRevoked             = "ACCOUNT_REVOKED"
 	ReasonRevocationStateUnavailable = "REVOCATION_STATE_UNAVAILABLE"
 	ReasonCredentialUnavailable      = "CREDENTIAL_UNAVAILABLE"
+	ReasonGrantStateUnavailable      = "GRANT_STATE_UNAVAILABLE"
 )
 
 // ErrIndeterminate 表示判定没能完成。调用方必须按拒绝处理，并且不能把它报告成策略拒绝。
@@ -64,12 +65,26 @@ type Service struct {
 	policy      domain.Policy
 	credentials ports.CredentialSource
 	revocations ports.Revocations
+	grants      ports.Grants
 	newID       func() string
 }
 
+// Option 调整 Service 的构造。
+type Option func(*Service)
+
+// WithGrants 让每一次登记表放行的判定再去问一次 grants。登记表只能被它收窄：
+// 登记表拒绝的请求不会去问，grants 说没有授权或答不出来的请求不会放行。
+func WithGrants(grants ports.Grants) Option {
+	return func(s *Service) { s.grants = grants }
+}
+
 // New 构造 Service。policy 在进程生命周期内不变；换登记表要换进程。
-func New(policy domain.Policy, credentials ports.CredentialSource, revocations ports.Revocations) *Service {
-	return &Service{policy: policy, credentials: credentials, revocations: revocations, newID: randomDecisionID}
+func New(policy domain.Policy, credentials ports.CredentialSource, revocations ports.Revocations, options ...Option) *Service {
+	s := &Service{policy: policy, credentials: credentials, revocations: revocations, newID: randomDecisionID}
+	for _, option := range options {
+		option(s)
+	}
+	return s
 }
 
 // PolicyVersion 返回当前登记表的版本。
@@ -119,6 +134,18 @@ func (s *Service) Decide(ctx context.Context, in Input) (Outcome, error) {
 	if revoked {
 		out.Reason = ReasonAccountRevoked
 		return out, nil
+	}
+	// 放在最后问：前面任何一步拒绝，都不必为这个请求发一次网络调用。
+	if s.grants != nil {
+		granted, err := s.grants.MayUse(ctx, principal.ServiceID, principal.TenantID, out.Account)
+		if err != nil {
+			out.Reason = ReasonGrantStateUnavailable
+			return out, fmt.Errorf("%w: grant state: %w", ErrIndeterminate, err)
+		}
+		if !granted {
+			out.Reason = string(domain.ReasonAccountNotGranted)
+			return out, nil
+		}
 	}
 	out.Allowed = true
 	out.BindingRef = decision.CredentialBindingRef

@@ -206,6 +206,90 @@ func TestMissingCredentialIsIndeterminateNotAllowed(t *testing.T) {
 	}
 }
 
+type fakeGrants struct {
+	granted bool
+	err     error
+	asked   [][3]string
+}
+
+func (f *fakeGrants) MayUse(_ context.Context, subject, tenantID, accountID string) (bool, error) {
+	f.asked = append(f.asked, [3]string{subject, tenantID, accountID})
+	return f.granted, f.err
+}
+
+func newServiceWithGrants(grants *fakeGrants) (*Service, *fakeCredentials, *fakeRevocations) {
+	_, credentials, revocations := newService()
+	return New(twoTenantPolicy(), credentials, revocations, WithGrants(grants)), credentials, revocations
+}
+
+func TestGrantsAreAskedAboutTheVerifiedCallerAndTheChosenAccount(t *testing.T) {
+	grants := &fakeGrants{granted: true}
+	service, _, _ := newServiceWithGrants(grants)
+	out, credential, err := service.Authorize(context.Background(), blueInput())
+	if err != nil || !out.Allowed || credential.Reveal() != "Bearer blue-token" || out.Reason != string(domain.ReasonActiveAccountGrant) {
+		t.Fatalf("%+v, %v", out, err)
+	}
+	if len(grants.asked) != 1 || grants.asked[0] != [3]string{"parcel-service", "tenant-blue", "account-blue"} {
+		t.Fatalf("问的是 %v", grants.asked)
+	}
+}
+
+func TestGrantsCanOnlyNarrowThePolicy(t *testing.T) {
+	// 登记表拒绝的请求不去问，哪怕授权来源会说可以。
+	grants := &fakeGrants{granted: true}
+	service, credentials, _ := newServiceWithGrants(grants)
+	in := blueInput()
+	in.RequestedAccount = "account-green"
+	out, _, err := service.Authorize(context.Background(), in)
+	if err != nil || out.Allowed || out.Reason != string(domain.ReasonAccountNotGranted) {
+		t.Fatalf("%+v, %v", out, err)
+	}
+	if len(grants.asked) != 0 || len(credentials.asked) != 0 {
+		t.Fatalf("登记表已拒绝，仍问了授权来源 %v 或凭证来源 %v", grants.asked, credentials.asked)
+	}
+
+	// 登记表放行、授权来源说没有：拒绝，不取凭证。
+	grants = &fakeGrants{granted: false}
+	service, credentials, _ = newServiceWithGrants(grants)
+	out, credential, err := service.Authorize(context.Background(), blueInput())
+	if err != nil || out.Allowed || out.Reason != string(domain.ReasonAccountNotGranted) || out.BindingRef != "" || !credential.IsZero() {
+		t.Fatalf("%+v, %v", out, err)
+	}
+	if len(grants.asked) != 1 || len(credentials.asked) != 0 {
+		t.Fatalf("授权来源 %v，凭证来源 %v", grants.asked, credentials.asked)
+	}
+}
+
+func TestUnansweredGrantIsIndeterminate(t *testing.T) {
+	grants := &fakeGrants{granted: true, err: errors.New("pdp unreachable")}
+	service, credentials, _ := newServiceWithGrants(grants)
+	for name, decide := range map[string]func() (Outcome, error){
+		"取凭证的判定": func() (Outcome, error) {
+			out, _, err := service.Authorize(context.Background(), blueInput())
+			return out, err
+		},
+		"只要判定": func() (Outcome, error) { return service.Decide(context.Background(), blueInput()) },
+	} {
+		out, err := decide()
+		if !errors.Is(err, ErrIndeterminate) || out.Allowed || out.Reason != ReasonGrantStateUnavailable || out.CredentialHandle() != "" {
+			t.Fatalf("%s: %+v, %v", name, out, err)
+		}
+	}
+	if len(credentials.asked) != 0 {
+		t.Fatal("授权问不出结果时仍去取了凭证")
+	}
+}
+
+func TestRevokedAccountIsNotAskedAbout(t *testing.T) {
+	grants := &fakeGrants{granted: true}
+	service, _, revocations := newServiceWithGrants(grants)
+	revocations.revoked["account-blue"] = true
+	out, _ := service.Decide(context.Background(), blueInput())
+	if out.Allowed || out.Reason != ReasonAccountRevoked || len(grants.asked) != 0 {
+		t.Fatalf("%+v，问了 %v", out, grants.asked)
+	}
+}
+
 func TestDecideDoesNotFetchCredentials(t *testing.T) {
 	service, credentials, _ := newService()
 	out, err := service.Decide(context.Background(), blueInput())

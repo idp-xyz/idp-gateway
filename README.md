@@ -16,6 +16,7 @@
 | `contracts/` | OpenAPI 与 JSON Schema |
 | `deploy/agentgateway/` | 数据面的原生配置（目前只有一份示意样例） |
 | `tests/acceptance/` | 正式验收矩阵；`blackbox/` 是对着真实 agentgateway 跑的黑盒用例 |
+| `tests/integration/gatekeeper/` | 与本机起的一套真实 Gatekeeper 的联调 |
 | `tests/contracts`、`tests/security`、`scripts/` | 针对契约的离线检查与尚未移植的 Python 参考实现 |
 | `docs/` | G01–G06 设计文档、[ADR](docs/adr/README.md)、治理记录、运行手册 |
 
@@ -29,9 +30,14 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt        # 一�
 .venv/bin/python -m unittest discover -s tests/contracts -p 'test_*.py'
 .venv/bin/python -m unittest discover -s tests/security -p 'test_*.py'
 .venv/bin/python tests/acceptance/blackbox/run.py                          # 需要 agentgateway、go 和 docker
+
+tests/integration/gatekeeper/stack.sh up                                   # 本机起一套 Gatekeeper（需要它的只读检出）
+.venv/bin/python tests/integration/gatekeeper/run.py                       # 与黑盒套件共用端口，不能同时跑
 ```
 
-黑盒用例说明与最近一次结果见 [tests/acceptance/blackbox/README.md](tests/acceptance/blackbox/README.md)。本项目只使用 `27610-27620` 端口段。
+黑盒用例说明与最近一次结果见 [tests/acceptance/blackbox/README.md](tests/acceptance/blackbox/README.md)；与 Gatekeeper 联调的做法和结论见 [tests/integration/gatekeeper/README.md](tests/integration/gatekeeper/README.md)。本项目只使用 `27610-27622` 端口段。
+
+已发布的 Gatekeeper（`gk.idp.xyz`）是生产环境：本仓库的任何测试都不访问它，联调只对本机实例。
 
 ## 读设计文档时要知道的
 

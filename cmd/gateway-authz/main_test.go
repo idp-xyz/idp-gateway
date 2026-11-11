@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -73,6 +74,7 @@ type harness struct {
 	policy      string
 	credentials string
 	logs        *lockedBuffer
+	extra       []string // 追加在必需参数之后
 	url         string
 	stop        func() error
 }
@@ -115,7 +117,9 @@ func (h *harness) start() *harness {
 	h.t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	addr, done := make(chan net.Addr, 1), make(chan error, 1)
-	go func() { done <- run(ctx, h.args("127.0.0.1:0"), h.logs, func(a net.Addr) { addr <- a }) }()
+	go func() {
+		done <- run(ctx, append(h.args("127.0.0.1:0"), h.extra...), h.logs, func(a net.Addr) { addr <- a })
+	}()
 	select {
 	case a := <-addr:
 		h.url = "https://" + a.String()
@@ -288,6 +292,85 @@ func TestServesOverMutualTLS(t *testing.T) {
 	}
 }
 
+// 配置了 Gatekeeper 时，登记表放行的请求还要它点头；它说没有就是拒绝，它答不出来就是没有结论。
+func TestAsksGatekeeperWhenConfigured(t *testing.T) {
+	const pdpToken = "pdp-token-e2e"
+	var mu sync.Mutex
+	answer, asked := `{"decision":true,"reason":"rebac:use"}`, 0
+	pdp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		asked++
+		if r.URL.Path != "/authz/check" || r.Header.Get("Authorization") != "Bearer "+pdpToken {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = io.WriteString(w, answer)
+	}))
+	defer pdp.Close()
+	set := func(body string) {
+		mu.Lock()
+		defer mu.Unlock()
+		answer = body
+	}
+
+	h := newHarness(t)
+	tokenFile := filepath.Join(t.TempDir(), "pdp-token")
+	if err := os.WriteFile(tokenFile, []byte(pdpToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.extra = []string{"--gatekeeper-url", pdp.URL, "--gatekeeper-token-file", tokenFile}
+	h.start()
+
+	allowed := h.must(call{peer: "gateway", path: extAuthzPath, headers: trusted("tenant-blue")})
+	if allowed.status != http.StatusOK || allowed.header.Get("Authorization") != "Bearer "+blueToken {
+		t.Fatalf("Gatekeeper 放行：%d %s", allowed.status, allowed.body)
+	}
+
+	set(`{"decision":false,"reason":"rebac denied"}`)
+	denied := h.must(call{peer: "gateway", path: extAuthzPath, headers: trusted("tenant-blue")})
+	if denied.status != http.StatusForbidden || denied.json(t)["reason_code"] != "ACCOUNT_NOT_GRANTED" || denied.carriesCredential() {
+		t.Fatalf("Gatekeeper 说没有授权：%d %s", denied.status, denied.body)
+	}
+
+	set(`{"decision":false,"reason":"rebac lookup failed"}`)
+	// 给网关的接口用状态码说话；只返回判定的接口把结果写在响应体里。
+	for _, c := range []struct {
+		call
+		status int
+	}{
+		{call{peer: "gateway", path: extAuthzPath, headers: trusted("tenant-blue")}, http.StatusServiceUnavailable},
+		{call{peer: "broker", method: http.MethodPost, path: decisionPath, body: decisionBody}, http.StatusOK},
+	} {
+		unknown := h.must(c.call)
+		body := unknown.json(t)
+		if unknown.status != c.status || body["result"] != "INDETERMINATE" || body["reason_code"] != "GRANT_STATE_UNAVAILABLE" ||
+			body["credential_handle"] != nil || unknown.carriesCredential() {
+			t.Fatalf("Gatekeeper 答不出来，%s：%d %s", c.path, unknown.status, unknown.body)
+		}
+	}
+
+	// 登记表自己就拒绝的请求不去问 Gatekeeper。
+	mu.Lock()
+	before := asked
+	mu.Unlock()
+	h.must(call{peer: "gateway", path: extAuthzPath, headers: append(trusted("tenant-blue"), [2]string{"X-Provider-Account", "account-green"})})
+	mu.Lock()
+	after := asked
+	mu.Unlock()
+	if after != before {
+		t.Fatal("登记表已拒绝的请求仍问了 Gatekeeper")
+	}
+
+	logs := h.logs.String()
+	if strings.Contains(logs, pdpToken) {
+		t.Error("PDP 令牌出现在服务日志里")
+	}
+	if !strings.Contains(logs, `"grants":"policy+gatekeeper"`) {
+		t.Error("启动日志没有说明授权来源")
+	}
+}
+
 func TestStopsWhenAskedTo(t *testing.T) {
 	h := newHarness(t).start()
 	if a := h.must(call{peer: "gateway", path: "/healthz"}); a.status != http.StatusOK {
@@ -337,16 +420,22 @@ func TestRefusesToStart(t *testing.T) {
 		args []string
 		says string
 	}{
-		"没有参数":            {nil, "missing required flags"},
-		"没有网关身份":          {without("--gateway-identity"), "--gateway-identity"},
-		"没有客户端 CA":        {without("--client-ca"), "--client-ca"},
-		"多余的参数":           {append(h.args("127.0.0.1:0"), "serve"), "unexpected argument"},
-		"Broker 与网关同一个身份": {replace("--broker-identity", gatewayID), "must differ"},
-		"登记表不存在":          {replace("--policy", filepath.Join(dir, "missing.json")), "policy"},
-		"登记表默认放行":         {replace("--policy", write("allow.json", `{"version":"v","default_decision":"ALLOW"}`, 0o600)), "only DENY"},
-		"凭证文件别人可读":        {replace("--credentials", write("open.json", credentialsJSON, 0o644)), "readable by others"},
-		"证书与私钥不配对":        {replace("--tls-key", h.peers["gateway"].KeyFile), "server certificate"},
-		"监听地址不可用":         {replace("--listen", "256.0.0.1:1"), ""},
+		"没有参数":                {nil, "missing required flags"},
+		"没有网关身份":              {without("--gateway-identity"), "--gateway-identity"},
+		"没有客户端 CA":            {without("--client-ca"), "--client-ca"},
+		"多余的参数":               {append(h.args("127.0.0.1:0"), "serve"), "unexpected argument"},
+		"Broker 与网关同一个身份":     {replace("--broker-identity", gatewayID), "must differ"},
+		"登记表不存在":              {replace("--policy", filepath.Join(dir, "missing.json")), "policy"},
+		"登记表默认放行":             {replace("--policy", write("allow.json", `{"version":"v","default_decision":"ALLOW"}`, 0o600)), "only DENY"},
+		"凭证文件别人可读":            {replace("--credentials", write("open.json", credentialsJSON, 0o644)), "readable by others"},
+		"证书与私钥不配对":            {replace("--tls-key", h.peers["gateway"].KeyFile), "server certificate"},
+		"监听地址不可用":             {replace("--listen", "256.0.0.1:1"), ""},
+		"有 Gatekeeper 地址没有令牌": {append(h.args("127.0.0.1:0"), "--gatekeeper-url", "https://gk.idp.test"), "go together"},
+		"有令牌没有 Gatekeeper 地址": {append(h.args("127.0.0.1:0"), "--gatekeeper-token-file", write("t1", "pdp-token", 0o600)), "go together"},
+		"Gatekeeper 令牌别人可读": {append(h.args("127.0.0.1:0"), "--gatekeeper-url", "https://gk.idp.test",
+			"--gatekeeper-token-file", write("t2", "pdp-token", 0o644)), "readable by others"},
+		"明文连接非回环的 Gatekeeper": {append(h.args("127.0.0.1:0"), "--gatekeeper-url", "http://gk.idp.test",
+			"--gatekeeper-token-file", write("t3", "pdp-token", 0o600)), "must be https"},
 	}
 	for name, tc := range cases {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

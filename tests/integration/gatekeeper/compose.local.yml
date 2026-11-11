@@ -1,0 +1,117 @@
+# 叠加在 Gatekeeper 仓库自带的 deploy/compose/docker-compose.yml 之上，只供本仓库在本机联调。
+# 不单独使用：由同目录的 stack.sh 以独立的项目名拉起，Gatekeeper 的检出目录只读、不写入任何文件。
+#
+# 与 Gatekeeper 自己的开发栈相比，这里改了这些：
+#   - 只在 127.0.0.1 上发布两个端口：Hydra 公共端点 27621、login-consent（管理 API 与 PDP）27622，
+#     其余端口一律不发布；
+#   - 证书和密钥放在本仓库的 .run/ 里；
+#   - 不向宿主机上的平台采集器导出遥测；
+#   - PDP 端点要求 Bearer 令牌，管理 API 的密钥每套环境随机生成（Gatekeeper 的开发默认值是固定值，
+#     PDP 默认不设防）；
+#   - 令牌受众的列表里多了出站网关的受众 idp-egress-gateway；
+#   - 授权模型里多了 provider_account 类型（由 stack.sh 合并，见 provider-account.types.json）；
+#   - 镜像改从本机够得着的仓库取（本机到不了 Docker Hub）。Hydra 没有别的镜像源，用它官方发布的
+#     二进制在本地打包，版本与 Gatekeeper 写定的一致。
+#
+# 变量由 stack.sh 提供：GK_RUN（本仓库的 .run 目录）、GK_OPENFGA_MODEL、GK_OPENFGA_STORE、
+# ADMIN_API_KEY、GK_PDP_AUTH_TOKEN。
+
+x-no-telemetry: &no-telemetry
+  # 容器自己的回环地址上没有采集器，导出静默失败；宿主机的采集器收不到这套环境的任何数据。
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4317
+
+services:
+  identity-postgres:
+    image: public.ecr.aws/docker/library/postgres:16-alpine
+
+  hydra-postgres:
+    image: public.ecr.aws/docker/library/postgres:16-alpine
+
+  openfga-postgres:
+    image: public.ecr.aws/docker/library/postgres:16-alpine
+
+  redis:
+    image: public.ecr.aws/docker/library/redis:7-alpine
+    ports: !reset []
+
+  identity-service:
+    build:
+      # 与 Gatekeeper 的 Dockerfile 逐行相同，只换了基础镜像的来源。
+      dockerfile_inline: |
+        FROM public.ecr.aws/docker/library/golang:1.25-alpine AS build
+        WORKDIR /src
+        COPY . .
+        RUN CGO_ENABLED=0 go build -mod=vendor -o /out/identity-service ./cmd/api
+        FROM scratch
+        COPY --from=build /out/identity-service /identity-service
+        EXPOSE 8081
+        ENTRYPOINT ["/identity-service"]
+    environment:
+      <<: *no-telemetry
+    volumes:
+      - ${GK_RUN}/certs:/etc/certs:ro
+    ports: !reset []
+    extra_hosts: !reset []
+
+  hydra-migrate:
+    image: idp-gateway-gk/hydra:26.2.0
+    pull_policy: never
+
+  hydra:
+    image: idp-gateway-gk/hydra:26.2.0
+    pull_policy: never
+    build:
+      context: ${GK_RUN}/hydra
+      dockerfile_inline: |
+        FROM public.ecr.aws/docker/library/alpine:3.22
+        COPY hydra /usr/bin/hydra
+        USER 65534:65534
+        ENTRYPOINT ["hydra"]
+    environment:
+      # 签发者就是宿主机上能访问到的地址：网关在宿主机上验签，iss 必须与它取 JWKS 的地址一致。
+      URLS_SELF_ISSUER: http://127.0.0.1:27621
+      URLS_SELF_PUBLIC: http://127.0.0.1:27621
+      URLS_LOGIN: http://127.0.0.1:27622/login
+      URLS_CONSENT: http://127.0.0.1:27622/consent
+      URLS_LOGOUT: http://127.0.0.1:27622/logout
+    ports: !override
+      - "127.0.0.1:27621:4444"
+
+  hydra-admin-mtls:
+    image: public.ecr.aws/docker/library/nginx:1.27-alpine
+    volumes:
+      - ${GK_RUN}/certs:/etc/nginx/certs:ro
+    ports: !reset []
+
+  openfga-migrate:
+    image: ghcr.io/openfga/openfga@sha256:b852071314f1fda1194d341a6ebac0a4f619b3cd87a6626d2ccc7048af4ec671
+
+  openfga:
+    image: ghcr.io/openfga/openfga@sha256:b852071314f1fda1194d341a6ebac0a4f619b3cd87a6626d2ccc7048af4ec671
+    ports: !reset []
+
+  login-consent:
+    build:
+      dockerfile_inline: |
+        FROM public.ecr.aws/docker/library/golang:1.25-alpine AS build
+        WORKDIR /src
+        COPY . .
+        RUN CGO_ENABLED=0 go build -mod=vendor -o /out/login-consent ./cmd/server
+        FROM scratch
+        COPY --from=build /out/login-consent /login-consent
+        EXPOSE 3000
+        ENTRYPOINT ["/login-consent"]
+    environment:
+      <<: *no-telemetry
+      PDP_AUTH_TOKEN: ${GK_PDP_AUTH_TOKEN}
+      # Gatekeeper 给每个新建的 M2M 客户端登记的受众就是这个列表，管理 API 没有按客户端指定受众的参数。
+      # 加上出站网关的受众是目前唯一能让令牌带上它的办法；副作用见 README。
+      TOKEN_AUDIENCE: bip-api,idp-egress-gateway
+      # Gatekeeper 只在库里没有模型时才写入模型，所以模型一变就换一个库名。
+      OPENFGA_STORE_NAME: ${GK_OPENFGA_STORE}
+    volumes:
+      - ${GK_OPENFGA_MODEL}:/etc/gatekeeper/openfga-model.json:ro
+      - ${GK_RUN}/certs:/etc/certs:ro
+    ports: !override
+      - "127.0.0.1:27622:3000"
+    extra_hosts: !reset []

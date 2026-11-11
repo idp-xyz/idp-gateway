@@ -19,3 +19,6 @@ __pycache__/
 # Black-box runtime output: keys, certificates, rendered config, the binary under test and
 # process logs are regenerated on every run.
 tests/acceptance/blackbox/.run/
+
+# 本机联调用的 Gatekeeper：证书、密钥、下载的二进制和测试客户端凭据。
+tests/integration/gatekeeper/.run/
