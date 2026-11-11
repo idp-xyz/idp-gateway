@@ -1,12 +1,12 @@
 {
   "title": "IDP Gateway black-box suite: real agentgateway, gateway-authz (acceptance build), mock provider",
-  "started_at_utc": "2026-11-11T08:01:05.746630+00:00",
-  "finished_at_utc": "2026-11-11T08:01:41.401652+00:00",
+  "started_at_utc": "2026-11-11T10:43:48.086932+00:00",
+  "finished_at_utc": "2026-11-11T10:44:24.275517+00:00",
   "operator": "tops",
   "host": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "python": "3.12.3",
   "command": ".venv/bin/python tests/acceptance/blackbox/run.py",
-  "repository_commit": "8e6aca5d8d6f96e32536e9842fd79c979632d41d",
+  "repository_commit": "affaff55824ff2dc38874938bb7c2f1b155101b9",
   "repository_dirty_files": 0,
   "repository_dirty_files_ignores": "tests/acceptance/blackbox/evidence/",
   "agentgateway": {
@@ -15,21 +15,26 @@
       "git_revision": "26f5aebe99a36a037fe54f8080a608aca5547e15",
       "rust_version": "1.99.0",
       "build_profile": "release",
-      "build_target": "x86_64-unknown-linux-musl",
+      "build_target": "x86_64-unknown-linux-gnu",
       "crypto_backend": "aws-lc-rs",
       "crypto_fips": false
     },
-    "binary_sha256": "1b2fc01a2de29ca113bbb6258b5cae7b1eb3c724071c09d687a449132f2f42f8",
+    "binary_sha256": "c7ef326b7b5702451e94bab55ff484d600d5abdc5344a4cdf7c72fc0bcff9e24",
+    "image": "cr.agentgateway.dev/agentgateway@sha256:60216aafb03d37f94e952ff3d51d2f630a65b10ecaebdc0a864882f92610c45b",
+    "binary_is": "/app/agentgateway of that image, taken out of it and run on this host",
     "pinned_by": "deploy/agentgateway/agentgateway.lock.json",
-    "lock_sha256": "eceb1fb6f9d9f4250bca8725ea2fd20e2129bf4c93f644094d978957b15a7cf1",
+    "lock_sha256": "0960e8d2fbd33bfc288930bc5bfccaedae69675c273be764327fd9d2128f0cb3",
     "config_file": "tests/acceptance/blackbox/agentgateway.poc.yaml",
-    "config_sha256": "c02a2572808a6e3706a249237e0a568327ddcab16c8dad07627e56a7c8b93b4b",
+    "config_sha256": "dfede444e0ed0146d9695b9d43f9109eb4ae4d955749630cb1f4f8308e58b74b",
     "native_validation": "Configuration is valid!",
     "session_key_supplied_by": "SESSION_KEY environment variable, generated per run, not recorded",
     "start_without_session_key_rewrites_config_file": true,
     "start_without_session_key_rewrites_config_file_with_storage_read_only": false,
     "unmitigated_defaults": {
-      "configuration": "the reviewed configuration without: urlRewrite.authority; the canonical-path authorization rule on each route; the credential-present authorization rule on each backend; responseHeaderModifier; requestHeaderModifier; config.storage.mode",
+      "configuration": "the reviewed configuration without: urlRewrite.authority; the canonical-path authorization rule on each route; the credential-present authorization rule on each backend; responseHeaderModifier; requestHeaderModifier; config.storage.mode; bindAddress on the callers' listener",
+      "callers_listener_bound_to": [
+        "*"
+      ],
       "host_header_the_provider_received": [
         "egress-api.idp.test"
       ],
@@ -83,14 +88,14 @@
     }
   },
   "policy_sha256": "44ce8acf064e0d30c06ea7842d20a51077a711e7e364a24bee9f4c98ebcb096a",
-  "runner_sha256": "bce8740909a60cb48c1575a9dea4f921caabba64e6c626c614b33a7f6144e1dd",
+  "runner_sha256": "134b292d4b9908741f408ca8826365a75946ac35bf6e0f3dfba1882e0a4f0629",
   "gateway_authz": {
     "what_ran": "cmd/gateway-authz built with the acceptance tag; not the product build",
     "build_command": "go build -trimpath -tags acceptance -o tests/acceptance/blackbox/.run/gateway-authz ./cmd/gateway-authz",
     "go": "go version go1.26.8 linux/amd64",
     "source_sha256": "c84705254a5eb4c172167085360312b75bfab9ac5aa40a7c7d9bac6be4918acb",
     "source_sha256_covers": "go.mod and every non-test .go file under cmd/ and internal/",
-    "binary_sha256": "efe9260f293df03ae85750fe37b9f5b1c36f6ce0b042a907be23db50a7ab1440",
+    "binary_sha256": "45114c6cf899a51ef894a2aca2ef466f9d9be1aec3471131b0e37326cfd952d7",
     "policy_from": "tests/acceptance/blackbox/policy.poc.json",
     "credentials_from": "a file written for the run, not recorded",
     "revocations": "in memory",
@@ -101,8 +106,8 @@
   "mocks_sha256": {
     "mock_broker.py": "13566ddb1dd1f7da5e43e38b9f7d5199c1f2c903d95d2029b60df9fa675c1000",
     "mock_provider.py": "4411dc76ac1b2a9d7f2f2d463a49ff73feded890ddb995d33fc5f2978128b1ec",
-    "pki.py": "5eb56bde345deac0556abf4698813ec24bcec836470c049ffd2a5f46ae8d8aa3",
-    "pin.py": "94bfda4672c5ce18bad12ae38b2c7fc6878b91c9b4044f441b3c69a1a4fda40d"
+    "pki.py": "8f2129ac939f76ad6f2dbd37eeef29af88573980d9b127bbaa599734a6e19f44",
+    "pin.py": "3138647b47d8de2792d656388c94fb07f114a35883d7f3e0a21eccd442c110a5"
   },
   "front_proxy": {
     "image": "public.ecr.aws/nginx/nginx-unprivileged:stable-alpine@sha256:c3fc8fa482be50ef709c6438eb1bc98d50dbfe5a9b48be90711b8814f4dfd701",
@@ -116,7 +121,8 @@
     "gateway": "spiffe://idp.test/egress/agentgateway",
     "broker": "spiffe://idp.test/egress/credential-broker",
     "operator": "spiffe://idp.test/poc/operator",
-    "business-app": "spiffe://idp.test/apps/parcel-service"
+    "business-app": "spiffe://idp.test/apps/parcel-service",
+    "publisher": "spiffe://idp.test/gateway-control/publisher"
   },
   "ports": {
     "gateway": 27611,
@@ -127,6 +133,7 @@
     "readiness": 27616,
     "forbidden": 27617,
     "broker": 27618,
+    "readback": 27619,
     "front": 27620
   },
   "host_ephemeral_port_range": [
@@ -134,7 +141,8 @@
     48715
   ],
   "listen_addresses_observed": [
-    "*:27611",
+    "*:27619",
+    "127.0.0.1:27611",
     "127.0.0.1:27612",
     "127.0.0.1:27613",
     "127.0.0.1:27614",
@@ -146,8 +154,8 @@
   ],
   "ports_left_open_after_run": [],
   "summary": {
-    "cases": 57,
-    "pass": 56,
+    "cases": 59,
+    "pass": 58,
     "fail": 1
   },
   "scope_limits": [
@@ -156,9 +164,10 @@
     "The provider is a loopback mock; no carrier sandbox was called.",
     "Mutual TLS is real on the gateway-to-PDP and broker-to-PDP hops only, with a CA and certificates made for the run: no SPIFFE Workload API, no rotation, no certificate revocation. Caller-to-gateway and gateway-to-provider are plain HTTP.",
     "The local broker (Mode B) is a mock with a JSON file as its store. The gateway reaches it over loopback HTTP and proves itself with a key file, standing in for a Unix socket or pod-local restriction; that restriction itself is untested.",
-    "The front proxy is one nginx build with a minimal configuration, there to show that a component in front can refuse what the gateway accepts (P1-SS-04). Four cases go through it; the others address the gateway listener directly, which stays reachable. Whether the eventual entry component behaves like this nginx has to be tested on that component.",
+    "The front proxy is one nginx build with a minimal configuration, there to show that a component in front can refuse what the gateway accepts (P1-SS-04). Four cases go through it; the others address the gateway listener directly, on loopback, which is the only place it listens (P1-NL-01). Whether the eventual entry component behaves like this nginx has to be tested on that component.",
     "Single gateway process: nothing here speaks to multi-replica behaviour, config rollout, quotas or load.",
-    "The result holds for the agentgateway build named in this file only: the release pinned in deploy/agentgateway/agentgateway.lock.json at the time of the run. No other version is tested.",
+    "The read-back listener is exercised on this one instance with a publisher certificate made for the run; there is no publisher. Reading back from several replicas is tried in tests/integration/kubernetes.",
+    "The result holds for the agentgateway build named in this file only: the binary of the container image pinned in deploy/agentgateway/agentgateway.lock.json at the time of the run, taken out of the image and run on this host, not in a container. No other version or build is tested.",
     "HTTP ExtAuthZ only. gRPC ExtAuthZ, decision caching, CONNECT, gRPC upstreams, HMAC signing and mTLS towards providers are untested.",
     "DNS rebinding and network-layer egress ACLs are untested: the upstream is a fixed loopback address.",
     "This is PoC evidence. It does not change any NOT_RUN acceptance case or STD-CP gate."
@@ -1206,7 +1215,7 @@
       ],
       "observed": {
         "status": 403,
-        "seconds": 1.003
+        "seconds": 1.001
       },
       "indicative_for": [
         "GW-ST-008",
@@ -2216,19 +2225,19 @@
       "observed": {
         "Gatekeeper answers 500": {
           "status": 503,
-          "seconds": 0.003
+          "seconds": 0.004
         },
         "Gatekeeper slower than the broker waits": {
           "status": 503,
-          "seconds": 0.751
+          "seconds": 0.752
         },
         "Gatekeeper down": {
           "status": 503,
-          "seconds": 0.003
+          "seconds": 0.002
         },
         "broker down": {
           "status": 403,
-          "seconds": 0.002
+          "seconds": 0.001
         }
       },
       "indicative_for": [
@@ -2481,7 +2490,7 @@
       ],
       "observed": {
         "seconds_until_the_new_route_was_served": 0.3,
-        "seconds_until_the_route_was_gone_again": 0.33
+        "seconds_until_the_route_was_gone_again": 0.34
       },
       "indicative_for": [
         "GW-AT-014",
@@ -2532,10 +2541,10 @@
         }
       ],
       "observed": {
-        "seconds_until_the_failure_was_reported": 0.3,
+        "seconds_until_the_failure_was_reported": 0.4,
         "configReload": {
           "synchronized": false,
-          "lastError": "routes[6]: unknown field `notAFieldOfARoute` at line 376 column 3"
+          "lastError": "routes[7]: unknown field `notAFieldOfARoute` at line 403 column 3"
         },
         "api_config_effective_shows_the_rejected_file": true,
         "seconds_until_the_reload_was_reported_applied_again": 0.3
@@ -2548,6 +2557,163 @@
         "GW-FR-039",
         "GW-AT-041",
         "GW-FR-041"
+      ]
+    },
+    {
+      "id": "P1-RB-03",
+      "title": "the read-back listener: what a publisher can read from this instance, and nothing else",
+      "expectation": "with the publisher's certificate: the running configuration and the state of the last load, as the admin address gives them; no other path or method of the admin address; no answer to any other caller, with or without a certificate",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "the publisher reads /config_dump: 200",
+          "ok": true
+        },
+        {
+          "check": "...and it is the document the admin address gives",
+          "ok": true
+        },
+        {
+          "check": "the publisher reads /api/runtime: the last load is reported as applied",
+          "ok": true
+        },
+        {
+          "check": "neither document holds a credential, a key or a secret of this run",
+          "ok": true
+        },
+        {
+          "check": "every other path or method of the admin address: 404, with the publisher's certificate too",
+          "ok": true
+        },
+        {
+          "check": "the egress routes are not served on this listener",
+          "ok": true
+        },
+        {
+          "check": "the read-back route is not served on the callers' listener",
+          "ok": true
+        },
+        {
+          "check": "another workload of the same CA gets no answer",
+          "ok": true
+        },
+        {
+          "check": "no client certificate: no answer",
+          "ok": true
+        },
+        {
+          "check": "the publisher's name on a certificate of another CA: no answer",
+          "ok": true
+        },
+        {
+          "check": "after all of that the gateway is running and serving",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "status": 200,
+        "the_rest_of_the_admin_address": {
+          "POST /quitquitquit": 404,
+          "POST /logging?level=debug": 404,
+          "PUT /api/config/resources/mcp.target": 404,
+          "GET /quitquitquit": 404,
+          "GET /debug/trace": 404,
+          "GET /debug/tasks": 404,
+          "GET /memory": 404,
+          "GET /debug/pprof/heap": 404,
+          "GET /debug/pprof/profile?seconds=1": 404,
+          "GET /ui": 404,
+          "GET /api/config/effective": 404,
+          "POST /config_dump": 404,
+          "GET /config_dump/": 404,
+          "GET /config_dump/../quitquitquit": 404,
+          "GET /api/runtime/": 404,
+          "GET /api": 404
+        },
+        "other_workloads_of_the_same_ca": {
+          "operator": "RemoteDisconnected: Remote end closed connection without response",
+          "business-app": "RemoteDisconnected: Remote end closed connection without response",
+          "gateway": "RemoteDisconnected: Remote end closed connection without response",
+          "broker": "RemoteDisconnected: Remote end closed connection without response"
+        },
+        "no_certificate": "SSLError: [SSL: TLSV13_ALERT_CERTIFICATE_REQUIRED] tlsv13 alert certif",
+        "certificate_of_another_ca": "SSLError: [SSL: TLSV1_ALERT_UNKNOWN_CA] tlsv1 alert unknown ca (_ssl.c"
+      },
+      "indicative_for": [
+        "GW-AT-041",
+        "GW-FR-041",
+        "GW-AT-014",
+        "GW-FR-014",
+        "GW-NAT-004",
+        "GW-NFR-04",
+        "GW-AT-046",
+        "GW-FR-046"
+      ]
+    },
+    {
+      "id": "P1-NL-01",
+      "title": "which addresses the gateway listens on",
+      "expectation": "the callers' port, admin, stats and readiness are on loopback only, so the front proxy beside the gateway is the only way in; the one port other machines can reach is the read-back listener",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "the gateway port is bound to loopback and to nothing else",
+          "ok": true
+        },
+        {
+          "check": "the admin port is bound to loopback and to nothing else",
+          "ok": true
+        },
+        {
+          "check": "the stats port is bound to loopback and to nothing else",
+          "ok": true
+        },
+        {
+          "check": "the readiness port is bound to loopback and to nothing else",
+          "ok": true
+        },
+        {
+          "check": "a connection to the callers' port on that address is refused",
+          "ok": true
+        },
+        {
+          "check": "...and so is one to the admin port",
+          "ok": true
+        },
+        {
+          "check": "the read-back port accepts a connection there",
+          "ok": true
+        },
+        {
+          "check": "through the front proxy the route is served",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "listening": {
+          "gateway": [
+            "127.0.0.1"
+          ],
+          "admin": [
+            "127.0.0.1"
+          ],
+          "stats": [
+            "127.0.0.1"
+          ],
+          "readiness": [
+            "127.0.0.1"
+          ],
+          "readback": [
+            "*"
+          ]
+        },
+        "this_host_has_an_address_that_is_not_loopback": true
+      },
+      "indicative_for": [
+        "GW-ST-017",
+        "GW-FR-005",
+        "GW-AT-046",
+        "GW-FR-046"
       ]
     },
     {
@@ -2578,7 +2744,7 @@
         }
       ],
       "observed": {
-        "log_lines": 161,
+        "log_lines": 186,
         "routes_exercised": 4
       },
       "indicative_for": [
