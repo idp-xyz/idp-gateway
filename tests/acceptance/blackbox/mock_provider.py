@@ -68,7 +68,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.command == 'GET' and parts.path.startswith('/v1/tracking/'):
             tid = parts.path[len('/v1/tracking/'):]
             if tid == 'redirect-me':
-                return self._send(302, {'moved': True}, {'Location': f"http://127.0.0.1:{CFG['redirect_port']}/v1/stolen"})
+                return self._send(302, {'moved': True}, {'Location': f"http://127.0.0.1:{CFG['redirect_port']}/v1/stolen",
+                                                         'Set-Cookie': 'provider_session=mock; Path=/'})
             if tid == 'rate-limited':
                 return self._send(429, {'error': 'provider_rate_limited'}, {'Retry-After': '7'})
             if tid == 'not-found':

@@ -46,13 +46,13 @@ G04 §4 要求用 PoC 比较三种凭证返回模式，G04 §9 列了 PoC 必须
 
 ## 默认配置不安全的地方
 
-下面六项**不配置就是不安全的**，都是跑出来的，不是读文档读出来的。前五项"不处理时的默认行为"是 PoC 早期在 1.6.0 上观察到的，没有在 1.7.0 上重测；1.7.0 上验证的是处理之后的配置有效。第 6 项是在 1.7.0 上观察到的。第 1、2 项是第一次运行的失败项；第 3、4 项是随后对照 G03 §5 把期望收紧才暴露的；第 5 项的"默认行为"来自一次单独的探测（一条不带任何策略的路由，把 `Cookie`、`X-Forwarded-*`、`Forwarded`、`Authorization`、`Host` 全部原样转发），这次探测不在证据文件里，证据文件只证明处理之后这些头不再到达 Provider。现在的 `agentgateway.poc.yaml` 已逐项处理。
+下面六项**不配置就是不安全的**，都是跑出来的，不是读文档读出来的。"不处理时的默认行为"每次运行都在被测的这个二进制上重新观察：`run.py` 在跑用例之前，先用"评审过的配置去掉第 1 至 5 项的处理"启动一次网关，再不给会话密钥启动一次，把看到的记在证据的 `agentgateway.unmitigated_defaults` 和 `agentgateway.start_without_session_key_rewrites_config_file` 里（各项后面括号里是对应的字段）。它们是观察值，不是检查项：换了版本后默认行为变了不算失败，但要回头看对应的处理是否仍然需要、是否仍然够用。处理之后的效果由用例检查。第 1、2 项最初是第一次运行的失败项；第 3、4 项是随后对照 G03 §5 把期望收紧才暴露的。现在的 `agentgateway.poc.yaml` 已逐项处理。
 
-1. **Host 原样转发**。上游收到的是调用方发来的 `Host: egress-api.idp.test`。必须为每条路由配置 `urlRewrite.authority`。
-2. **路径不做规范性检查**。`%252e%252e`（双重编码）、`%00`、`;x=1` 被原样转发到上游。现在由两层拦截：路由 `authorization` 规则只放行由非保留字符组成、段不以点开头的路径；`gateway-authz`（`internal/egressauthz/domain`）用同一条规则。无 PDP 的模式 C 路由证明了网关这一层单独有效。带 ExtAuthZ 的路由上 PDP 先被调用，这些请求是被 PDP 拒绝的。
-3. **PDP 放行但没给凭证时，请求照样转发**（不带任何凭证）。现在在 backend 上加了 `authorization` 规则，没有 `Authorization` 头就由网关拒绝。
-4. **Provider 的 `Location`、`Set-Cookie` 原样回给调用方**。网关不跟随 302，但会把跳转目标交给调用方。现在用 `responseHeaderModifier.remove` 去掉。
-5. **调用方的 `Cookie`、`X-Forwarded-*`、`Forwarded` 原样传给 Provider**。现在用 `requestHeaderModifier.remove` 去掉。
+1. **Host 原样转发**（`host_header_the_provider_received`）。上游收到的是调用方发来的 `Host: egress-api.idp.test`。必须为每条路由配置 `urlRewrite.authority`。
+2. **路径不做规范性检查**（`request_targets_on_the_route_without_a_pdp`）。`%252e%252e`（双重编码）、`%00`、`;x=1` 被原样转发到上游。现在由两层拦截：路由 `authorization` 规则只放行由非保留字符组成、段不以点开头的路径；`gateway-authz`（`internal/egressauthz/domain`）用同一条规则。无 PDP 的模式 C 路由证明了网关这一层单独有效。带 ExtAuthZ 的路由上 PDP 先被调用，这些请求是被 PDP 拒绝的。
+3. **PDP 放行但没给凭证时，请求照样转发**（不带任何凭证；`pdp_allows_without_a_credential`）。现在在 backend 上加了 `authorization` 规则，没有 `Authorization` 头就由网关拒绝。
+4. **Provider 的 `Location`、`Set-Cookie` 原样回给调用方**（`provider_answers_302_with_a_cookie`）。网关不跟随 302，但会把跳转目标和 Cookie 交给调用方。现在用 `responseHeaderModifier.remove` 去掉。
+5. **调用方的 `Cookie`、`X-Forwarded-*`、`Forwarded` 原样传给 Provider**（`caller_headers_the_provider_received`）。现在用 `requestHeaderModifier.remove` 去掉。
 6. **没有会话密钥时，网关启动会改写自己的配置文件**。`config.session.key` 未设置时，网关生成一个密钥并写回启动它的那个文件。第一次在 1.7.0 上运行时，仓库里受版本管理的 `agentgateway.poc.yaml` 就这样被加了三行（已还原，没有提交）。对按摘要审批、部署后回读对账的配置发布（G03）来说，这意味着运行中的文件不再是批准的那个文件，而且里面多了一个密钥。处理：用环境变量 `SESSION_KEY` 提供密钥，实测可阻止改写；`run.py` 另外只让网关从 `.run/` 下的副本启动，仓库里的文件它碰不到。`P1-CF-01` 检查网关运行时所用的文件与仓库里的逐字节一致；证据的 `start_without_session_key_rewrites_config_file` 记录了不提供密钥时的实际行为（`true`）。另外两个单独试过、不在证据文件里的观察：配置文件只读时网关只记一条警告然后照常启动；`session.key: disabled` 这个写法配置校验接受，本套件没有用它。
 
 ## 未解决
@@ -83,7 +83,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
 
 只跑 `deploy/agentgateway/agentgateway.lock.json` 锁定的那个 agentgateway 发布版。不带 `--agentgateway` 时先找 `~/.local/opt/agentgateway/<版本>/agentgateway`，没有再找 `PATH` 上的 `agentgateway`；找到的二进制要与锁定文件里的版本、提交和 SHA-256 都一致，否则脚本拒绝运行（`pin.py`，`--agentgateway` 指定的也一样）。证据文件是 `evidence/p1-run-agentgateway-<版本>.json`，只有锁定版本的这一份。
 
-脚本先检查端口段是否空闲、用 `--validate-only` 校验配置，再启动五个进程和一个 nginx 容器，跑完全部停掉。nginx 需要本机有 docker：镜像是 nginx 官方的非特权版本，按摘要固定（见 `run.py` 的 `FRONT_IMAGE`），本地没有时会拉取一次；容器以非 root、只读根文件系统、不带任何 capability 运行，用宿主机网络，只监听回环。docker 或镜像不可用时脚本拒绝运行，不会跳过那四个用例。网关从 `tests/acceptance/blackbox/.run/` 下的配置副本启动，会话密钥经环境变量 `SESSION_KEY` 提供（原因见上面第 6 项）。每次运行生成新的 JWT 签名密钥、会话密钥、工作负载 CA 与证书、Mock 凭证，放在 `tests/acceptance/blackbox/.run/`（已忽略），不写入证据。
+脚本先检查端口段是否空闲、用 `--validate-only` 校验配置，再启动五个进程和一个 nginx 容器，跑完全部停掉。跑用例之前，网关还会被短暂地另外启动两次，用来观察默认行为（见"默认配置不安全的地方"）：一次不给会话密钥，一次用去掉处理的配置；两次都从 `.run/` 下的临时文件启动，观察完就停掉，用例不对着它们跑。nginx 需要本机有 docker：镜像是 nginx 官方的非特权版本，按摘要固定（见 `run.py` 的 `FRONT_IMAGE`），本地没有时会拉取一次；容器以非 root、只读根文件系统、不带任何 capability 运行，用宿主机网络，只监听回环。docker 或镜像不可用时脚本拒绝运行，不会跳过那四个用例。网关从 `tests/acceptance/blackbox/.run/` 下的配置副本启动，会话密钥经环境变量 `SESSION_KEY` 提供（原因见上面第 6 项）。每次运行生成新的 JWT 签名密钥、会话密钥、工作负载 CA 与证书、Mock 凭证，放在 `tests/acceptance/blackbox/.run/`（已忽略），不写入证据。
 
 | 端口 | 用途 |
 |---|---|
@@ -124,6 +124,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
 8. PDP 从 Python Mock 换成本仓库的 `gateway-authz`（Go，验收构建）。网关配置里只改了注释，用例和期望没有动。换完第一次运行 37/54：`run.py` 直接调 PDP 时从来不发 `Host` 头，Python Mock 不在乎，Go 的 HTTP 服务端按 RFC 9112 §3.2 答 400，于是控制接口全部失效，靠它们注入故障和读取记录的用例跟着失败。改的是 `run.py` 的客户端（补上 `Host` 头），不是期望。之后两个版本的结果与换之前逐项相同：1.7.0 的 273 项检查、1.6.0 的 254 项检查，没有一项变化。一个不在检查里的差别：网关到 `gateway-authz` 协商出的是 HTTP/2，到 Python Mock 时是 HTTP/1.1（证据的 `gateway_authz.http_versions_seen_from_the_gateway`）。
 9. `gateway-authz` 加了可选的一步：登记表放行之后再向 Gatekeeper 的 PDP 确认账户授权。黑盒套件不启用它（不带 `--gatekeeper-url`），`run.py`、配置和期望都没有动；因为服务的源码变了，两个版本各重跑一次，逐项结果与上一份证据相同。启用这一步时的表现在 `tests/integration/gatekeeper/` 里测。
 10. 目标版本只留一个：agentgateway 锁定为 1.7.0（`deploy/agentgateway/agentgateway.lock.json`），1.6.0 不再测，它的证据文件已从目录里删除（git 历史里还有）。`run.py` 启动网关前按锁定文件核对二进制。原先单独放着、只有 1.7.0 接受的 `key.expression` 路由并进了 `agentgateway.poc.yaml`，"二进制不接受就记 SKIP"的分支随之去掉。用例和期望没有动。重跑后仍是 53/54，273 项检查的结果与上一份 1.7.0 证据逐项相同。
+11. 前五项默认行为改为每次运行都观察并记进证据（`agentgateway.unmitigated_defaults`），不再靠 PoC 早期在 1.6.0 上的观察；在 1.7.0 上五项都与原先的描述一致。为了能观察到第 4 项里的 Cookie，Mock Provider 的 302 响应加了 `Set-Cookie`。`P1-SS-02` 的期望原文本来就写着不把 Provider 的 Cookie 交给调用方，但此前 Mock 不发 Cookie，这半句没有被检查到；现在补了一条检查（`Set-Cookie not passed to the caller`）。其余用例和期望没有动。
 
 没有任何期望被放宽过。
 

@@ -10,6 +10,10 @@ that does not meet its expectation is reported as FAIL, not adjusted.
 The gateway is the one release pinned in deploy/agentgateway/agentgateway.lock.json. A binary
 that is not that release (version, git revision and SHA-256; see pin.py) is not started.
 
+Before the cases the binary is started twice more, briefly: once with no session key, and once
+from the reviewed configuration with its mitigations taken out (observe_unmitigated). What it
+does then is written to the evidence as observations about the binary. They are not checks.
+
 The PDP on the "gatekeeper" port is gateway-authz built with the `acceptance` tag: the same
 code as the product build plus the controls this runner needs (see what it received, make it
 answer 500, slow, or without a credential, revoke an account). Case titles, port names and
@@ -27,6 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import jwt
+import yaml
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jsonschema import Draft202012Validator
@@ -811,6 +816,7 @@ def _(c):
     c.check('forbidden target received nothing', len(forbidden_hits()) == 0)
     c.check('provider called once (no follow-up request)', len(provider_hits()) == 1)
     c.check('Location not passed to the caller', header(r, 'location') == [])
+    c.check('Set-Cookie not passed to the caller', header(r, 'set-cookie') == [])
 
 
 @case('P1-SS-04', 'request carrying two Host headers', '400, as RFC 9112 §3.2 requires; nothing consulted or forwarded',
@@ -1228,6 +1234,88 @@ def stage_config(binary: str) -> tuple[bool, str]:
     return v.returncode == 0, (v.stdout + v.stderr).strip()
 
 
+# What the reviewed configuration sets because the binary, left to itself, does something unsafe.
+LEFT_OUT = ['urlRewrite.authority', 'the canonical-path authorization rule on each route',
+            'the credential-present authorization rule on each backend', 'responseHeaderModifier', 'requestHeaderModifier']
+
+
+def unmitigated_config() -> bytes:
+    """The reviewed configuration with LEFT_OUT taken out and nothing else changed."""
+    doc = yaml.safe_load(CONFIG.read_bytes())
+    for route in doc['routes']:
+        policies = route.get('policies', {})
+        for key in ('authorization', 'responseHeaderModifier'):
+            policies.pop(key, None)
+        policies.get('urlRewrite', {}).pop('authority', None)
+        for backend in route['backends']:
+            for key in ('authorization', 'requestHeaderModifier'):
+                backend.get('policies', {}).pop(key, None)
+            if backend.get('policies') == {}:
+                del backend['policies']
+    return yaml.safe_dump(doc, sort_keys=False).encode()
+
+
+def observe_unmitigated(binary: str) -> dict:
+    """Start the binary once from unmitigated_config() and record what it then lets through.
+
+    Observations, not checks. They are the reason those settings are in the reviewed
+    configuration, and they belong to the binary: a new release may answer differently.
+    No case runs against this configuration; the gateway under test is started afterwards."""
+    probe = RUN / 'unmitigated.yaml'
+    seen: dict = {'configuration': 'the reviewed configuration without: ' + '; '.join(LEFT_OUT)}
+    try:
+        probe.write_bytes(unmitigated_config())
+        os.chmod(probe, 0o600)
+        v = subprocess.run([binary, '--validate-only', '-f', f'.run/{probe.name}'], cwd=HERE, capture_output=True, text=True)
+        if v.returncode != 0:
+            seen['not_observed'] = 'the binary does not accept that configuration: ' + ' '.join((v.stdout + v.stderr).split())[:300]
+            return seen
+        start('agentgateway-unmitigated', [binary, '-f', f'.run/{probe.name}'], PORTS['gateway'], env=gateway_env(S.session_key))
+        tok = blue()
+
+        # Without urlRewrite.authority and requestHeaderModifier: what of the caller's request reaches the provider.
+        reset_all()
+        sent = [('Cookie', 'session=caller-session'), ('X-Forwarded-Host', 'internal.idp.test'), ('X-Forwarded-For', '10.1.2.3'),
+                ('X-Forwarded-Proto', 'https'), ('Forwarded', 'for=10.1.2.3;host=internal.idp.test')]
+        gw('GET', TRACKING + '/TRK-1', tok, sent)
+        hits = provider_hits()
+        names = {k.lower() for h in hits for k, _ in h['headers']}
+        seen['host_header_the_provider_received'] = sorted({v for h in hits for v in header(h['headers'], 'host')})
+        seen['caller_headers_the_provider_received'] = sorted(k.lower() for k, _ in sent if k.lower() in names)
+
+        # Without the canonical-path rule, on the route that has no PDP behind it.
+        targets = {}
+        for variant in (RATES + '/%252e%252e/admin', RATES + '/x%00', RATES + '/x;x=1'):
+            reset_all()
+            r = gw('GET', variant, tok)
+            targets[variant] = {'status': r['status'], 'provider_received': [h['raw_target'] for h in provider_hits()]}
+        seen['request_targets_on_the_route_without_a_pdp'] = targets
+
+        # Without the credential-present rule: the PDP allows and releases no credential.
+        reset_all()
+        pdp_admin('/admin/mode?value=allow_without_credential')
+        r = gw('GET', TRACKING + '/TRK-1', tok)
+        hits = provider_hits()
+        seen['pdp_allows_without_a_credential'] = {
+            'status': r['status'], 'answered_by': 'provider' if header(r, 'x-mock-provider') else 'gateway',
+            'requests_the_provider_received': len(hits),
+            'authorization_headers_among_them': sum(len(header(h['headers'], 'authorization')) for h in hits)}
+
+        # Without responseHeaderModifier: the provider answers 302 to another host and sets a cookie.
+        reset_all()
+        r = gw('GET', TRACKING + '/redirect-me', tok)
+        seen['provider_answers_302_with_a_cookie'] = {
+            'status': r['status'], 'location_given_to_the_caller': header(r, 'location'),
+            'set_cookie_given_to_the_caller': bool(header(r, 'set-cookie')),
+            'requests_the_redirect_target_received': len(forbidden_hits())}
+    except Exception as e:
+        seen['not_observed'] = f'{type(e).__name__}: {e}'
+    finally:
+        stop('agentgateway-unmitigated', PORTS['gateway'])
+        probe.unlink(missing_ok=True)
+    return seen
+
+
 def ephemeral_range() -> tuple[int, int] | None:
     """Range the kernel draws source ports for outgoing connections from (Linux only)."""
     try:
@@ -1313,7 +1401,7 @@ def main() -> int:
         return 2
 
     started = datetime.datetime.now(datetime.timezone.utc)
-    results, listeners = [], ''
+    results, listeners, unmitigated = [], '', {}
     try:
         mock = lambda name, port: start(name, [sys.executable, str(HERE / 'mock_provider.py'), '--port', str(port),
                                                 '--name', name, '--state', str(RUN / 'state.json')], port)
@@ -1322,6 +1410,7 @@ def main() -> int:
         mock('forbidden', PORTS['forbidden'])
         start_gatekeeper()
         start_broker()
+        unmitigated = observe_unmitigated(binary)
         start('agentgateway', [binary, '-f', str(RUN_CONFIG.relative_to(HERE))], PORTS['gateway'], env=gateway_env(S.session_key))
         start_front()
         listeners = sh(['ss', '-ltnH'])
@@ -1377,7 +1466,8 @@ def main() -> int:
                          'config_sha256': hashlib.sha256(CONFIG.read_bytes()).hexdigest(),
                          'native_validation': config_said,
                          'session_key_supplied_by': 'SESSION_KEY environment variable, generated per run, not recorded',
-                         'start_without_session_key_rewrites_config_file': S.default_start_rewrites},
+                         'start_without_session_key_rewrites_config_file': S.default_start_rewrites,
+                         'unmitigated_defaults': unmitigated},
         'policy_sha256': hashlib.sha256((HERE / 'policy.poc.json').read_bytes()).hexdigest(),
         'runner_sha256': hashlib.sha256(Path(__file__).resolve().read_bytes()).hexdigest(),
         'gateway_authz': {'what_ran': 'cmd/gateway-authz built with the acceptance tag; not the product build',
