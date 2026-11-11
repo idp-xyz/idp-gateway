@@ -10,9 +10,11 @@ that does not meet its expectation is reported as FAIL, not adjusted.
 The gateway is the one release pinned in deploy/agentgateway/agentgateway.lock.json. A binary
 that is not that release (version, git revision and SHA-256; see pin.py) is not started.
 
-Before the cases the binary is started twice more, briefly: once with no session key, and once
-from the reviewed configuration with its mitigations taken out (observe_unmitigated). What it
-does then is written to the evidence as observations about the binary. They are not checks.
+Before the cases the binary is started three more times, briefly, from the reviewed
+configuration with its mitigations taken out: once with no session key, and once to see what
+it then lets through (observe_unmitigated); and once from the reviewed configuration itself
+with no session key. What the unmitigated starts show is written to the evidence as
+observations about the binary. They are not checks.
 
 The PDP on the "gatekeeper" port is gateway-authz built with the `acceptance` tag: the same
 code as the product build plus the controls this runner needs (see what it received, make it
@@ -328,17 +330,40 @@ def gateway_env(session_key: str | None) -> dict:
     return env
 
 
-def default_start_rewrites_config(binary: str) -> bool:
-    """Start the gateway once the way an unprepared installation would, with no session key,
-    and report whether it altered the config file it was given."""
+def start_without_session_key_rewrites(binary: str, configuration: bytes) -> bool:
+    """Start the gateway once from this configuration with no session key in its environment,
+    and report whether it altered the file it was given."""
     probe = RUN / 'default-start.yaml'
-    shutil.copyfile(CONFIG, probe)
+    probe.write_bytes(configuration)
+    os.chmod(probe, 0o600)
     start('agentgateway-default-start', [binary, '-f', f'.run/{probe.name}'], PORTS['gateway'], env=gateway_env(None))
     time.sleep(0.5)
     stop('agentgateway-default-start', PORTS['gateway'])
-    rewritten = probe.read_bytes() != CONFIG.read_bytes()
+    rewritten = probe.read_bytes() != configuration
     probe.unlink()   # it may now hold a generated key
     return rewritten
+
+
+def admin_api(method: str, path: str, body: dict | None = None) -> dict:
+    """The gateway's own admin address (loopback): the API its UI uses."""
+    headers = [('Host', f"127.0.0.1:{PORTS['admin']}")] + ([('Content-Type', 'application/json')] if body is not None else [])
+    return send(PORTS['admin'], method, path, headers, json.dumps(body).encode() if body is not None else None)
+
+
+# A change to the configuration as the UI would send it: one more resource, of a kind the
+# reviewed file does not use, pointing at the target no route may reach.
+ADMIN_WRITE = ('/api/config/resources/mcp.target',
+               {'resources': [{'value': {'name': 'written-through-the-admin-api',
+                                         'mcp': {'host': f"http://127.0.0.1:{PORTS['forbidden']}/mcp"}}}]})
+
+
+def config_dump_digest() -> str | None:
+    """A digest of what the gateway says it is running (/config_dump), independent of key order."""
+    try:
+        running = json.loads(admin_api('GET', '/config_dump')['body'])
+    except ValueError:
+        return None
+    return hashlib.sha256(json.dumps(running, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
 def sh(argv: list[str]) -> str:
@@ -356,9 +381,10 @@ class S:  # per-run secrets; never written to the evidence file
     admin = broker_key = static_token = session_key = impostor_token = ''
     token = {}  # account -> provider token
     # not secrets: what the runner observed about the binary before the cases
-    default_start_rewrites = None  # default_start_rewrites_config()
-    config_bytes = b''             # what the gateway is started from
-    pdp_protocols: set = set()     # HTTP versions the gateway spoke to the PDP
+    default_start_rewrites = None    # start_without_session_key_rewrites(), default storage mode
+    read_only_start_rewrites = None  # the same, from the reviewed configuration
+    config_bytes = b''               # what the gateway is started from
+    pdp_protocols: set = set()       # HTTP versions the gateway spoke to the PDP
 
 
 CASES: list[tuple] = []
@@ -1153,6 +1179,27 @@ def _(c):
 
 
 # ---- configuration integrity --------------------------------------------------------------------------
+@case('P1-CF-02', 'a write to the configuration through the gateway\'s own admin API',
+      'refused: what the gateway is running and the file it was started from stay as published; '
+      'nor does the gateway write a generated session key into that file',
+      ('GW-AT-046', 'GW-FR-046', 'GW-AT-044', 'GW-FR-044', 'GW-NAT-004', 'GW-NFR-04'))
+def _(c):
+    before = config_dump_digest()
+    c.check('the gateway reports what it is running (/config_dump), the same on two reads',
+            before is not None and config_dump_digest() == before)
+    r = admin_api('PUT', *ADMIN_WRITE)
+    c.note('status', r['status'])
+    c.note('storage_mode_the_gateway_reports', (body_json(admin_api('GET', '/api/runtime')).get('ui') or {}).get('configStoreMode'))
+    c.check('the write is refused', r['status'] is not None and 400 <= r['status'] <= 499)
+    time.sleep(0.5)
+    c.check('what the gateway is running is unchanged', config_dump_digest() == before)
+    c.check('the resource was not stored',
+            ADMIN_WRITE[1]['resources'][0]['value']['name'] not in admin_api('GET', ADMIN_WRITE[0])['body'].decode(errors='replace'))
+    c.check('the file the gateway was started from is unchanged', RUN_CONFIG.read_bytes() == S.config_bytes == CONFIG.read_bytes())
+    c.check('started with no session key, the gateway did not write one into its file either', S.read_only_start_rewrites is False)
+    c.check('the gateway is serving', gw('GET', TRACKING + '/TRK-1', blue())['status'] == 200)
+
+
 @case('P1-CF-01', 'the gateway and its own configuration file',
       'given its session key through the environment, the gateway leaves the file it was started from byte-identical to the reviewed configuration',
       ('GW-NAT-004', 'GW-AT-014', 'GW-NFR-04', 'GW-FR-014'))
@@ -1236,12 +1283,14 @@ def stage_config(binary: str) -> tuple[bool, str]:
 
 # What the reviewed configuration sets because the binary, left to itself, does something unsafe.
 LEFT_OUT = ['urlRewrite.authority', 'the canonical-path authorization rule on each route',
-            'the credential-present authorization rule on each backend', 'responseHeaderModifier', 'requestHeaderModifier']
+            'the credential-present authorization rule on each backend', 'responseHeaderModifier', 'requestHeaderModifier',
+            'config.storage.mode']
 
 
 def unmitigated_config() -> bytes:
     """The reviewed configuration with LEFT_OUT taken out and nothing else changed."""
     doc = yaml.safe_load(CONFIG.read_bytes())
+    doc['config'].pop('storage', None)
     for route in doc['routes']:
         policies = route.get('policies', {})
         for key in ('authorization', 'responseHeaderModifier'):
@@ -1308,6 +1357,16 @@ def observe_unmitigated(binary: str) -> dict:
             'status': r['status'], 'location_given_to_the_caller': header(r, 'location'),
             'set_cookie_given_to_the_caller': bool(header(r, 'set-cookie')),
             'requests_the_redirect_target_received': len(forbidden_hits())}
+
+        # Without config.storage.mode: a write through the gateway's own admin API. Last, because
+        # where it is accepted it changes what this instance runs.
+        before, running = probe.read_bytes(), config_dump_digest()
+        r = admin_api('PUT', *ADMIN_WRITE)
+        time.sleep(0.5)
+        seen['write_through_the_admin_api'] = {
+            'status': r['status'], 'storage_mode_the_gateway_reports': (body_json(admin_api('GET', '/api/runtime')).get('ui') or {}).get('configStoreMode'),
+            'what_the_gateway_runs_changed': config_dump_digest() != running,
+            'configuration_file_rewritten_by_the_gateway': probe.read_bytes() != before}
     except Exception as e:
         seen['not_observed'] = f'{type(e).__name__}: {e}'
     finally:
@@ -1405,7 +1464,8 @@ def main() -> int:
     try:
         mock = lambda name, port: start(name, [sys.executable, str(HERE / 'mock_provider.py'), '--port', str(port),
                                                 '--name', name, '--state', str(RUN / 'state.json')], port)
-        S.default_start_rewrites = default_start_rewrites_config(binary)
+        S.default_start_rewrites = start_without_session_key_rewrites(binary, unmitigated_config())
+        S.read_only_start_rewrites = start_without_session_key_rewrites(binary, S.config_bytes)
         mock('mockcarrier', PORTS['provider'])
         mock('forbidden', PORTS['forbidden'])
         start_gatekeeper()
@@ -1467,6 +1527,7 @@ def main() -> int:
                          'native_validation': config_said,
                          'session_key_supplied_by': 'SESSION_KEY environment variable, generated per run, not recorded',
                          'start_without_session_key_rewrites_config_file': S.default_start_rewrites,
+                         'start_without_session_key_rewrites_config_file_with_storage_read_only': S.read_only_start_rewrites,
                          'unmitigated_defaults': unmitigated},
         'policy_sha256': hashlib.sha256((HERE / 'policy.poc.json').read_bytes()).hexdigest(),
         'runner_sha256': hashlib.sha256(Path(__file__).resolve().read_bytes()).hexdigest(),

@@ -35,7 +35,7 @@ python3 scripts/agentgateway_release.py     # 要联网；只用标准库
 
 `agentgateway.local.example.yaml` 仅供展示 Standalone 路由语法轮廓，**并非可以直接暴露给业务网络的受保护 Gateway**：当前示例没有 JWT/ExtAuthZ、TLS、真实 Secret Manager 对接。它已通过 agentgateway 1.7.0 的 `--validate-only` 语法检查，但从未启动运行。只用于隔离本地 Mock 研究。
 
-**端口约定**：本项目保留 `27610-27620` 端口段，不使用 3000/8080 等常见开发端口；该段低于 Linux 临时端口范围（默认 32768–60999），不会被出站连接临时占用。`27610` 为本示例监听端口，`27619` 为本示例的占位上游（无进程监听），`27611-27618` 和 `27620` 由 P1 PoC 使用（见 `tests/acceptance/blackbox/README.md`）。注意 agentgateway 的监听器没有绑定地址字段，启动后端口对本机所有网卡开放，必须由网络层限制来源；在环境里没有 `SESSION_KEY` 时启动，它还会把生成的密钥写进配置文件。
+**端口约定**：本项目保留 `27610-27620` 端口段，不使用 3000/8080 等常见开发端口；该段低于 Linux 临时端口范围（默认 32768–60999），不会被出站连接临时占用。`27610` 为本示例监听端口，`27619` 为本示例的占位上游（无进程监听），`27611-27618` 和 `27620` 由 P1 PoC 使用（见 `tests/acceptance/blackbox/README.md`）。注意 agentgateway 的监听器没有绑定地址字段，启动后端口对本机所有网卡开放，必须由网络层限制来源；在环境里没有 `SESSION_KEY` 时启动，它还会把生成的密钥写进配置文件；它的管理地址上还有能改运行配置的接口，默认会把改动写回配置文件，要关掉得设 `config.storage.mode: readOnly`。本示例都没有处理，处理过并跑过的写法见 `tests/acceptance/blackbox/README.md` 的"默认配置不安全的地方"。
 
 带 JWT、ExtAuthZ 与凭证注入、且**实际运行过**的配置见 `tests/acceptance/blackbox/agentgateway.poc.yaml`。
 

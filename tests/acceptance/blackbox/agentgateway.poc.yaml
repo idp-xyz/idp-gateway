@@ -12,10 +12,11 @@
 # Run through run.py: it creates the .run/ files referenced below and starts the
 # gateway with tests/acceptance/blackbox as working directory (relative paths resolve against the cwd).
 #
-# There is deliberately no config.session.key here. Started without one, the gateway
-# generates a key and WRITES IT INTO THE CONFIG FILE it was started from. run.py therefore
-# starts the gateway from a copy in .run/ and passes a per-run key in the SESSION_KEY
-# environment variable, which stops the rewrite (case P1-CF-01).
+# There is deliberately no config.session.key here. Left to its defaults and started without
+# one, the gateway generates a key and WRITES IT INTO THE CONFIG FILE it was started from.
+# run.py therefore starts the gateway from a copy in .run/ and passes a per-run key in the
+# SESSION_KEY environment variable (case P1-CF-01). config.storage.mode below is the second
+# thing in the way: with it the gateway does not write to this file at all.
 #
 # Ports 27611-27618 and 27620 are reserved for this PoC:
 #   27611 gateway listener   27612 mock provider      27613 gateway-authz (TLS)
@@ -35,6 +36,13 @@ config:
   adminAddr: 127.0.0.1:27614
   statsAddr: 127.0.0.1:27615
   readinessAddr: 127.0.0.1:27616
+  # The admin address also serves an API that changes the running configuration, and in the
+  # default storage mode the gateway writes such a change back into the file it was started
+  # from. Loopback only narrows who can call it. readOnly makes the gateway refuse the write,
+  # so the published file stays the only source of configuration (case P1-CF-02). Like the
+  # rest of this section it is read at startup only.
+  storage:
+    mode: readOnly
 
 gateways:
   egress-test:
