@@ -1,12 +1,12 @@
 {
   "title": "IDP Gateway black-box suite: real agentgateway, gateway-authz (acceptance build), mock provider",
-  "started_at_utc": "2026-11-11T06:11:40.903150+00:00",
-  "finished_at_utc": "2026-11-11T06:12:13.258496+00:00",
+  "started_at_utc": "2026-11-11T07:27:03.756243+00:00",
+  "finished_at_utc": "2026-11-11T07:27:37.807279+00:00",
   "operator": "tops",
   "host": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "python": "3.12.3",
   "command": ".venv/bin/python tests/acceptance/blackbox/run.py",
-  "repository_commit": "825a8e4fefbc2bb47641a9013252db01af843c89",
+  "repository_commit": "20557e0dc4b1607f5adb7bd90b70f280428c8e67",
   "repository_dirty_files": 0,
   "repository_dirty_files_ignores": "tests/acceptance/blackbox/evidence/",
   "agentgateway": {
@@ -23,12 +23,13 @@
     "pinned_by": "deploy/agentgateway/agentgateway.lock.json",
     "lock_sha256": "eceb1fb6f9d9f4250bca8725ea2fd20e2129bf4c93f644094d978957b15a7cf1",
     "config_file": "tests/acceptance/blackbox/agentgateway.poc.yaml",
-    "config_sha256": "4b53bb3121096c3703f749824d9ea4a846d490b959b25ca6a6800e89e5d2c585",
+    "config_sha256": "c02a2572808a6e3706a249237e0a568327ddcab16c8dad07627e56a7c8b93b4b",
     "native_validation": "Configuration is valid!",
     "session_key_supplied_by": "SESSION_KEY environment variable, generated per run, not recorded",
     "start_without_session_key_rewrites_config_file": true,
+    "start_without_session_key_rewrites_config_file_with_storage_read_only": false,
     "unmitigated_defaults": {
-      "configuration": "the reviewed configuration without: urlRewrite.authority; the canonical-path authorization rule on each route; the credential-present authorization rule on each backend; responseHeaderModifier; requestHeaderModifier",
+      "configuration": "the reviewed configuration without: urlRewrite.authority; the canonical-path authorization rule on each route; the credential-present authorization rule on each backend; responseHeaderModifier; requestHeaderModifier; config.storage.mode",
       "host_header_the_provider_received": [
         "egress-api.idp.test"
       ],
@@ -72,18 +73,24 @@
         ],
         "set_cookie_given_to_the_caller": true,
         "requests_the_redirect_target_received": 0
+      },
+      "write_through_the_admin_api": {
+        "status": 200,
+        "storage_mode_the_gateway_reports": "file",
+        "what_the_gateway_runs_changed": true,
+        "configuration_file_rewritten_by_the_gateway": true
       }
     }
   },
   "policy_sha256": "44ce8acf064e0d30c06ea7842d20a51077a711e7e364a24bee9f4c98ebcb096a",
-  "runner_sha256": "e03275e7ce6fd2672590a75d26616ed964534923f6220fe09c4a5b1ef9d89961",
+  "runner_sha256": "30d11aedd6e2c401e6a61a2c4c964e2a1f0c0e9b031ccb0f33c71ef49cc7290a",
   "gateway_authz": {
     "what_ran": "cmd/gateway-authz built with the acceptance tag; not the product build",
     "build_command": "go build -trimpath -tags acceptance -o tests/acceptance/blackbox/.run/gateway-authz ./cmd/gateway-authz",
     "go": "go version go1.26.8 linux/amd64",
     "source_sha256": "c84705254a5eb4c172167085360312b75bfab9ac5aa40a7c7d9bac6be4918acb",
     "source_sha256_covers": "go.mod and every non-test .go file under cmd/ and internal/",
-    "binary_sha256": "78a66d70032105fa0ed5ac2223d2fd0a735d7a635e1a7ad2cc059a7b1ae721ef",
+    "binary_sha256": "c4ffae3e0f548be7279d1f1ca58d7ffe50cf3540757d5c04ab9c779ad3037711",
     "policy_from": "tests/acceptance/blackbox/policy.poc.json",
     "credentials_from": "a file written for the run, not recorded",
     "revocations": "in memory",
@@ -139,8 +146,8 @@
   ],
   "ports_left_open_after_run": [],
   "summary": {
-    "cases": 54,
-    "pass": 53,
+    "cases": 55,
+    "pass": 54,
     "fail": 1
   },
   "scope_limits": [
@@ -1199,7 +1206,7 @@
       ],
       "observed": {
         "status": 403,
-        "seconds": 1.002
+        "seconds": 1.003
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1853,7 +1860,7 @@
             503
           ]
         },
-        "seconds_slow": 2.003,
+        "seconds_slow": 2.002,
         "provider_hits": 3
       },
       "indicative_for": [
@@ -2209,11 +2216,11 @@
       "observed": {
         "Gatekeeper answers 500": {
           "status": 503,
-          "seconds": 0.003
+          "seconds": 0.004
         },
         "Gatekeeper slower than the broker waits": {
           "status": 503,
-          "seconds": 0.746
+          "seconds": 0.705
         },
         "Gatekeeper down": {
           "status": 503,
@@ -2221,7 +2228,7 @@
         },
         "broker down": {
           "status": 403,
-          "seconds": 0.002
+          "seconds": 0.001
         }
       },
       "indicative_for": [
@@ -2464,6 +2471,54 @@
         "GW-AT-007",
         "GW-FR-007",
         "GW-NFR-05"
+      ]
+    },
+    {
+      "id": "P1-CF-02",
+      "title": "a write to the configuration through the gateway's own admin API",
+      "expectation": "refused: what the gateway is running and the file it was started from stay as published; nor does the gateway write a generated session key into that file",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "the gateway reports what it is running (/config_dump), the same on two reads",
+          "ok": true
+        },
+        {
+          "check": "the write is refused",
+          "ok": true
+        },
+        {
+          "check": "what the gateway is running is unchanged",
+          "ok": true
+        },
+        {
+          "check": "the resource was not stored",
+          "ok": true
+        },
+        {
+          "check": "the file the gateway was started from is unchanged",
+          "ok": true
+        },
+        {
+          "check": "started with no session key, the gateway did not write one into its file either",
+          "ok": true
+        },
+        {
+          "check": "the gateway is serving",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "status": 403,
+        "storage_mode_the_gateway_reports": "readOnly"
+      },
+      "indicative_for": [
+        "GW-AT-046",
+        "GW-FR-046",
+        "GW-AT-044",
+        "GW-FR-044",
+        "GW-NAT-004",
+        "GW-NFR-04"
       ]
     },
     {
