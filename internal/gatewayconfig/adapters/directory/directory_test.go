@@ -1,0 +1,218 @@
+//go:build unix
+
+package directory
+
+import (
+	"context"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"testing"
+
+	"go.idp.xyz/idp-gateway/internal/gatewayconfig/domain"
+	"go.idp.xyz/idp-gateway/internal/gatewayconfig/ports"
+)
+
+var ctx = context.Background()
+
+func snap(t *testing.T, content string) domain.Snapshot {
+	t.Helper()
+	snapshot, err := domain.NewSnapshot([]byte(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
+}
+
+func open(t *testing.T) (*Directory, string) {
+	t.Helper()
+	dir := t.TempDir()
+	directory, err := New(dir, "config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return directory, dir
+}
+
+func names(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found []string
+	for _, entry := range entries {
+		found = append(found, entry.Name())
+	}
+	return found
+}
+
+func TestPutThenCurrent(t *testing.T) {
+	directory, dir := open(t)
+	if _, ok, err := directory.Current(ctx); ok || err != nil {
+		t.Fatalf("空目录：ok=%t err=%v", ok, err)
+	}
+	if err := directory.Put(ctx, domain.Snapshot{}); err == nil {
+		t.Fatal("没有内容的快照被放进去了")
+	}
+	// 写文件的进程把 umask 收得很紧时，配置文件仍是别人可读的：网关容器里的用户不一定是它。
+	previous := syscall.Umask(0o077)
+	defer syscall.Umask(previous)
+
+	one, two := snap(t, "routes: [a]\n"), snap(t, "routes: [a, b]\n")
+	for _, snapshot := range []domain.Snapshot{one, two, one} {
+		if err := directory.Put(ctx, snapshot); err != nil {
+			t.Fatal(err)
+		}
+		current, ok, err := directory.Current(ctx)
+		if err != nil || !ok || current.ID() != snapshot.ID() {
+			t.Fatalf("放进去的是 %s，读出来的是 %s（ok=%t err=%v）", snapshot.ShortID(), current.ShortID(), ok, err)
+		}
+	}
+	// 目录里只有配置文件：临时文件没有留下。
+	if found := names(t, dir); len(found) != 1 || found[0] != "config.yaml" {
+		t.Fatalf("目录里有 %v", found)
+	}
+	info, err := os.Stat(filepath.Join(dir, "config.yaml"))
+	if err != nil || info.Mode().Perm() != 0o644 {
+		t.Fatalf("权限 %v（err=%v）", info.Mode().Perm(), err)
+	}
+}
+
+// 换文件是换上另一个文件，不是改写原来那个：已经打开旧文件的人读到的仍是旧的整份。
+// 网关的监视和"只挂单个文件就看不到"（SH-05）都系于这一点。
+func TestPutReplacesTheFileInsteadOfRewritingIt(t *testing.T) {
+	directory, dir := open(t)
+	if err := directory.Put(ctx, snap(t, "the first one")); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "config.yaml")
+	reader, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := directory.Put(ctx, snap(t, "the second one, which is longer")); err != nil {
+		t.Fatal(err)
+	}
+	old, err := io.ReadAll(reader)
+	if err != nil || string(old) != "the first one" {
+		t.Fatalf("旧文件的读者读到了 %q（err=%v）", old, err)
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Sys().(*syscall.Stat_t).Ino == after.Sys().(*syscall.Stat_t).Ino {
+		t.Fatal("还是原来那个文件：是就地改写，不是改名替换")
+	}
+}
+
+func TestCurrentRefusesAnEmptyFile(t *testing.T) {
+	directory, dir := open(t)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot, ok, err := directory.Current(ctx); err == nil {
+		t.Fatalf("空文件被当成了快照 %s（ok=%t）", snapshot.ID(), ok)
+	}
+}
+
+func TestAFailedPutLeavesThePreviousFile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root 不受目录权限限制")
+	}
+	directory, dir := open(t)
+	if err := directory.Put(ctx, snap(t, "kept")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	if err := directory.Put(ctx, snap(t, "never written")); err == nil {
+		t.Fatal("目录不可写，Put 却成功了")
+	}
+	current, ok, err := directory.Current(ctx)
+	if err != nil || !ok || string(current.Content()) != "kept" {
+		t.Fatalf("原来的文件变成了 %q（ok=%t err=%v）", current.Content(), ok, err)
+	}
+}
+
+// 临时文件写好了、改名却没成（这里是因为配置文件的位置上是一个目录）：临时文件不留在目录里。
+// 留下的话，它会一直待在网关容器挂载的那个目录里。
+func TestAPutThatFailsAtTheRenameLeavesNoTemporaryFile(t *testing.T) {
+	directory, dir := open(t)
+	if err := os.Mkdir(filepath.Join(dir, "config.yaml"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := directory.Put(ctx, snap(t, "cannot replace a directory")); err == nil {
+		t.Fatal("配置文件的位置上是一个目录，Put 却成功了")
+	}
+	if found := names(t, dir); len(found) != 1 || found[0] != "config.yaml" {
+		t.Fatalf("目录里留下了 %v", found)
+	}
+}
+
+func TestHoldIsExclusive(t *testing.T) {
+	directory, dir := open(t)
+	release, err := directory.Hold(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 同一个目录的另一个发布器（另一个进程也是这样）。
+	other, err := New(dir, "config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.Hold(ctx); !errors.Is(err, ports.ErrBusy) {
+		t.Fatalf("第二次占用得到 %v", err)
+	}
+	if _, err := directory.Hold(ctx); !errors.Is(err, ports.ErrBusy) {
+		t.Fatalf("同一个对象再占一次得到 %v", err)
+	}
+	release()
+	again, err := other.Hold(ctx)
+	if err != nil {
+		t.Fatalf("放开之后占不到：%v", err)
+	}
+	again()
+
+	// 锁文件不是配置文件，占用也不碰配置文件。
+	if _, ok, err := directory.Current(ctx); ok || err != nil {
+		t.Fatalf("占用之后目录里多出了配置文件：ok=%t err=%v", ok, err)
+	}
+	for _, name := range names(t, dir) {
+		if !strings.HasPrefix(name, ".") {
+			t.Fatalf("目录里多出了 %s", name)
+		}
+	}
+}
+
+func TestNewRefusesWhatIsNotADirectoryAndAPlainName(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "a-file")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, args := range map[string][2]string{
+		"目录不存在":   {filepath.Join(dir, "missing"), "config.yaml"},
+		"不是目录":    {file, "config.yaml"},
+		"名字为空":    {dir, ""},
+		"名字带目录":   {dir, "sub/config.yaml"},
+		"名字指向上一级": {dir, ".."},
+	} {
+		if _, err := New(args[0], args[1]); err == nil {
+			t.Errorf("%s：被接受了", name)
+		}
+	}
+}

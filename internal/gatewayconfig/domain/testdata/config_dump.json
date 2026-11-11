@@ -1,0 +1,412 @@
+{
+  "workloads": [],
+  "services": [],
+  "binds": [
+    {
+      "key": "bind/8081",
+      "address": "127.0.0.1:8081",
+      "protocol": "http",
+      "tunnelProtocol": "direct",
+      "mode": "standard",
+      "listeners": {
+        "gateway/callers": {
+          "key": "gateway/callers",
+          "gatewayName": "default",
+          "gatewayNamespace": "default",
+          "listenerName": "callers",
+          "hostname": "*",
+          "protocol": "HTTP",
+          "routes": {
+            "gateway/callers/default/route-b": {
+              "key": "gateway/callers/default/route-b",
+              "name": "route-b",
+              "namespace": "default",
+              "hostnames": [
+                "b.test"
+              ],
+              "matches": [
+                {
+                  "path": {
+                    "pathPrefix": "/"
+                  }
+                }
+              ],
+              "backends": [
+                {
+                  "weight": 1,
+                  "backend": "/gateway/callers/default/route-b/backend0"
+                }
+              ],
+              "inlinePolicies": [
+                {
+                  "timeout": {
+                    "requestTimeout": "30s"
+                  }
+                }
+              ]
+            },
+            "gateway/callers/default/route-pdp-shaped": {
+              "key": "gateway/callers/default/route-pdp-shaped",
+              "name": "route-pdp-shaped",
+              "namespace": "default",
+              "hostnames": [
+                "pdp-shaped.test"
+              ],
+              "matches": [
+                {
+                  "path": {
+                    "pathPrefix": "/"
+                  }
+                }
+              ],
+              "backends": [
+                {
+                  "weight": 1,
+                  "backend": "/gateway/callers/default/route-pdp-shaped/backend0"
+                }
+              ],
+              "inlinePolicies": [
+                {
+                  "extAuthz": {
+                    "inlineBackend": "echo:8000",
+                    "policies": [
+                      {
+                        "backendTLS": {
+                          "cert": "-----BEGIN CERTIFICATE-----\nMIIBijCCAS+gAwIBAgIUQYefU9Jz5j6bem2XKfx9hSRL5FAwCgYIKoZIzj0EAwIw\nHjEcMBoGA1UEAwwTSURQIFBvQyB3b3JrbG9hZCBDQTAeFw0yNjExMTExMTU5MDJa\nFw0yNjExMTExODA0MDJaMBIxEDAOBgNVBAMMB2dhdGV3YXkwWTATBgcqhkjOPQIB\nBggqhkjOPQMBBwNCAARHEEhc7J04ZeHSGJnDSV1rsfehyugSwq384XFqs5zjlfN3\n9BxBYnh2lxletqiWn770qbl1p7APHl+16vXXLzoNo1cwVTAMBgNVHRMBAf8EAjAA\nMDAGA1UdEQQpMCeGJXNwaWZmZTovL2lkcC50ZXN0L2VncmVzcy9hZ2VudGdhdGV3\nYXkwEwYDVR0lBAwwCgYIKwYBBQUHAwIwCgYIKoZIzj0EAwIDSQAwRgIhAIK/HMTn\nh4o5hrX08iP660E7O+leGaU4QaSxnFx19XrjAiEA8MFrzQGhAR76nlpiLpGw3zv0\nklGVNY5FxtR8ywV4xeo=\n-----END CERTIFICATE-----\n",
+                          "root": "-----BEGIN CERTIFICATE-----\nMIIBZDCCAQqgAwIBAgIUSyBRrEbV/cOKdRmnVb3e95Vx6LUwCgYIKoZIzj0EAwIw\nHjEcMBoGA1UEAwwTSURQIFBvQyB3b3JrbG9hZCBDQTAeFw0yNjExMTExMTU5MDJa\nFw0yNjExMTExODA0MDJaMB4xHDAaBgNVBAMME0lEUCBQb0Mgd29ya2xvYWQgQ0Ew\nWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAATzDVOfpKyPxmekmIBsf1klV1S6vwvq\nscz2+kd+NJVK3wkWNVyfHB1LKLolfaEf4wIBJpyi/MCfaORSgqkWKmRfoyYwJDAS\nBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIBhjAKBggqhkjOPQQDAgNI\nADBFAiEAy/hnJPQAqX1pPKFVs1fwvTD/wIIZqn3gBBLGkmH5SdsCIE0skzSqecIy\nshzdEe+p3poJjn7QVHmjS2nru9d5b6sW\n-----END CERTIFICATE-----\n",
+                          "hostname": "gatekeeper.idp.test"
+                        }
+                      }
+                    ],
+                    "protocol": {
+                      "http": {
+                        "path": "\"/v1/extauthz/check\"",
+                        "redirect": null,
+                        "body": null
+                      }
+                    },
+                    "failureMode": "deny"
+                  }
+                }
+              ]
+            },
+            "gateway/callers/default/route-a": {
+              "key": "gateway/callers/default/route-a",
+              "name": "route-a",
+              "namespace": "default",
+              "hostnames": [
+                "a.test"
+              ],
+              "matches": [
+                {
+                  "path": {
+                    "pathPrefix": "/"
+                  }
+                }
+              ],
+              "backends": [
+                {
+                  "weight": 1,
+                  "backend": "/gateway/callers/default/route-a/backend0"
+                }
+              ],
+              "inlinePolicies": [
+                {
+                  "timeout": {
+                    "requestTimeout": "30s"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "key": "bind/8443",
+      "address": "[::]:8443",
+      "protocol": "tls",
+      "tunnelProtocol": "direct",
+      "mode": "standard",
+      "listeners": {
+        "gateway/read-back": {
+          "key": "gateway/read-back",
+          "gatewayName": "default",
+          "gatewayNamespace": "default",
+          "listenerName": "read-back",
+          "hostname": "*",
+          "protocol": {
+            "HTTPS": {
+              "certificateSource": "Static"
+            }
+          },
+          "routes": {
+            "gateway/read-back/default/read-back": {
+              "key": "gateway/read-back/default/read-back",
+              "name": "read-back",
+              "namespace": "default",
+              "matches": [
+                {
+                  "path": {
+                    "exact": "/config_dump"
+                  },
+                  "method": "GET"
+                },
+                {
+                  "path": {
+                    "exact": "/api/runtime"
+                  },
+                  "method": "GET"
+                }
+              ],
+              "backends": [
+                {
+                  "weight": 1,
+                  "backend": "/gateway/read-back/default/read-back/backend0"
+                }
+              ],
+              "inlinePolicies": [
+                {
+                  "timeout": {
+                    "requestTimeout": "2s"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "routes": {
+    "httpMesh": {},
+    "tcpMesh": {},
+    "routeGroups": {}
+  },
+  "policies": [
+    {
+      "key": "frontend/networkAuthorization",
+      "name": null,
+      "target": {
+        "gateway": {
+          "gatewayName": "default",
+          "gatewayNamespace": "default",
+          "listenerName": null
+        }
+      },
+      "policy": {
+        "frontend": {
+          "networkAuthorization": {
+            "rules": {
+              "allow": [
+                "destination.port == 8081",
+                "destination.port == 8443 && source.spiffeId == \"spiffe://idp.test/gateway-control/publisher\""
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "backends": [
+    {
+      "backend": {
+        "host": {
+          "name": "gateway/callers/default/route-a/backend0",
+          "namespace": "",
+          "target": "echo:8000"
+        }
+      }
+    },
+    {
+      "backend": {
+        "host": {
+          "name": "gateway/callers/default/route-b/backend0",
+          "namespace": "",
+          "target": "echo:8000"
+        }
+      }
+    },
+    {
+      "backend": {
+        "host": {
+          "name": "gateway/callers/default/route-pdp-shaped/backend0",
+          "namespace": "",
+          "target": "echo:8000"
+        }
+      }
+    },
+    {
+      "backend": {
+        "host": {
+          "name": "gateway/read-back/default/read-back/backend0",
+          "namespace": "",
+          "target": "127.0.0.1:15000"
+        }
+      }
+    }
+  ],
+  "models": [],
+  "version": {
+    "version": "1.7.0",
+    "git_revision": "26f5aebe99a36a037fe54f8080a608aca5547e15",
+    "rust_version": "1.99.0",
+    "build_profile": "release",
+    "build_target": "x86_64-unknown-linux-gnu"
+  },
+  "config": {
+    "ipv6Enabled": true,
+    "network": "",
+    "selfIdentity": null,
+    "terminationMaxDeadline": "45s",
+    "terminationMinDeadline": "0s",
+    "numWorkerThreads": 20,
+    "adminAddr": {
+      "SocketAddr": "127.0.0.1:15000"
+    },
+    "statsAddr": {
+      "SocketAddr": "127.0.0.1:15020"
+    },
+    "histograms": "classic",
+    "readinessAddr": {
+      "SocketAddr": "127.0.0.1:15021"
+    },
+    "selfAddr": {
+      "gateway": "default",
+      "namespace": "default"
+    },
+    "hbone": {
+      "windowSize": 4194304,
+      "connectionWindowSize": 16777216,
+      "frameSize": 1048576,
+      "poolMaxStreamsPerConn": 100,
+      "poolUnusedReleaseTimeout": {
+        "secs": 300,
+        "nanos": 0
+      }
+    },
+    "xds": {
+      "address": null,
+      "auth": "none",
+      "caCert": "Default",
+      "headers": [],
+      "namespace": "default",
+      "gateway": "default",
+      "localConfig": "config/config.yaml"
+    },
+    "ca": null,
+    "spiffe": null,
+    "tracing": null,
+    "metrics": {
+      "metric_fields": {
+        "add": {}
+      },
+      "excluded_metrics": []
+    },
+    "logging": {
+      "filter": null,
+      "fields": {
+        "remove": [],
+        "add": {}
+      },
+      "level": "",
+      "format": "text",
+      "database": null
+    },
+    "database": null,
+    "storage": {
+      "mode": "readOnly"
+    },
+    "sensitiveHeaders": [],
+    "dns": {
+      "resolverCfg": {
+        "domain": null,
+        "search": [],
+        "name_servers": [
+          {
+            "ip": "10.255.255.254",
+            "trust_negative_responses": true,
+            "connections": [
+              {
+                "port": 53,
+                "protocol": {
+                  "type": "udp"
+                },
+                "bind_addr": null
+              },
+              {
+                "port": 53,
+                "protocol": {
+                  "type": "tcp"
+                },
+                "bind_addr": null
+              }
+            ]
+          }
+        ]
+      },
+      "resolverOpts": {
+        "ndots": 1,
+        "timeout": 5,
+        "attempts": 2,
+        "edns0": false,
+        "ip_strategy": "Ipv4thenIpv6",
+        "cache_size": 8192,
+        "use_hosts_file": "Auto",
+        "positive_min_ttl": null,
+        "negative_min_ttl": null,
+        "positive_max_ttl": null,
+        "negative_max_ttl": null,
+        "num_concurrent_reqs": 2,
+        "max_active_requests": 32,
+        "preserve_intermediates": true,
+        "try_tcp_on_error": false,
+        "server_ordering_strategy": "QueryStatistics",
+        "recursion_desired": true,
+        "avoid_local_udp_ports": [],
+        "os_port_selection": false,
+        "case_randomization": false,
+        "trust_anchor": null,
+        "allow_answers": [],
+        "deny_answers": [],
+        "edns_payload_len": 1232
+      }
+    },
+    "proxyMetadata": {
+      "instanceIp": null,
+      "podName": "",
+      "podNamespace": "",
+      "nodeName": "",
+      "role": "~",
+      "nodeId": "agentgateway~1.1.1.1~.~.svc.cluster.local"
+    },
+    "threadingMode": "multithreaded",
+    "sessionEncoder": "aes",
+    "oidcCookieEncoder": null,
+    "backend": {
+      "keepalives": {
+        "enabled": true,
+        "time": "3m0s",
+        "interval": "3m0s",
+        "retries": 9
+      },
+      "connectTimeout": "11s",
+      "poolIdleTimeout": "1m30s",
+      "poolMaxSize": null,
+      "h2KeepaliveInterval": "0s",
+      "h2KeepaliveTimeout": "5s",
+      "allowDynamicLoopback": false
+    },
+    "callouts": {},
+    "mcp": {
+      "sessionTtl": "30m0s"
+    },
+    "dynamicCaCertCache": {
+      "ttl": "5m0s",
+      "capacity": 256
+    },
+    "modelCatalog": {
+      "sources": []
+    }
+  }
+}

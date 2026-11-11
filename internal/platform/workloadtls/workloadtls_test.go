@@ -103,6 +103,54 @@ func TestHandshakeIsRefusedWithoutACertificateFromTheWorkloadCA(t *testing.T) {
 	}
 }
 
+func TestClientConfigPresentsItsCertificateAndVerifiesTheServer(t *testing.T) {
+	ca := tlstest.NewCA(t, "workload CA")
+	url := startServer(t, ca)
+	gateway := ca.Issue("gateway", []string{gatewayID})
+
+	config, err := workloadtls.ClientConfig(gateway.CertFile, gateway.KeyFile, ca.File(), serverName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body, err := get(t, url, config); err != nil || body != "peer="+gatewayID {
+		t.Fatalf("%q, %v", body, err)
+	}
+
+	// 服务端的证书不是给这个名字的。
+	config, err = workloadtls.ClientConfig(gateway.CertFile, gateway.KeyFile, ca.File(), "other.idp.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body, err := get(t, url, config); err == nil {
+		t.Fatalf("名字不符的服务端被接受了：%q", body)
+	}
+	// 服务端的证书不是这个 CA 签的。
+	rogue := tlstest.NewCA(t, "a CA outside the trust domain")
+	config, err = workloadtls.ClientConfig(gateway.CertFile, gateway.KeyFile, rogue.File(), serverName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body, err := get(t, url, config); err == nil {
+		t.Fatalf("不受信任的服务端被接受了：%q", body)
+	}
+
+	empty := filepath.Join(t.TempDir(), "empty.pem")
+	if err := os.WriteFile(empty, []byte("not a certificate"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, args := range map[string][4]string{
+		"证书文件不存在":    {"missing.crt", gateway.KeyFile, ca.File(), serverName},
+		"证书与私钥不配对":   {ca.Issue("other", nil).CertFile, gateway.KeyFile, ca.File(), serverName},
+		"CA 文件不存在":   {gateway.CertFile, gateway.KeyFile, "missing-ca.crt", serverName},
+		"CA 文件里没有证书": {gateway.CertFile, gateway.KeyFile, empty, serverName},
+		"没有给出要验证的名字": {gateway.CertFile, gateway.KeyFile, ca.File(), ""},
+	} {
+		if _, err := workloadtls.ClientConfig(args[0], args[1], args[2], args[3]); err == nil {
+			t.Errorf("%s: 被接受了", name)
+		}
+	}
+}
+
 func TestPeerIdentityWithoutTLS(t *testing.T) {
 	if got := workloadtls.PeerIdentity(nil); got != "" {
 		t.Fatal(got)

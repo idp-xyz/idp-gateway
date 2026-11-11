@@ -1,0 +1,617 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"reflect"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"go.idp.xyz/idp-gateway/internal/gatewayconfig/adapters/directory"
+	"go.idp.xyz/idp-gateway/internal/gatewayconfig/application"
+	"go.idp.xyz/idp-gateway/internal/platform/workloadtls"
+	"go.idp.xyz/idp-gateway/internal/platform/workloadtls/tlstest"
+)
+
+const (
+	image        = "cr.agentgateway.dev/agentgateway@sha256:60216aafb03d37f94e952ff3d51d2f630a65b10ecaebdc0a864882f92610c45b"
+	readBackName = "readback.gateway.idp.test"
+	publisherID  = "spiffe://idp.test/gateway-control/publisher"
+	configFile   = "config.yaml"
+
+	// 假网关把配置文件原样当成它的 /config_dump，所以这里的"配置"直接写成 dump 的样子。
+	one          = `{"config":{"terminationMaxDeadline":"45s"},"routes":["one"]}`
+	two          = `{"config":{"terminationMaxDeadline":"45s"},"routes":["one","two"]}`
+	unloadable   = `{"config":{"terminationMaxDeadline":"45s"},"routes":["one",{"notAFieldOfARoute":true}]}`
+	needsRestart = `{"config":{"terminationMaxDeadline":"90s"},"routes":["one","two"]}`
+	// 离线加载得了、池里的网关加载不了的：比如引用了一个只有离线加载那边才有的文件。
+	onlyOffline = `{"config":{"terminationMaxDeadline":"45s"},"routes":["one","needs-a-file-the-pool-lacks"]}`
+	// 池里的网关读到它之后，回读口再也不回答。
+	silences = `{"config":{"terminationMaxDeadline":"45s"},"routes":["one","silences-the-read-back"]}`
+
+	loadError = "routes[1]: unknown field `notAFieldOfARoute` at line 1 column 70"
+)
+
+// fakeGateway 是一个假的网关回读口。每次被问到，它先把 file() 指着的文件"重载"一遍；
+// 加载不了的文件它报告加载失败，继续跑之前的那一份。
+type fakeGateway struct {
+	mu       sync.Mutex
+	file     func() string // 空串表示这个网关没有在跑
+	refuses  []string      // 内容里有这些词的文件，这个网关加载不了
+	fragile  bool          // 读到 silences 那样的文件之后，回读口再也不回答
+	running  string
+	failure  string
+	silenced bool
+	peers    map[string]bool
+}
+
+func (g *fakeGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.peers[workloadtls.PeerIdentity(r.TLS)] = true
+	path := g.file()
+	if path == "" {
+		http.Error(w, "not running", http.StatusServiceUnavailable)
+		return
+	}
+	if content, err := os.ReadFile(path); err == nil {
+		g.load(string(content))
+	}
+	if g.silenced {
+		http.Error(w, "broken", http.StatusInternalServerError)
+		return
+	}
+	switch r.URL.Path {
+	case "/config_dump":
+		_, _ = io.WriteString(w, g.running)
+	case "/api/runtime":
+		reload := map[string]any{"synchronized": g.failure == "", "lastError": nil}
+		if g.failure != "" {
+			reload["lastError"] = g.failure
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"build":        map[string]any{"version": "1.7.0", "gitRevision": "26f5aebe99a36a037fe54f8080a608aca5547e15"},
+			"ui":           map[string]any{"gatewayMode": "standalone", "configStoreMode": "readOnly"},
+			"configReload": reload,
+		})
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (g *fakeGateway) load(content string) {
+	if g.fragile && strings.Contains(content, "silences-the-read-back") {
+		g.silenced = true
+	}
+	for _, word := range g.refuses {
+		if strings.Contains(content, word) {
+			g.failure = loadError
+			return
+		}
+	}
+	g.running, g.failure = content, ""
+}
+
+func (g *fakeGateway) sawOnly(identity string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.peers) == 1 && g.peers[identity]
+}
+
+// fakeDocker 扮演 docker 命令行：记下候选配置挂在哪里，网关加载不了的候选配置让"容器"退出。
+type fakeDocker struct {
+	mu        sync.Mutex
+	candidate string
+	commands  []string
+	runErr    error
+}
+
+func (d *fakeDocker) run(_ context.Context, _ []string, argv ...string) (string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.commands = append(d.commands, argv[0])
+	switch argv[0] {
+	case "rm":
+		d.candidate = ""
+	case "run":
+		if d.runErr != nil {
+			return "docker: Error response from daemon: port is already allocated.\n", d.runErr
+		}
+		for i, arg := range argv {
+			if arg == "-v" && strings.HasSuffix(argv[i+1], ":/work/config:ro") {
+				d.candidate = strings.TrimSuffix(argv[i+1], ":/work/config:ro")
+			}
+		}
+	case "inspect":
+		content, _ := os.ReadFile(filepath.Join(d.candidate, configFile))
+		if strings.Contains(string(content), "notAFieldOfARoute") {
+			return "false 1\n", nil
+		}
+		return "true 0\n", nil
+	case "logs":
+		return "info starting\nError: " + loadError + "\n", nil
+	}
+	return "", nil
+}
+
+func (d *fakeDocker) file() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.candidate == "" {
+		return ""
+	}
+	return filepath.Join(d.candidate, configFile)
+}
+
+func (d *fakeDocker) last() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.commands) == 0 {
+		return ""
+	}
+	return d.commands[len(d.commands)-1]
+}
+
+type harness struct {
+	t         *testing.T
+	ca        *tlstest.CA
+	publisher tlstest.Leaf
+	poolDir   string
+	workDir   string
+	tlsDir    string
+	snapshots string
+	pool      *fakeGateway
+	scratch   *fakeGateway
+	docker    *fakeDocker
+	poolAddr  string
+	stageAddr string
+	timeout   string
+}
+
+// serve 起一个要客户端证书的回读口，返回它的地址。
+func serve(t *testing.T, ca *tlstest.CA, name string, gateway *fakeGateway) string {
+	t.Helper()
+	leaf := ca.Issue("readback-"+name, nil, readBackName)
+	config, err := workloadtls.ServerConfig(leaf.CertFile, leaf.KeyFile, ca.File())
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway.peers = map[string]bool{}
+	server := &http.Server{Handler: gateway, TLSConfig: config, ReadTimeout: 5 * time.Second, ErrorLog: log.New(io.Discard, "", 0)}
+	go func() { _ = server.ServeTLS(listener, "", "") }()
+	t.Cleanup(func() { _ = server.Close() })
+	return listener.Addr().String()
+}
+
+// newHarness 布置一个池：配置目录里放着 one，池里的假网关在跑它。
+func newHarness(t *testing.T) *harness {
+	t.Helper()
+	ca := tlstest.NewCA(t, "workload CA")
+	h := &harness{
+		t: t, ca: ca, publisher: ca.Issue("publisher", []string{publisherID}),
+		poolDir: t.TempDir(), workDir: t.TempDir(), tlsDir: t.TempDir(), snapshots: t.TempDir(),
+		docker: &fakeDocker{}, timeout: "3s",
+	}
+	h.place(one)
+	h.pool = &fakeGateway{
+		file:    func() string { return filepath.Join(h.poolDir, configFile) },
+		refuses: []string{"notAFieldOfARoute", "needs-a-file-the-pool-lacks"},
+		fragile: true,
+	}
+	h.scratch = &fakeGateway{file: h.docker.file}
+	h.poolAddr = serve(t, ca, "pool", h.pool)
+	h.stageAddr = serve(t, ca, "scratch", h.scratch)
+	return h
+}
+
+// place 绕过发布器，直接往池的配置目录里放一个文件。
+func (h *harness) place(content string) {
+	h.t.Helper()
+	if err := os.WriteFile(filepath.Join(h.poolDir, configFile), []byte(content), 0o644); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+func (h *harness) inPlace() string {
+	h.t.Helper()
+	content, err := os.ReadFile(filepath.Join(h.poolDir, configFile))
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return string(content)
+}
+
+// leftovers 列出配置目录里除配置文件和锁文件之外的东西，和放候选配置的目录里的东西。
+func (h *harness) leftovers() []string {
+	h.t.Helper()
+	var names []string
+	for _, dir := range []string{h.poolDir, h.workDir} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			h.t.Fatal(err)
+		}
+		for _, entry := range entries {
+			if name := entry.Name(); name != configFile && name != "."+configFile+".lock" {
+				names = append(names, name)
+			}
+		}
+	}
+	return names
+}
+
+func (h *harness) snapshot(content string) string {
+	h.t.Helper()
+	path := filepath.Join(h.snapshots, "snapshot-"+id(content)[:12]+".json")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		h.t.Fatal(err)
+	}
+	return path
+}
+
+func (h *harness) args(snapshot string) []string {
+	return []string{"publish", "--snapshot", snapshot, "--config-dir", h.poolDir, "--image", image,
+		"--read-back", h.poolAddr, "--read-back-name", readBackName,
+		"--tls-cert", h.publisher.CertFile, "--tls-key", h.publisher.KeyFile, "--tls-ca", h.ca.File(),
+		"--staging-publish", h.stageAddr, "--staging-container-port", "8443",
+		"--staging-tls-dir", h.tlsDir, "--staging-work-dir", h.workDir, "--staging-name", "idp-gateway-test-scratch",
+		"--staging-timeout", "10s", "--settle", "20ms", "--timeout", h.timeout}
+}
+
+// replaced 把 args 里某个参数的值换掉。
+func replaced(args []string, flag, value string) []string {
+	changed := append([]string(nil), args...)
+	for i := range changed {
+		if changed[i] == flag {
+			changed[i+1] = value
+		}
+	}
+	return changed
+}
+
+type result struct {
+	code   int
+	stdout string
+	stderr string
+	report outcome
+}
+
+func (h *harness) run(args []string) result {
+	h.t.Helper()
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	r := result{code: run(ctx, args, &stdout, &stderr, h.docker.run)}
+	r.stdout, r.stderr = stdout.String(), stderr.String()
+	if r.stdout != "" {
+		if err := json.Unmarshal(stdout.Bytes(), &r.report); err != nil {
+			h.t.Fatalf("标准输出不是 JSON：%q", r.stdout)
+		}
+	}
+	return r
+}
+
+func (h *harness) publish(content string) result {
+	h.t.Helper()
+	return h.run(h.args(h.snapshot(content)))
+}
+
+func id(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
+}
+
+func TestPublishesASnapshotAndReportsIt(t *testing.T) {
+	h := newHarness(t)
+
+	r := h.publish(two)
+	if r.code != exitActive || r.stderr != "" {
+		t.Fatalf("退出码 %d，标准错误 %q，标准输出 %s", r.code, r.stderr, r.stdout)
+	}
+	if h.inPlace() != two || len(h.leftovers()) != 0 {
+		t.Fatalf("配置目录里是 %q，另外留下了 %v", h.inPlace(), h.leftovers())
+	}
+	got := r.report
+	if got.Outcome != "ACTIVE" || got.Reason != "" || !got.Replaced || got.Snapshot != id(two) || got.Previous != id(one) {
+		t.Fatalf("%+v", got)
+	}
+	if got.Observed == nil || got.ExpectedDigest == "" || got.Observed.Digest != got.ExpectedDigest || !got.Observed.Synchronized ||
+		got.Observed.StorageMode != "readOnly" || got.Observed.Version != "1.7.0" || len(got.Restart) != 0 {
+		t.Fatalf("%+v / %+v", got, got.Observed)
+	}
+	// 输出里的名字是给别的程序读的，不随 Go 里的名字变。
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(r.stdout), &raw); err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	for key := range raw {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if want := []string{"expected_digest", "observed", "outcome", "previous", "reason", "replaced", "restart", "snapshot"}; !reflect.DeepEqual(keys, want) {
+		t.Fatalf("输出的键是 %v", keys)
+	}
+	if restart, ok := raw["restart"].([]any); !ok || len(restart) != 0 {
+		t.Fatalf("restart 应该是空数组，得到 %v", raw["restart"])
+	}
+	// 两个回读口见到的都只有发布器的证书；离线加载用的容器最后被删了。
+	if !h.pool.sawOnly(publisherID) || !h.scratch.sawOnly(publisherID) || h.docker.last() != "rm" {
+		t.Fatalf("池见到 %v，临时网关见到 %v，最后一条 docker 命令是 %q", h.pool.peers, h.scratch.peers, h.docker.last())
+	}
+
+	// 再发布一次同一份：已经在生效，不再写。
+	before, err := os.Stat(filepath.Join(h.poolDir, configFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	again := h.publish(two)
+	after, err := os.Stat(filepath.Join(h.poolDir, configFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.code != exitActive || again.report.Outcome != "ACTIVE" || again.report.Replaced || again.report.Previous != id(two) || !os.SameFile(before, after) {
+		t.Fatalf("退出码 %d，%+v", again.code, again.report)
+	}
+}
+
+func TestWhatIsNotPublishedLeavesThePoolAlone(t *testing.T) {
+	h := newHarness(t)
+
+	refused := h.publish(unloadable)
+	if refused.code != exitNotPublished || refused.report.Outcome != "REFUSED" || refused.report.Reason != loadError ||
+		refused.report.Replaced || refused.report.Observed != nil || refused.report.ExpectedDigest != "" {
+		t.Fatalf("加载不了的：退出码 %d，%s%s", refused.code, refused.stdout, refused.stderr)
+	}
+	if !strings.Contains(refused.stdout, `"observed": null`) {
+		t.Fatalf("没有读过池时 observed 应该是 null：%s", refused.stdout)
+	}
+
+	// 带环境变量的：不用起容器就拒绝。
+	commands := len(h.docker.commands)
+	environment := h.publish(`{"config":{"terminationMaxDeadline":"45s"},"routes":["one","tenant-$HOSTNAME"]}`)
+	if environment.code != exitNotPublished || environment.report.Outcome != "REFUSED" || !strings.Contains(environment.report.Reason, "($HOSTNAME)") ||
+		environment.report.Replaced || len(h.docker.commands) != commands {
+		t.Fatalf("带环境变量的：退出码 %d，%s%s", environment.code, environment.stdout, environment.stderr)
+	}
+
+	restart := h.publish(needsRestart)
+	if restart.code != exitNotPublished || restart.report.Outcome != "RESTART_REQUIRED" || restart.report.Replaced ||
+		!reflect.DeepEqual(restart.report.Restart, []string{"terminationMaxDeadline"}) || restart.report.Observed == nil {
+		t.Fatalf("要重启的：退出码 %d，%s%s", restart.code, restart.stdout, restart.stderr)
+	}
+	if h.inPlace() != one || len(h.leftovers()) != 0 {
+		t.Fatalf("配置目录里是 %q，另外留下了 %v", h.inPlace(), h.leftovers())
+	}
+
+	// 有人绕过发布器，往目录里放了一个网关加载不了的文件：池不在已知的状态，先不动它。
+	h.place(unloadable)
+	unclean := h.publish(two)
+	if unclean.code != exitNotPublished || unclean.report.Outcome != "POOL_NOT_READY" || unclean.report.Replaced ||
+		!strings.Contains(unclean.report.Reason, loadError) || unclean.report.Observed == nil || unclean.report.Observed.Synchronized {
+		t.Fatalf("池不干净：退出码 %d，%s%s", unclean.code, unclean.stdout, unclean.stderr)
+	}
+	if h.inPlace() != unloadable || len(h.leftovers()) != 0 {
+		t.Fatalf("配置目录里是 %q，另外留下了 %v", h.inPlace(), h.leftovers())
+	}
+}
+
+func TestASnapshotThatDoesNotTakeEffectIsTakenBack(t *testing.T) {
+	h := newHarness(t)
+
+	restored := h.publish(onlyOffline)
+	got := restored.report
+	if restored.code != exitRestored || got.Outcome != "RESTORED" || !got.Replaced || !strings.Contains(got.Reason, loadError) ||
+		got.Snapshot != id(onlyOffline) || got.Previous != id(one) {
+		t.Fatalf("退出码 %d，%s%s", restored.code, restored.stdout, restored.stderr)
+	}
+	// 上一份回到了目录里，网关报告它在跑的是上一份，上一次加载是成功的。
+	if h.inPlace() != one || len(h.leftovers()) != 0 {
+		t.Fatalf("配置目录里是 %q，另外留下了 %v", h.inPlace(), h.leftovers())
+	}
+	if got.Observed == nil || !got.Observed.Synchronized || got.Observed.Digest == got.ExpectedDigest || got.Observed.Digest == "" {
+		t.Fatalf("%+v", got.Observed)
+	}
+	// 之后照常能发布。
+	if next := h.publish(two); next.code != exitActive || h.inPlace() != two {
+		t.Fatalf("之后的发布：退出码 %d，%s%s", next.code, next.stdout, next.stderr)
+	}
+
+	// 换上去之后回读口再也不回答：上一份放回去了，但确认不了。
+	h.timeout = "300ms"
+	unknown := h.publish(silences)
+	if unknown.code != exitUnknown || unknown.report.Outcome != "UNKNOWN" || !unknown.report.Replaced ||
+		!strings.Contains(unknown.report.Reason, "put back but not confirmed") {
+		t.Fatalf("退出码 %d，%s%s", unknown.code, unknown.stdout, unknown.stderr)
+	}
+	if h.inPlace() != two || len(h.leftovers()) != 0 {
+		t.Fatalf("配置目录里是 %q，另外留下了 %v", h.inPlace(), h.leftovers())
+	}
+}
+
+func TestTheScratchGatewayCanHaveItsOwnCertificates(t *testing.T) {
+	h := newHarness(t)
+	// 离线加载那边用另一套 CA、另一个名字、另一张发布器证书。
+	const stagingName, stagingID = "readback.staging.idp.test", "spiffe://idp.test/gateway-control/staging"
+	other := tlstest.NewCA(t, "staging CA")
+	leaf := other.Issue("staging-readback", nil, stagingName)
+	config, err := workloadtls.ServerConfig(leaf.CertFile, leaf.KeyFile, other.File())
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scratch := &fakeGateway{file: h.docker.file, peers: map[string]bool{}}
+	server := &http.Server{Handler: scratch, TLSConfig: config, ReadTimeout: 5 * time.Second, ErrorLog: log.New(io.Discard, "", 0)}
+	go func() { _ = server.ServeTLS(listener, "", "") }()
+	t.Cleanup(func() { _ = server.Close() })
+	client := other.Issue("staging-publisher", []string{stagingID})
+
+	args := append(replaced(h.args(h.snapshot(two)), "--staging-publish", listener.Addr().String()),
+		"--staging-read-back-name", stagingName,
+		"--staging-tls-cert", client.CertFile, "--staging-tls-key", client.KeyFile, "--staging-tls-ca", other.File())
+	r := h.run(args)
+	if r.code != exitActive || r.report.Outcome != "ACTIVE" || h.inPlace() != two {
+		t.Fatalf("退出码 %d，%s%s", r.code, r.stdout, r.stderr)
+	}
+	if !scratch.sawOnly(stagingID) || !h.pool.sawOnly(publisherID) || len(h.scratch.peers) != 0 {
+		t.Fatalf("临时网关见到 %v，池见到 %v", scratch.peers, h.pool.peers)
+	}
+
+	// 只换了地址、没换证书时，池的那一套在这个临时网关上通不过：没有发布。
+	mismatched := h.run(replaced(replaced(h.args(h.snapshot(one)), "--staging-publish", listener.Addr().String()), "--staging-timeout", "300ms"))
+	if mismatched.code != exitError || mismatched.stdout != "" || !strings.Contains(mismatched.stderr, "did not answer on its read-back listener within 300ms") || h.inPlace() != two {
+		t.Fatalf("退出码 %d，%s%s", mismatched.code, mismatched.stdout, mismatched.stderr)
+	}
+}
+
+func TestFailsBeforeTouchingThePool(t *testing.T) {
+	h := newHarness(t)
+	good := h.args(h.snapshot(two))
+	empty := filepath.Join(h.snapshots, "empty.json")
+	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 一个没有人在听的回环地址。
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nobody := listener.Addr().String()
+	_ = listener.Close()
+
+	cases := []struct {
+		name string
+		args []string
+		says string
+	}{
+		{"快照文件不存在", replaced(good, "--snapshot", filepath.Join(h.snapshots, "missing.json")), "missing.json"},
+		{"快照文件是空的", replaced(good, "--snapshot", empty), "empty.json"},
+		{"配置目录不存在", replaced(good, "--config-dir", filepath.Join(h.poolDir, "missing")), "directory:"},
+		{"镜像按标签引用", replaced(good, "--image", "cr.agentgateway.dev/agentgateway:v1.7.0"), "not referenced by digest"},
+		{"临时网关的回读口映射到所有网卡", replaced(good, "--staging-publish", "0.0.0.0:27618"), "loopback"},
+		{"放候选配置的目录是相对路径", replaced(good, "--staging-work-dir", "work"), "absolute path"},
+		{"发布器的证书不存在", replaced(good, "--tls-cert", filepath.Join(h.snapshots, "missing.crt")), "read-back of the pool"},
+		{"证书与私钥不配对", replaced(good, "--tls-key", h.ca.Issue("someone-else", nil).KeyFile), "read-back of the pool"},
+		{"回读口的地址没有端口", replaced(good, "--read-back", "127.0.0.1"), "read-back of the pool"},
+		{"等的时限比沉淀期短", replaced(good, "--timeout", "10ms"), "unusable timing"},
+		{"池的回读口没有人在听", replaced(good, "--read-back", nobody), "read-back before publishing"},
+		{"池的回读口不是这个名字", append(replaced(good, "--read-back-name", "other.idp.test"), "--staging-read-back-name", readBackName), "read-back before publishing"},
+		{"临时网关的回读口不是这个名字", append(replaced(good, "--staging-timeout", "300ms"), "--staging-read-back-name", "other.idp.test"), "did not answer on its read-back listener within 300ms"},
+	}
+	for _, c := range cases {
+		r := h.run(c.args)
+		if r.code != exitError || r.stdout != "" || !strings.Contains(r.stderr, c.says) || !strings.HasPrefix(r.stderr, "gateway-control: ") {
+			t.Errorf("%s：退出码 %d，标准输出 %q，标准错误 %q", c.name, r.code, r.stdout, r.stderr)
+		}
+		if h.inPlace() != one || len(h.leftovers()) != 0 {
+			t.Fatalf("%s：配置目录里是 %q，另外留下了 %v", c.name, h.inPlace(), h.leftovers())
+		}
+	}
+
+	// 起不了离线加载用的容器。
+	h.docker.runErr = errors.New("exit status 125")
+	if r := h.run(good); r.code != exitError || r.stdout != "" || !strings.Contains(r.stderr, "port is already allocated") || h.inPlace() != one {
+		t.Errorf("容器起不来：退出码 %d，%q %q", r.code, r.stdout, r.stderr)
+	}
+	h.docker.runErr = nil
+
+	// 另一次发布正拿着这个池。
+	delivery, err := directory.New(h.poolDir, configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := delivery.Hold(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	busy := h.run(good)
+	release()
+	if busy.code != exitError || busy.stdout != "" || !strings.Contains(busy.stderr, "another publication") || h.inPlace() != one {
+		t.Errorf("池被占着：退出码 %d，%q %q", busy.code, busy.stdout, busy.stderr)
+	}
+	// 放开之后同一条命令成功：上面各条挡下它的不是别的原因。
+	if r := h.run(good); r.code != exitActive || h.inPlace() != two {
+		t.Fatalf("对照：退出码 %d，%s%s", r.code, r.stdout, r.stderr)
+	}
+}
+
+func TestUsage(t *testing.T) {
+	h := newHarness(t)
+	good := h.args(h.snapshot(two))
+	without := func(flag string) []string {
+		var args []string
+		for i := 1; i < len(good); i += 2 {
+			if good[i] != flag {
+				args = append(args, good[i], good[i+1])
+			}
+		}
+		return append([]string{"publish"}, args...)
+	}
+	cases := []struct {
+		name string
+		args []string
+		says string
+	}{
+		{"没有参数", nil, "usage: gateway-control publish"},
+		{"不认识的子命令", []string{"apply"}, "usage: gateway-control publish"},
+		{"子命令之前有参数", append([]string{"--snapshot"}, good...), "usage: gateway-control publish"},
+		{"只有子命令", []string{"publish"}, "missing required flags: --config-dir, --image, --read-back, --read-back-name, --snapshot, " +
+			"--staging-name, --staging-publish, --staging-tls-dir, --staging-work-dir, --tls-ca, --tls-cert, --tls-key, --staging-container-port"},
+		{"没有快照", without("--snapshot"), "missing required flags: --snapshot\n"},
+		{"没有镜像", without("--image"), "missing required flags: --image\n"},
+		{"没有容器里的端口", without("--staging-container-port"), "missing required flags: --staging-container-port\n"},
+		{"多余的参数", append(append([]string(nil), good...), "now"), `unexpected argument "now"`},
+		{"不认识的参数", append(append([]string(nil), good...), "--force"), "flag provided but not defined: -force"},
+		{"时限不是时长", replaced(good, "--timeout", "soon"), "invalid value"},
+		{"等临时网关的时限为零", replaced(good, "--staging-timeout", "0s"), "--staging-timeout must be positive"},
+		{"临时网关的证书只给了一半", append(append([]string(nil), good...), "--staging-tls-cert", h.publisher.CertFile), "go together"},
+		{"要帮助", []string{"publish", "--help"}, "-staging-container-port"},
+	}
+	for _, c := range cases {
+		r := h.run(c.args)
+		if r.code != exitUsage || r.stdout != "" || !strings.Contains(r.stderr, c.says) {
+			t.Errorf("%s：退出码 %d，标准输出 %q，标准错误 %q", c.name, r.code, r.stdout, r.stderr)
+		}
+	}
+	if h.inPlace() != one || len(h.docker.commands) != 0 || len(h.pool.peers) != 0 {
+		t.Fatalf("用法不对时不该做任何事：目录里是 %q，docker 命令 %v，池见到 %v", h.inPlace(), h.docker.commands, h.pool.peers)
+	}
+}
+
+func TestExitCodesSayWhatStateThePoolIsIn(t *testing.T) {
+	want := map[application.Outcome]int{
+		application.OutcomeActive:          0,
+		application.OutcomeRefused:         3,
+		application.OutcomeRestartRequired: 3,
+		application.OutcomePoolNotReady:    3,
+		application.OutcomeRestored:        4,
+		application.OutcomeUnknown:         5,
+		// 这里不认识的结局不当成成功，也不当成"池没有被碰过"。
+		"SOMETHING_NEW": 5,
+		"":              5,
+	}
+	for outcome, code := range want {
+		if got := exitCode(outcome); got != code {
+			t.Errorf("%q 的退出码是 %d，应该是 %d", outcome, got, code)
+		}
+	}
+}

@@ -2,11 +2,12 @@
 """在本机用 docker compose 验证单机上的发布方式：网关跑在容器里，配置目录挂载进去；发布就是把目录里的
 配置文件整份换掉（写临时文件，再改名盖上去），网关不重启；之后经回读口确认它在跑的是哪一份。
 
-    .venv/bin/python tests/integration/compose/run.py        # 一分半钟左右；自己起，跑完自己拆
+    .venv/bin/python tests/integration/compose/run.py        # 两分钟左右；自己起，跑完自己拆（需要 docker 和 go）
 
 真的部分：docker compose、锁定的上游 agentgateway 镜像（按摘要引用）、网关前面的那层 nginx（与黑盒套件
-同一个镜像、同一份配置，只换了端口）、网关自己的回读口（双向 TLS）。配置是一份只有几条路由的小文件，
-路由的后端是同一个 compose 网络里一个会回话的小服务；没有 JWT、ExtAuthZ 和凭证，那些由黑盒套件覆盖。
+同一个镜像、同一份配置，只换了端口）、网关自己的回读口（双向 TLS），以及最后一条用例里的发布器
+（cmd/gateway-control，现场用 Go 构建）。配置是一份只有几条路由的小文件，路由的后端是同一个 compose
+网络里一个会回话的小服务；没有 JWT、ExtAuthZ 和凭证，那些由黑盒套件覆盖。
 
 一个池在单机上是什么（compose.yml）：
     front         nginx。对外收业务请求的只有它（本机回环 27620）。
@@ -14,12 +15,13 @@
                   管理和指标端口只绑回环；另开一个回读口（本机回环 27619），要发布器的客户端证书，
                   只转发 /config_dump 和 /api/runtime 两个 GET。配置目录以只读方式挂进容器。
     echo          路由的后端。
-本脚本扮演发布器：往挂载的目录里写文件，从本机经回读口读网关在跑什么。
+SH-01 到 SH-08 由本脚本扮演发布器：往挂载的目录里写文件，从本机经回读口读网关在跑什么。这几条看的是
+网关和这种发布方式本身。SH-09 换成真的发布器，本脚本只在旁边看。
 
 占用本机回环上的 27618 到 27620，与黑盒套件、Gatekeeper 联调和 Kubernetes 套件的端口重叠，不能同时跑。
 """
 from __future__ import annotations
-import collections, hashlib, http.client, json, os, secrets, shutil, socket, subprocess, sys, threading, time
+import collections, hashlib, http.client, json, os, secrets, shutil, signal, socket, subprocess, sys, threading, time
 from pathlib import Path
 
 import yaml
@@ -36,6 +38,12 @@ import probe  # noqa: E402  Kubernetes 套件的那个：这里用它发"两个 
 RUN = HERE / '.run'
 POOL = RUN / 'pool'   # 挂进网关容器的两个目录：config 由发布器写，tls 是网关自己的证书
 PKI = RUN / 'pki'     # 本次运行的全套证书。发布器的证书只在这里，不进网关容器
+# 真的发布器（SH-09）用的东西：现场构建的二进制；它做离线加载用的另一套证书（另一个 CA）、挂进临时容器的
+# 证书目录、放候选配置的目录；要发布的快照文件。
+CONTROL = RUN / 'control'
+CONTROL_BINARY = CONTROL / 'bin' / 'gateway-control'
+ONLY_IN_STAGING = 'only-in-staging.crt'   # 只有离线加载那边才有的一个文件
+STALE = (POOL, PKI, CONTROL, RUN / 'front', RUN / 'staging', RUN / 'single', RUN / 'expansion')   # 每次运行前后都清掉
 LOCK = pin.lock()
 GATEWAY_IMAGE = pin.image_reference(LOCK)   # 上游镜像，按多平台索引的摘要引用
 # 与黑盒套件同一个前置 nginx（tests/contracts 里有一条测试检查几套用例一致）。
@@ -77,11 +85,13 @@ def compose(*argv: str, timeout: float = 300) -> subprocess.CompletedProcess:
 
 
 # ---- 一份快照：发布器要下发的那个文件 ---------------------------------------------------------------
-def gateway_config(routes: list[str], unloadable: str | None = None, deadline: int = 45) -> str:
+def gateway_config(routes: list[str], unloadable: str | None = None, deadline: int = 45,
+                   root: str = 'tls/ca.crt', names: dict | None = None) -> str:
     """网关的配置文件。unloadable 指的那条路由带一个不存在的字段：整份文件网关加载不了。
-    deadline 是 config 段里的一项设置（收到终止信号后，在途的请求最多再做多少秒）。"""
+    deadline 是 config 段里的一项设置（收到终止信号后，在途的请求最多再做多少秒）。
+    root 是那条形状与真实的池相同的路由验证 PDP 用的 CA 文件；names 给个别路由另起名字（默认是 route-<路由>）。"""
     def route(name: str) -> dict:
-        r = {'name': f'route-{name}', 'gateways': ['callers'], 'hostnames': [f'{name}.test'],
+        r = {'name': (names or {}).get(name, f'route-{name}'), 'gateways': ['callers'], 'hostnames': [f'{name}.test'],
              'policies': {'timeout': {'requestTimeout': '30s'}},
              'backends': [{'host': f'echo:{ECHO_PORT}'}]}
         if name == unloadable:
@@ -93,7 +103,7 @@ def gateway_config(routes: list[str], unloadable: str | None = None, deadline: i
     pdp_shaped = {'name': 'route-pdp-shaped', 'gateways': ['callers'], 'hostnames': ['pdp-shaped.test'],
                   'policies': {'extAuthz': {
                       'host': f'echo:{ECHO_PORT}', 'failureMode': 'deny',
-                      'policies': {'backendTLS': {'cert': 'tls/gateway.crt', 'key': 'tls/gateway.key', 'root': 'tls/ca.crt',
+                      'policies': {'backendTLS': {'cert': 'tls/gateway.crt', 'key': 'tls/gateway.key', 'root': root,
                                                   'hostname': pki.GATEKEEPER_NAME}},
                       'protocol': {'http': {'path': '"/v1/extauthz/check"'}}}},
                   'backends': [{'host': f'echo:{ECHO_PORT}'}]}
@@ -125,9 +135,10 @@ def gateway_config(routes: list[str], unloadable: str | None = None, deadline: i
 class Snapshot:
     """一份配置文件，连同它的名字。名字带内容的摘要：内容不同，名字就不同。"""
 
-    def __init__(self, routes: list[str], unloadable: str | None = None, deadline: int = 45):
-        self.routes, self.text = routes, gateway_config(routes, unloadable, deadline)
-        self.id = hashlib.sha256(self.text.encode()).hexdigest()[:12]
+    def __init__(self, routes: list[str], unloadable: str | None = None, deadline: int = 45, **other):
+        self.routes, self.text = routes, gateway_config(routes, unloadable, deadline, **other)
+        self.sha256 = hashlib.sha256(self.text.encode()).hexdigest()
+        self.id = self.sha256[:12]
         self.expected = None   # 离线加载之后才有：期望的运行配置摘要
 
 
@@ -199,13 +210,13 @@ def observe(port: int = HOST['readback'], tls: Path = PKI) -> dict:
 
 
 # ---- 另起一个网关容器 -------------------------------------------------------------------------------
-def scratch_gateway(config_mount: str, tls: Path) -> subprocess.CompletedProcess:
+def scratch_gateway(config_mount: str, tls: Path, session_key: str | None = None) -> subprocess.CompletedProcess:
     """用锁定的镜像另起一个网关容器，回读口映射到本机回环的 27618。config_mount 是配置怎么挂进去。"""
     docker('rm', '-f', SCRATCH)
     return docker('run', '-d', '--name', SCRATCH, '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
                   '--user', RUN_AS, '-p', f"127.0.0.1:{HOST['scratch']}:{PORT['readback']}",
                   '-v', config_mount, '-v', f'{tls}:/work/tls:ro', '-w', '/work',
-                  '-e', f'SESSION_KEY={secrets.token_hex(32)}', GATEWAY_IMAGE, '-f', 'config/config.yaml')
+                  '-e', f'SESSION_KEY={session_key or secrets.token_hex(32)}', GATEWAY_IMAGE, '-f', 'config/config.yaml')
 
 
 def stage(snapshot: Snapshot) -> dict:
@@ -234,6 +245,105 @@ def stage(snapshot: Snapshot) -> dict:
     finally:
         docker('rm', '-f', SCRATCH)
         shutil.rmtree(work, ignore_errors=True)
+
+
+# ---- 真的发布器 -------------------------------------------------------------------------------------
+def build_control():
+    """现场构建 cmd/gateway-control，并布置它做离线加载用的东西：另一套证书（另一个 CA）；挂进临时容器的
+    证书目录，里面比池的那个多一个文件。"""
+    go = shutil.which('go') or '/usr/local/go/bin/go'
+    CONTROL_BINARY.parent.mkdir(parents=True)
+    try:
+        built = subprocess.run([go, 'build', '-o', str(CONTROL_BINARY), './cmd/gateway-control'],
+                               cwd=ROOT, capture_output=True, text=True, timeout=600)
+    except OSError as e:
+        die(f'构建 gateway-control 需要 Go：{e}')
+    if built.returncode != 0:
+        die(f'gateway-control 构建不出来：{built.stderr.strip()[-600:]}')
+    pki.issue(CONTROL / 'pki')
+    (CONTROL / 'tls').mkdir()
+    for name in GATEWAY_FILES:
+        shutil.copy2(CONTROL / 'pki' / name, CONTROL / 'tls' / name)
+    shutil.copy2(CONTROL / 'pki' / 'ca.crt', CONTROL / 'tls' / ONLY_IN_STAGING)
+    (CONTROL / 'work').mkdir()
+    (CONTROL / 'snapshots').mkdir()
+
+
+def control_command(snapshot: Snapshot) -> list[str]:
+    path = CONTROL / 'snapshots' / f'{snapshot.id}.yaml'
+    path.write_text(snapshot.text, encoding='utf-8')
+    return [str(CONTROL_BINARY), 'publish', '--snapshot', str(path), '--config-dir', str(POOL / 'config'), '--image', GATEWAY_IMAGE,
+            '--read-back', f"127.0.0.1:{HOST['readback']}", '--read-back-name', pki.READBACK_NAME,
+            '--tls-cert', str(PKI / 'publisher.crt'), '--tls-key', str(PKI / 'publisher.key'), '--tls-ca', str(PKI / 'ca.crt'),
+            '--staging-name', SCRATCH, '--staging-publish', f"127.0.0.1:{HOST['scratch']}",
+            '--staging-container-port', str(PORT['readback']),
+            '--staging-tls-dir', str(CONTROL / 'tls'), '--staging-work-dir', str(CONTROL / 'work'),
+            '--staging-tls-cert', str(CONTROL / 'pki' / 'publisher.crt'), '--staging-tls-key', str(CONTROL / 'pki' / 'publisher.key'),
+            '--staging-tls-ca', str(CONTROL / 'pki' / 'ca.crt')]
+
+
+def control_result(code: int, stdout: str, stderr: str, started: float) -> dict:
+    try:
+        report = json.loads(stdout) if stdout.strip() else {}
+    except ValueError:
+        report = {'unparsed': stdout[:300]}
+    return {'exit': code, 'report': report, 'stderr': stderr.strip()[-300:], 'seconds': round(time.monotonic() - started, 2)}
+
+
+def control(snapshot: Snapshot) -> dict:
+    """让真的发布器发布这份快照。-> 它的退出码、写到标准输出的那份 JSON、标准错误的末尾、用了多少秒。"""
+    started = time.monotonic()
+    done = subprocess.run(control_command(snapshot), capture_output=True, text=True, timeout=180)
+    return control_result(done.returncode, done.stdout, done.stderr, started)
+
+
+def control_together(first: Snapshot, second: Snapshot) -> tuple[dict, dict]:
+    """两次发布几乎同时开始：second 比 first 晚半秒。"""
+    started = time.monotonic()
+    running = subprocess.Popen(control_command(first), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    time.sleep(0.5)
+    late = control(second)
+    stdout, stderr = running.communicate(timeout=180)
+    return control_result(running.returncode, stdout, stderr, started), late
+
+
+def control_interrupted(snapshot: Snapshot) -> dict:
+    """让真的发布器发布这份快照；它刚把文件换上去，就给它发 SIGTERM。signalled 为假表示没等到它换文件。"""
+    started = time.monotonic()
+    running = subprocess.Popen(control_command(snapshot), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    replaced = wait_for(lambda: on_disk() == snapshot.text or running.poll() is not None, 60, every=0.01)
+    signalled = replaced is not None and running.poll() is None
+    if signalled:
+        running.send_signal(signal.SIGTERM)
+    else:
+        running.kill()
+    stdout, stderr = running.communicate(timeout=180)
+    return {**control_result(running.returncode, stdout, stderr, started), 'signalled': signalled}
+
+
+def outcome(done: dict) -> tuple:
+    """发布器一次运行的退出码和结局。"""
+    return done['exit'], done['report'].get('outcome')
+
+
+def on_disk() -> str:
+    """池的配置目录里现在放着的配置文件。"""
+    return (POOL / 'config' / 'config.yaml').read_text(encoding='utf-8')
+
+
+def strings_in(node, found: set | None = None) -> set:
+    """一份 JSON 文档里所有的字符串值和键。"""
+    found = set() if found is None else found
+    if isinstance(node, dict):
+        for key, value in node.items():
+            found.add(key)
+            strings_in(value, found)
+    elif isinstance(node, list):
+        for value in node:
+            strings_in(value, found)
+    elif isinstance(node, str):
+        found.add(node)
+    return found
 
 
 # ---- 观察 -------------------------------------------------------------------------------------------
@@ -436,7 +546,7 @@ def prepare():
     """本次运行的目录：证书现做；网关容器只拿到它自己的那几个文件。"""
     RUN.mkdir(exist_ok=True)
     os.chmod(RUN, 0o700)
-    for stale in (POOL, PKI, RUN / 'front', RUN / 'staging', RUN / 'single'):
+    for stale in STALE:
         shutil.rmtree(stale, ignore_errors=True)
     pki.issue(PKI)
     (POOL / 'config').mkdir(parents=True)
@@ -451,7 +561,7 @@ def teardown():
     """容器、网络和本次运行的证书都不留；留下的只有 .run/result.json。"""
     compose('down', '--volumes', '--remove-orphans', '--timeout', '5')
     docker('rm', '-f', SCRATCH)
-    for stale in (POOL, PKI, RUN / 'front', RUN / 'staging', RUN / 'single'):
+    for stale in STALE:
         shutil.rmtree(stale, ignore_errors=True)
 
 
@@ -474,6 +584,7 @@ def run() -> int:
         die('需要 docker 和 docker compose')
     teardown()   # 上一次没跑完留下的
     prepare()
+    build_control()
     one, two, bad = Snapshot(['a']), Snapshot(['a', 'b']), Snapshot(['a', 'b', 'c'], unloadable='c')
     tuned = Snapshot(['a', 'b'], deadline=46)   # 与 two 只差 config 段里的一项
     r = Results()
@@ -645,6 +756,131 @@ def run() -> int:
     r.check('被拒绝的时间比没有在途请求的那次长 2 秒以上',
             len(busy['refused']) - len(idle['refused']) >= 40)   # 每秒 20 个
     note_restart(r, '在途的请求各还剩 3 秒左右', busy)
+
+    r.case('SH-08', '网关解析配置文件之前，先拿环境变量替换正文里的 $名字')
+    session_key = secrets.token_hex(32)
+    written = 'x-$HOSTNAME-${NO_SUCH_VARIABLE:-fallback}-$$HOSTNAME-\\$HOSTNAME-$'
+    expanding = Snapshot(['a', 'x', 'y'], names={'x': written, 'y': 'y-$SESSION_KEY'})
+    work = RUN / 'expansion'
+    work.mkdir()
+    publish(expanding, work)
+    started = scratch_gateway(f'{work}:/work/config:ro', POOL / 'tls', session_key)
+    up = wait_for(lambda: observe(HOST['scratch'])['digest'] is not None, 20)
+    hostname = docker('inspect', '-f', '{{.Config.Hostname}}', SCRATCH).stdout.strip()
+    loaded, seen = observe(HOST['scratch']), strings_in(read_back(HOST['scratch'], '/config_dump').get('json'))
+    r.check('另起一个网关容器加载一份带 $ 的文件：起来了', started.returncode == 0 and up is not None and len(hostname) >= 8)
+    r.note('配置文件里写的路由名', written)
+    r.note('网关报告的路由名（HOSTNAME 是容器里的一个环境变量，值是容器的主机名）', sorted(s for s in seen if s.startswith('x-')))
+    r.check('$名字 换成了环境变量的值；${名字:-默认值} 在没有这个变量时换成了默认值；$$ 成了一个 $；'
+            '反斜杠不起转义的作用；后面不跟名字的 $ 原样留着',
+            f'x-{hostname}-fallback-$HOSTNAME-\\{hostname}-$' in seen and written not in seen)
+    r.check('$SESSION_KEY 一样被换了：会话密钥进了运行配置，从回读口读得到', f'y-{session_key}' in seen)
+    undefined = Snapshot(['a', 'x'], names={'x': 'x-$NO_SUCH_VARIABLE'})
+    publish(undefined, work)
+    failed = wait_for(lambda: (observe(HOST['scratch'])['reload'] or {}).get('synchronized') is False, 10)
+    now = observe(HOST['scratch'])
+    said = str((now['reload'] or {}).get('lastError'))
+    r.note('引用一个没有的环境变量时，网关给出的原因', said)
+    r.check('引用了一个没有的环境变量：整份文件加载失败，网关继续跑上一份',
+            failed is not None and 'NO_SUCH_VARIABLE' in said and now['digest'] is not None and now['digest'] == loaded['digest'])
+    docker('rm', '-f', SCRATCH)
+    staged = stage(undefined)
+    r.check('离线加载同样拒绝这份文件', staged.get('loaded') is False and staged.get('exit_code') not in (0, None))
+
+    r.case('SH-09', '真的发布器（cmd/gateway-control）：发布，拒绝，没生效就把上一份放回去')
+    config_file = POOL / 'config' / 'config.yaml'
+    three = Snapshot(['a', 'b', 'd'], deadline=46)   # 池里的网关是带着 46 秒那一项重启的（SH-06）
+    before, traffic = container('agentgateway'), Load()
+    done = control(three)
+    time.sleep(3)
+    result, seen, report = traffic.finish(), observe(), done['report']
+    r.note('发布一份新快照：发布器的输出', report)
+    r.note('发布一份新快照：发布器用了多少秒（其中离线加载要另起一个容器）', done['seconds'])
+    r.check('发布一份新快照：退出码 0，结局 ACTIVE', outcome(done) == (0, 'ACTIVE') and report.get('replaced') is True)
+    r.check('目录里的文件就是这份快照；发布器报告的两个名字是这份和上一份文件的 SHA-256',
+            on_disk() == three.text and report.get('snapshot') == three.sha256 and report.get('previous') == tuned.sha256)
+    r.check('网关报告加载成功；本脚本从回读口算出的摘要，等于发布器离线加载得到的期望值，也等于它自己最后读到的',
+            seen['reload'] == LOADED and seen['digest'] is not None
+            and seen['digest'] == report.get('expected_digest') == (report.get('observed') or {}).get('digest'))
+    r.check('新路由 d 生效了；网关没有重启',
+            routes_seen(['a', 'b', 'd']) == {'a': 200, 'b': 200, 'd': 200} and same_process(before, container('agentgateway')))
+    no_failures(r, result, '发布器发布期间')
+    active, inode = seen['digest'], config_file.stat().st_ino
+
+    def untouched() -> bool:
+        """配置文件还是发布器上一次放的那一个（没有被重写过），网关还在跑它。"""
+        now = observe()
+        return config_file.stat().st_ino == inode and on_disk() == three.text and now['digest'] == active and now['reload'] == LOADED
+
+    again = control(three)
+    r.check('再发布同一份：退出码 0，ACTIVE，没有再写文件',
+            outcome(again) == (0, 'ACTIVE') and again['report'].get('replaced') is False and untouched())
+    refused = control(Snapshot(['a', 'b', 'c'], unloadable='c', deadline=46))
+    r.note('网关加载不了的快照：发布器给出的原因', refused['report'].get('reason'))
+    r.check('网关加载不了的快照：退出码 3，结局 REFUSED，原因是网关自己说的；池没有被碰过',
+            outcome(refused) == (3, 'REFUSED') and 'notAFieldOfARoute' in str(refused['report'].get('reason'))
+            and refused['report'].get('replaced') is False and untouched())
+    referring = control(Snapshot(['a', 'b', 'x'], deadline=46, names={'x': 'x-$HOSTNAME'}))
+    r.note('带环境变量的快照：发布器给出的原因', referring['report'].get('reason'))
+    r.check('带环境变量的快照（见 SH-08）：退出码 3，结局 REFUSED；池没有被碰过',
+            outcome(referring) == (3, 'REFUSED') and '$HOSTNAME' in str(referring['report'].get('reason'))
+            and referring['report'].get('replaced') is False and untouched())
+    restart = control(Snapshot(['a', 'b', 'd', 'h'], deadline=45))
+    r.note('要重启才能全部生效的快照：发布器给出的原因', restart['report'].get('reason'))
+    r.check('config 段与网关启动时不同的快照（见 SH-06）：退出码 3，结局 RESTART_REQUIRED，指出了不同的那一项；池没有被碰过',
+            outcome(restart) == (3, 'RESTART_REQUIRED') and restart['report'].get('restart') == ['terminationMaxDeadline']
+            and restart['report'].get('replaced') is False and untouched())
+
+    lacking = Snapshot(['a', 'b', 'd', 'e'], deadline=46, root=f'tls/{ONLY_IN_STAGING}')
+    before, traffic = container('agentgateway'), Load()
+    done = control(lacking)
+    time.sleep(3)
+    result, seen, report = traffic.finish(), observe(), done['report']
+    r.note('离线加载得了、池里加载不了的快照：发布器的输出', report)
+    r.note('离线加载得了、池里加载不了的快照：发布器用了多少秒', done['seconds'])
+    r.check('一份快照引用了只有离线加载那边才有的文件：发布器换上去了，退出码 4，结局 RESTORED',
+            outcome(done) == (4, 'RESTORED') and report.get('replaced') is True and report.get('expected_digest') not in (None, '', active))
+    r.check('它给的原因是池里的网关自己说的：读不到那个文件', ONLY_IN_STAGING in str(report.get('reason')))
+    r.check('上一份回到了目录里；网关报告加载成功，摘要是上一份的；那份快照里的路由 e 没有生效',
+            on_disk() == three.text and seen['reload'] == LOADED and seen['digest'] == active
+            and (report.get('observed') or {}).get('digest') == active
+            and routes_seen(['a', 'b', 'd', 'e']) == {'a': 200, 'b': 200, 'd': 200, 'e': 404})
+    r.check('网关没有重启', same_process(before, container('agentgateway')))
+    no_failures(r, result, '从发布器换上去到它放回去')
+
+    stopped = control_interrupted(Snapshot(['a', 'b', 'd', 'i'], deadline=46))   # 一份没有毛病的快照
+    seen, report = observe(), stopped['report']
+    r.note('刚换上文件就收到 SIGTERM：发布器的退出码、结局和原因', [stopped['exit'], report.get('outcome'), report.get('reason')])
+    r.note('刚换上文件就收到 SIGTERM：发布器从开始到退出用了多少秒', stopped['seconds'])
+    r.check('发布器刚把文件换上去就收到 SIGTERM：它没有立刻退出，先把上一份放回去并得到确认，退出码 4，结局 RESTORED',
+            stopped['signalled'] and outcome(stopped) == (4, 'RESTORED') and 'interrupted' in str(report.get('reason'))
+            and on_disk() == three.text and seen['reload'] == LOADED and seen['digest'] == active
+            and (report.get('observed') or {}).get('digest') == active
+            and routes_seen(['a', 'b', 'd', 'i']) == {'a': 200, 'b': 200, 'd': 200, 'i': 404})
+
+    broken = Snapshot(['a', 'b', 'c'], unloadable='c', deadline=46)
+    four, five = Snapshot(['a', 'b', 'd', 'f'], deadline=46), Snapshot(['a', 'b', 'd', 'g'], deadline=46)
+    publish(broken)   # 绕过发布器，往目录里放一份网关加载不了的文件
+    spoiled = wait_for(lambda: (observe()['reload'] or {}).get('synchronized') is False, 10)
+    unready = control(four)
+    r.note('池不干净时：发布器给出的原因', unready['report'].get('reason'))
+    r.check('有人绕过发布器放了一份坏文件、网关正报告加载失败时：退出码 3，结局 POOL_NOT_READY，目录里的文件它没有动',
+            spoiled is not None and outcome(unready) == (3, 'POOL_NOT_READY') and unready['report'].get('replaced') is False
+            and on_disk() == broken.text)
+    publish(three)   # 把目录收拾好
+    cleaned = wait_for(lambda: observe()['reload'] == LOADED and observe()['digest'] == active, 10)
+    first, late = control_together(four, five)
+    r.note('两次发布同时进行：晚到的那一次说了什么', late['stderr'])
+    r.check('两次发布同时进行：先到的成功，晚到的退出码 1，什么都没做',
+            cleaned is not None and outcome(first) == (0, 'ACTIVE') and late['exit'] == 1 and not late['report']
+            and 'another publication' in late['stderr'] and on_disk() == four.text
+            and routes_seen(['f', 'g']) == {'f': 200, 'g': 404})
+    left = {'离线加载用的容器': docker('ps', '-a', '-q', '--filter', f'name=^/{SCRATCH}$').stdout.split(),
+            '放候选配置的目录': sorted(p.name for p in (CONTROL / 'work').iterdir()),
+            '配置目录': sorted(p.name for p in (POOL / 'config').iterdir())}
+    r.note('发布器用过之后', left)
+    r.check('发布器没有留下东西：离线加载用的容器不在了，放候选配置的目录是空的，配置目录里只有配置文件和它的锁文件',
+            left == {'离线加载用的容器': [], '放候选配置的目录': [], '配置目录': ['.config.yaml.lock', 'config.yaml']})
 
     print(f"\ndocker {versions['docker']}，compose {versions['compose']}，agentgateway {LOCK['version']}（{GATEWAY_IMAGE}）")
     r.report()

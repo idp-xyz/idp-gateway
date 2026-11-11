@@ -1,5 +1,5 @@
-// Package workloadtls 是工作负载之间双向 TLS 的服务端一侧：要求对端出示由指定 CA 签发的
-// 证书，并从已验证的证书里取出对端身份。
+// Package workloadtls 是工作负载之间的双向 TLS。服务端一侧：要求对端出示由指定 CA 签发的
+// 证书，并从已验证的证书里取出对端身份。客户端一侧：出示自己的证书，按指定的 CA 和名字验证服务端。
 //
 // 身份是证书 subjectAltName 里的 URI（SPIFFE 风格）。这里不接 SPIFFE Workload API，
 // 证书和 CA 在启动时从文件读一次，没有轮换，也不查吊销。
@@ -20,13 +20,9 @@ func ServerConfig(certFile, keyFile, clientCAFile string) (*tls.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("server certificate: %w", err)
 	}
-	pem, err := os.ReadFile(clientCAFile)
+	pool, err := caPool("client CA", clientCAFile)
 	if err != nil {
-		return nil, fmt.Errorf("client CA: %w", err)
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(pem) {
-		return nil, errors.New("client CA: no certificate found in " + clientCAFile)
+		return nil, err
 	}
 	return &tls.Config{
 		MinVersion:   tls.VersionTLS12,
@@ -34,6 +30,40 @@ func ServerConfig(certFile, keyFile, clientCAFile string) (*tls.Config, error) {
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		ClientCAs:    pool,
 	}, nil
+}
+
+// ClientConfig 构造出示客户端证书的客户端 TLS 配置。服务端的证书必须由 serverCAFile 里的 CA 签发，
+// 并且是给 serverName 这个名字的；系统自带的根证书不被信任。
+func ClientConfig(certFile, keyFile, serverCAFile, serverName string) (*tls.Config, error) {
+	if serverName == "" {
+		return nil, errors.New("server name: the name to verify the server certificate for is required")
+	}
+	certificate, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("client certificate: %w", err)
+	}
+	pool, err := caPool("server CA", serverCAFile)
+	if err != nil {
+		return nil, err
+	}
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{certificate},
+		RootCAs:      pool,
+		ServerName:   serverName,
+	}, nil
+}
+
+func caPool(what, file string) (*x509.CertPool, error) {
+	pem, err := os.ReadFile(file)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", what, err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, errors.New(what + ": no certificate found in " + file)
+	}
+	return pool, nil
 }
 
 // PeerIdentity 返回对端已验证证书里的 URI 身份。证书里没有 URI、或有不止一个时返回空串：
