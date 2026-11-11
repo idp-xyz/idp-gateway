@@ -22,3 +22,6 @@ tests/acceptance/blackbox/.run/
 
 # 本机联调用的 Gatekeeper：证书、密钥、下载的二进制和测试客户端凭据。
 tests/integration/gatekeeper/.run/
+
+# 本机的 kind 集群：它的 kubeconfig 和最近一次运行的结果。
+tests/integration/kubernetes/.run/

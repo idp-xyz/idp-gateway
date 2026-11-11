@@ -26,7 +26,7 @@ python3 scripts/agentgateway_release.py     # 要联网；只用标准库
 
 - 只跟上游的正式发布版，不用预发布版。先读新版本发布说明里的破坏性变更。
 - `agentgateway.lock.json` 的各个字段一起改，`docs/governance/project-manifest.json` 里 `AGENTGATEWAY` 的 `version` 和 `source` 跟着改（`tests/contracts` 里有一条测试检查两处一致）。
-- 把新二进制放到上面的路径，重跑黑盒套件和联调；旧版本的证据文件删掉，不留作对照。
+- 把新二进制放到上面的路径，重跑黑盒套件、Gatekeeper 联调和 Kubernetes 上的下发验证（`tests/integration/kubernetes`）；旧版本的证据文件删掉，不留作对照。
 - 提交证据之前看一眼它的 diff 里 `agentgateway.unmitigated_defaults` 有没有变：那是新二进制在不做处理时的默认行为。变了，就回头看 `tests/acceptance/blackbox/agentgateway.poc.yaml` 里对应的处理是否仍然需要、是否仍然够用。
 
 这份锁定只决定开发和测试用哪个二进制。来源方面只核对了二进制与发布页公布的摘要一致；G05 §7 要求的许可证、依赖漏洞核查和具名批准都没有做，容器镜像的 digest 也没有锁。
