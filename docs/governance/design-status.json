@@ -28,7 +28,7 @@
       ],
       "report": "tests/acceptance/blackbox/README.md",
       "agentgateway_versions_run": ["1.7.0"],
-      "agentgateway_version_targeted": "1.7.0 (pinned for development and test in deploy/agentgateway/agentgateway.lock.json: version, git revision, SHA-256 of the linux-amd64 release binary; no container image digest locked; licence and dependency-vulnerability review and named approval per G05 §7 not done)",
+      "agentgateway_version_targeted": "1.7.0 (pinned in deploy/agentgateway/agentgateway.lock.json: the upstream container image by digest, and the SHA-256 of the binary inside it, which is the build the suites start; origin, licence and known vulnerabilities checked once on 2026-11-11 as recorded in deploy/agentgateway/README.md; image signature not verified; named approval per G05 §7 not done)",
       "gatekeeper": "MOCK (no Gatekeeper implementation was available; mutual TLS to the mock is real)",
       "local_broker": "MOCK",
       "provider": "MOCK",

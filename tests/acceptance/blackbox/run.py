@@ -7,8 +7,9 @@ what the PDP, the broker and the provider actually received, and writes one evid
 Expectations are taken from G01/G03/G04 and are fixed in this file before the run; a case
 that does not meet its expectation is reported as FAIL, not adjusted.
 
-The gateway is the one release pinned in deploy/agentgateway/agentgateway.lock.json. A binary
-that is not that release (version, git revision and SHA-256; see pin.py) is not started.
+The gateway is the one build pinned in deploy/agentgateway/agentgateway.lock.json: the binary of
+the pinned container image, taken out of the image and started on this host. A binary that is
+not that build (version, git revision and SHA-256; see pin.py) is not started.
 
 Before the cases the binary is started three more times, briefly, from the reviewed
 configuration with its mitigations taken out: once with no session key, and once to see what
@@ -28,7 +29,7 @@ Usage (from the repository root):
 The evidence file is tests/acceptance/blackbox/evidence/p1-run-agentgateway-<version>.json.
 """
 from __future__ import annotations
-import argparse, base64, copy, datetime, hashlib, hmac, http.client, json, os, platform, secrets, shutil, socket, subprocess, sys, threading, time
+import argparse, base64, copy, datetime, errno, hashlib, hmac, http.client, json, os, platform, secrets, shutil, socket, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -51,7 +52,7 @@ CONFIG = HERE / 'agentgateway.poc.yaml'
 # file in the repository.
 RUN_CONFIG = RUN / 'agentgateway.yaml'
 PORTS = {'gateway': 27611, 'provider': 27612, 'gatekeeper': 27613, 'admin': 27614,
-         'stats': 27615, 'readiness': 27616, 'forbidden': 27617, 'broker': 27618, 'front': 27620}
+         'stats': 27615, 'readiness': 27616, 'forbidden': 27617, 'broker': 27618, 'readback': 27619, 'front': 27620}
 # Front proxy: official nginx, unprivileged variant, from nginx's own public registry. Pinned
 # by digest; the tag is there for the reader. Docker Hub was not reachable from this host.
 FRONT_IMAGE = ('public.ecr.aws/nginx/nginx-unprivileged:stable-alpine'
@@ -114,10 +115,11 @@ def forge(header: dict, body: dict, sign=None) -> str:
 def send(port: int, method: str, target: str, headers=(), body: bytes | None = None, timeout: float = 10.0,
          tls: tuple | None = None) -> dict:
     """Raw-ish client: the request target and headers go on the wire exactly as given.
-    tls=(certificate name or None, CA name) speaks TLS to the Gatekeeper port instead."""
+    tls=(certificate name or None, CA name) speaks TLS instead, to the Gatekeeper port; a third
+    element names the server the certificate must be for, when that is not Gatekeeper."""
     started = time.monotonic()
     try:
-        conn = (pki.GatekeeperConnection(port, pki.client_context(TLS, *tls), timeout) if tls
+        conn = (pki.GatekeeperConnection(port, pki.client_context(TLS, *tls[:2]), timeout, *tls[2:]) if tls
                 else http.client.HTTPConnection('127.0.0.1', port, timeout=timeout))
     except Exception as e:
         return {'status': None, 'headers': [], 'body': b'', 'error': f'{type(e).__name__}: {e}', 'seconds': 0.0}
@@ -364,6 +366,42 @@ def config_dump_digest() -> str | None:
     except ValueError:
         return None
     return hashlib.sha256(json.dumps(running, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def readback(method: str, target: str, cert: str | None = 'publisher', ca: str = 'ca', host: str = pki.READBACK_NAME, headers=()) -> dict:
+    """The gateway's read-back listener, presenting the named certificate (None: no certificate)."""
+    return send(PORTS['readback'], method, target, [('Host', host)] + list(headers), None if method == 'GET' else b'',
+                tls=(cert, ca, pki.READBACK_NAME))
+
+
+def listening() -> dict:
+    """port -> the local addresses this host listens on for it, for the ports of this run."""
+    found: dict = {}
+    for line in sh(['ss', '-ltnH']).splitlines():
+        fields = line.split()
+        if len(fields) > 3 and ':' in fields[3]:
+            address, _, port = fields[3].rpartition(':')
+            if port.isdigit() and int(port) in PORTS.values():
+                found.setdefault(int(port), set()).add(address.strip('[]'))
+    return {port: sorted(addresses) for port, addresses in found.items()}
+
+
+def another_address_of_this_host() -> str | None:
+    """An address of this machine that is not loopback: the one it would send from. No packet is sent."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(('192.0.2.1', 9))
+            address = s.getsockname()[0]
+    except OSError:
+        return None
+    return None if address.startswith('127.') or address == '0.0.0.0' else address
+
+
+def connect_errno(address: str, port: int) -> int:
+    """0 when a TCP connection to address:port is accepted, otherwise the error number."""
+    with socket.socket() as s:
+        s.settimeout(2)
+        return s.connect_ex((address, port))
 
 
 def sh(argv: list[str]) -> str:
@@ -1264,6 +1302,69 @@ def _(c):
     c.check('the file is byte-identical to the reviewed configuration', RUN_CONFIG.read_bytes() == S.config_bytes == CONFIG.read_bytes())
 
 
+# What the admin address offers besides the two documents a publisher needs. The first three
+# are the ones that do something: stop the gateway, change its log level, change its
+# configuration. None of it may be reachable through the read-back listener, whoever asks.
+ADMIN_ONLY = [('POST', '/quitquitquit'), ('POST', '/logging?level=debug'), ('PUT', ADMIN_WRITE[0]),
+              ('GET', '/quitquitquit'), ('GET', '/debug/trace'), ('GET', '/debug/tasks'), ('GET', '/memory'), ('GET', '/debug/pprof/heap'),
+              ('GET', '/debug/pprof/profile?seconds=1'), ('GET', '/ui'), ('GET', '/api/config/effective'), ('POST', '/config_dump'),
+              ('GET', '/config_dump/'), ('GET', '/config_dump/../quitquitquit'), ('GET', '/api/runtime/'), ('GET', '/api')]
+
+
+@case('P1-RB-03', 'the read-back listener: what a publisher can read from this instance, and nothing else',
+      'with the publisher\'s certificate: the running configuration and the state of the last load, as the admin address gives them; '
+      'no other path or method of the admin address; no answer to any other caller, with or without a certificate',
+      ('GW-AT-041', 'GW-FR-041', 'GW-AT-014', 'GW-FR-014', 'GW-NAT-004', 'GW-NFR-04', 'GW-AT-046', 'GW-FR-046'))
+def _(c):
+    local = admin_api('GET', '/config_dump')
+    r = readback('GET', '/config_dump')
+    c.note('status', r['status'])
+    c.check('the publisher reads /config_dump: 200', r['status'] == 200)
+    c.check('...and it is the document the admin address gives', bool(body_json(r)) and body_json(r) == body_json(local))
+    runtime = readback('GET', '/api/runtime')
+    c.check('the publisher reads /api/runtime: the last load is reported as applied',
+            runtime['status'] == 200 and body_json(runtime).get('configReload') == {'synchronized': True, 'lastError': None})
+    both = r['body'].decode(errors='replace') + runtime['body'].decode(errors='replace')
+    c.check('neither document holds a credential, a key or a secret of this run',
+            'PRIVATE KEY' not in both and not any(s in both for s in all_provider_credentials() + [S.broker_key, S.session_key, S.admin]))
+
+    elsewhere = {f'{method} {path}': readback(method, path)['status'] for method, path in ADMIN_ONLY}
+    c.note('the_rest_of_the_admin_address', elsewhere)
+    c.check('every other path or method of the admin address: 404, with the publisher\'s certificate too', set(elsewhere.values()) == {404})
+    egress = readback('GET', TRACKING + '/TRK-1', host=LOGICAL_HOST, headers=[('Authorization', 'Bearer ' + blue())])
+    c.check('the egress routes are not served on this listener', egress['status'] == 404 and not provider_hits())
+    here = gw('GET', '/config_dump', blue())
+    c.check('the read-back route is not served on the callers\' listener', here['status'] == 404 and b'"binds"' not in here['body'])
+
+    others = {who: readback('GET', '/config_dump', cert=who) for who in ('operator', 'business-app', 'gateway', 'broker')}
+    c.note('other_workloads_of_the_same_ca', {who: got['status'] if got['status'] is not None else got.get('error', '')[:70] for who, got in others.items()})
+    c.check('another workload of the same CA gets no answer', all(got['status'] is None for got in others.values()))
+    without, rogue = readback('GET', '/config_dump', cert=None), readback('GET', '/config_dump', cert='rogue-publisher')
+    c.note('no_certificate', without.get('error', '')[:70]); c.note('certificate_of_another_ca', rogue.get('error', '')[:70])
+    c.check('no client certificate: no answer', without['status'] is None)
+    c.check('the publisher\'s name on a certificate of another CA: no answer', rogue['status'] is None)
+    c.check('after all of that the gateway is running and serving', gw('GET', TRACKING + '/TRK-1', blue())['status'] == 200)
+
+
+# ---- where the gateway listens --------------------------------------------------------------------------
+@case('P1-NL-01', 'which addresses the gateway listens on',
+      'the callers\' port, admin, stats and readiness are on loopback only, so the front proxy beside the gateway is the only way in; '
+      'the one port other machines can reach is the read-back listener',
+      ('GW-ST-017', 'GW-FR-005', 'GW-AT-046', 'GW-FR-046'))
+def _(c):
+    bound = listening()
+    c.note('listening', {name: bound.get(PORTS[name]) for name in ('gateway', 'admin', 'stats', 'readiness', 'readback')})
+    for name in ('gateway', 'admin', 'stats', 'readiness'):
+        c.check(f'the {name} port is bound to loopback and to nothing else', bound.get(PORTS[name]) == ['127.0.0.1'])
+    other = another_address_of_this_host()   # the address itself is not recorded
+    c.note('this_host_has_an_address_that_is_not_loopback', other is not None)
+    if other:
+        c.check('a connection to the callers\' port on that address is refused', connect_errno(other, PORTS['gateway']) == errno.ECONNREFUSED)
+        c.check('...and so is one to the admin port', connect_errno(other, PORTS['admin']) == errno.ECONNREFUSED)
+        c.check('the read-back port accepts a connection there', connect_errno(other, PORTS['readback']) == 0)
+    c.check('through the front proxy the route is served', front('GET', TRACKING + '/TRK-1', blue())['status'] == 200)
+
+
 # ---- the gateway's own log ----------------------------------------------------------------------------
 @case('P1-CR-04', 'what the gateway has written to its log during this run',
       'no provider credential, caller JWT, broker key or session key in any line, including the lines for failed credential handling',
@@ -1336,10 +1437,14 @@ SCOPE_LIMITS = [
     'itself with a key file, standing in for a Unix socket or pod-local restriction; that restriction itself is untested.',
     'The front proxy is one nginx build with a minimal configuration, there to show that a component in front can refuse '
     'what the gateway accepts (P1-SS-04). Four cases go through it; the others address the gateway listener directly, '
-    'which stays reachable. Whether the eventual entry component behaves like this nginx has to be tested on that component.',
+    'on loopback, which is the only place it listens (P1-NL-01). Whether the eventual entry component behaves like this '
+    'nginx has to be tested on that component.',
     'Single gateway process: nothing here speaks to multi-replica behaviour, config rollout, quotas or load.',
-    'The result holds for the agentgateway build named in this file only: the release pinned in '
-    'deploy/agentgateway/agentgateway.lock.json at the time of the run. No other version is tested.',
+    'The read-back listener is exercised on this one instance with a publisher certificate made for the run; there is no '
+    'publisher. Reading back from several replicas is tried in tests/integration/kubernetes.',
+    'The result holds for the agentgateway build named in this file only: the binary of the container image pinned in '
+    'deploy/agentgateway/agentgateway.lock.json at the time of the run, taken out of the image and run on this host, not '
+    'in a container. No other version or build is tested.',
     'HTTP ExtAuthZ only. gRPC ExtAuthZ, decision caching, CONNECT, gRPC upstreams, HMAC signing and mTLS towards providers are untested.',
     'DNS rebinding and network-layer egress ACLs are untested: the upstream is a fixed loopback address.',
     'This is PoC evidence. It does not change any NOT_RUN acceptance case or STD-CP gate.',
@@ -1391,13 +1496,15 @@ def stage_config(binary: str) -> tuple[bool, str]:
 # What the reviewed configuration sets because the binary, left to itself, does something unsafe.
 LEFT_OUT = ['urlRewrite.authority', 'the canonical-path authorization rule on each route',
             'the credential-present authorization rule on each backend', 'responseHeaderModifier', 'requestHeaderModifier',
-            'config.storage.mode']
+            'config.storage.mode', 'bindAddress on the callers\' listener']
 
 
 def unmitigated_config() -> bytes:
     """The reviewed configuration with LEFT_OUT taken out and nothing else changed."""
     doc = yaml.safe_load(CONFIG.read_bytes())
     doc['config'].pop('storage', None)
+    for gateway in doc['gateways'].values():
+        gateway.pop('bindAddress', None)
     for route in doc['routes']:
         policies = route.get('policies', {})
         for key in ('authorization', 'responseHeaderModifier'):
@@ -1428,6 +1535,9 @@ def observe_unmitigated(binary: str) -> dict:
             return seen
         start('agentgateway-unmitigated', [binary, '-f', f'.run/{probe.name}'], PORTS['gateway'], env=gateway_env(S.session_key))
         tok = blue()
+
+        # Without bindAddress: where the callers' port is open.
+        seen['callers_listener_bound_to'] = listening().get(PORTS['gateway'])
 
         # Without urlRewrite.authority and requestHeaderModifier: what of the caller's request reaches the provider.
         reset_all()
@@ -1525,7 +1635,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description='black-box runner')
     ap.add_argument('--agentgateway', metavar='BINARY',
                     help='where the pinned agentgateway binary is (default: ~/.local/opt/agentgateway/<version>/agentgateway, '
-                         'else the one on PATH); a binary that is not the pinned release is refused')
+                         'else the one on PATH); a binary that is not the pinned build is refused')
     ap.add_argument('--check-evidence', action='store_true',
                     help='run nothing; report whether each evidence file was produced from the files as they are now')
     args = ap.parse_args()
@@ -1539,7 +1649,7 @@ def main() -> int:
     except pin.PinError as e:
         print(e); return 2
     evidence_file = HERE / 'evidence' / f"p1-run-agentgateway-{version['version']}.json"
-    print(f"agentgateway {version['version']} at {binary}, the release pinned in {pin.LOCK.relative_to(ROOT).as_posix()}")
+    print(f"agentgateway {version['version']} ({version.get('build_target')}) at {binary}, the build pinned in {pin.LOCK.relative_to(ROOT).as_posix()}")
 
     busy = [f'{n}:{p}' for n, p in PORTS.items() if port_open(p)]
     if busy:
@@ -1627,6 +1737,8 @@ def main() -> int:
         'repository_dirty_files_ignores': 'tests/acceptance/blackbox/evidence/',
         'agentgateway': {'version': version,
                          'binary_sha256': hashlib.sha256(Path(binary).read_bytes()).hexdigest(),
+                         'image': pin.image_reference(pin.lock()),
+                         'binary_is': f"{pin.lock()['image']['binary']} of that image, taken out of it and run on this host",
                          'pinned_by': pin.LOCK.relative_to(ROOT).as_posix(),
                          'lock_sha256': hashlib.sha256(pin.LOCK.read_bytes()).hexdigest(),
                          'config_file': 'tests/acceptance/blackbox/agentgateway.poc.yaml',

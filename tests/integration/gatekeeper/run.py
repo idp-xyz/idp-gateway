@@ -13,7 +13,7 @@ gateway-authz（产品构建）。假的部分：Provider（黑盒套件的 mock
 "Token 环境"的来源（见 GATEWAY_DIFFERENCES）。登记表按本地实例里的租户和客户端现生成。
 
 租户、客户端和授权关系只建在本机实例里。已发布的 gk.idp.xyz 是生产环境，本脚本不访问它。
-占用黑盒套件的端口 27611-27616，两者不能同时运行。
+占用黑盒套件的端口 27611-27616 和 27619（配置里的回读口），两者不能同时运行。
 """
 from __future__ import annotations
 import argparse, base64, http.client, json, os, secrets, socket, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
@@ -37,7 +37,8 @@ ISSUER = 'http://127.0.0.1:27621'
 BRIDGE = 'http://127.0.0.1:27622'
 AUDIENCE = 'idp-egress-gateway'   # 与黑盒套件相同。本机实例的 TOKEN_AUDIENCE 里加了它，见 compose.local.yml
 OTHER_AUDIENCE = 'bip-api'        # Gatekeeper 默认的受众：发给别的服务的令牌
-PORTS = {'gateway': 27611, 'provider': 27612, 'authz': 27613, 'admin': 27614, 'stats': 27615, 'readiness': 27616}
+PORTS = {'gateway': 27611, 'provider': 27612, 'authz': 27613, 'admin': 27614, 'stats': 27615, 'readiness': 27616,
+         'readback': 27619}   # 最后一个是黑盒配置里的回读口：这里不用它，但网关会打开它
 HOST = 'egress-api.idp.test'
 TRACKING = '/providers/mockcarrier/v1/tracking/TRK-1'
 BINDING = 'gatekeeper:mockcarrier-test'
@@ -555,7 +556,7 @@ def main() -> int:
     parser.add_argument('--key-rotation', action='store_true',
                         help=f'加跑 GK-12：给本机 Hydra 换访问令牌的签名密钥（多等至多 {ROTATION_WAIT} 秒，并给本机实例留下一把新密钥）')
     KEY_ROTATION = parser.parse_args().key_rotation
-    # 只跑 deploy/agentgateway/agentgateway.lock.json 锁定的那个发布版；找到的二进制不是它就不开始。
+    # 只跑 deploy/agentgateway/agentgateway.lock.json 锁定的那个构建（锁定镜像里的二进制）；找到的二进制不是它就不开始。
     try:
         binary, reported = pin.resolve()
     except pin.PinError as e:

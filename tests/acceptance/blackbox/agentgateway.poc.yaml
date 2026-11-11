@@ -18,20 +18,21 @@
 # SESSION_KEY environment variable (case P1-CF-01). config.storage.mode below is the second
 # thing in the way: with it the gateway does not write to this file at all.
 #
-# Ports 27611-27618 and 27620 are reserved for this PoC:
+# Ports 27611-27620 are reserved for this PoC:
 #   27611 gateway listener   27612 mock provider      27613 gateway-authz (TLS)
 #   27614 gateway admin      27615 gateway stats      27616 gateway readiness
 #   27617 "forbidden" target that no route may ever reach
 #   27618 mock local broker (Mode B)
+#   27619 gateway read-back listener (TLS, the publisher's client certificate required)
 #   27620 front proxy (nginx, front.nginx.conf) that forwards to 27611
 #
-# The schema has no bind-address field for a gateway listener: 27611 listens on every
-# interface of the machine for as long as the PoC runs. Admin, stats and readiness are
-# pinned to loopback below.
+# Left to its default a gateway listener opens its port on every interface of the machine.
+# bindAddress below keeps 27611 on loopback (case P1-NL-01); admin, stats and readiness are
+# pinned to loopback in the config section.
 #
 # The gateway accepts a request with two Host headers and has no setting against it
-# (P1-SS-04). The front proxy refuses such a request; that only helps where callers
-# cannot reach 27611 except through it, which this file cannot enforce.
+# (P1-SS-04). The front proxy refuses such a request. With 27611 on loopback, the front
+# proxy beside the gateway (same host here, same pod on Kubernetes) is the only way in.
 config:
   adminAddr: 127.0.0.1:27614
   statsAddr: 127.0.0.1:27615
@@ -41,12 +42,34 @@ config:
   # from. Loopback only narrows who can call it. readOnly makes the gateway refuse the write,
   # so the published file stays the only source of configuration (case P1-CF-02). Like the
   # rest of this section it is read at startup only.
+  # readOnly does not make the admin address read-only: a POST to it still shuts the gateway
+  # down or changes its log level. It stays on loopback; see the read-back listener below.
   storage:
     mode: readOnly
 
+# Who may open a connection, decided before any HTTP is read. 27611 is on loopback already.
+# 27619 is reachable from other machines and is for one caller only: the publisher, by the
+# identity in its verified client certificate. Any other workload of the same CA is cut off.
+frontendPolicies:
+  networkAuthorization:
+    rules:
+    - allow: 'destination.port == 27611'
+    - allow: 'destination.port == 27619 && source.spiffeId == "spiffe://idp.test/gateway-control/publisher"'
+
 gateways:
+  # Read-back (G03 §3-4): after publishing, the publisher asks each instance what it runs.
+  # Those answers are on the admin address, which must not leave loopback. This listener
+  # requires a client certificate of the workload CA (tls.root) and has one route, at the
+  # end of this file, that forwards two GETs to the admin address and nothing else.
+  read-back:
+    port: 27619
+    tls:
+      cert: .run/tls/gateway-readback.crt
+      key: .run/tls/gateway-readback.key
+      root: .run/tls/ca.crt
   egress-test:
     port: 27611
+    bindAddress: 127.0.0.1
     protocol: HTTP
     # Caller authentication (G04 §0 item 1). Strict: a request without a valid token is rejected.
     # After validation the gateway removes the token from the request, so the caller's IDP JWT
@@ -423,3 +446,24 @@ routes:
         - x-idp-verified-subject
         - x-idp-verified-tenant
         - x-idp-verified-env
+
+# ---------------------------------------------------------------------------------------
+# Read-back: the only route on the read-back listener. Two exact paths, GET only, to the
+# gateway's own admin address: what it is running (/config_dump) and whether its last load
+# of the file succeeded (/api/runtime). Everything else the admin address offers (shutdown,
+# log level, profiling, its UI and write API) has no route here (case P1-RB-03).
+# ---------------------------------------------------------------------------------------
+- name: read-back
+  gateways: [read-back]
+  matches:
+  - path:
+      exact: /config_dump
+    method: GET
+  - path:
+      exact: /api/runtime
+    method: GET
+  policies:
+    timeout:
+      requestTimeout: 2s
+  backends:
+  - host: 127.0.0.1:27614

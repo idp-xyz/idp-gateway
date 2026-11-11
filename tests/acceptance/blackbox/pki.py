@@ -15,23 +15,28 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 GATEKEEPER_NAME = 'gatekeeper.idp.test'   # the name the PDP's certificate is verified for
+READBACK_NAME = 'egress-gateway.idp.test'  # the name the gateway's read-back listener is verified for
 ID = {
     'gatekeeper': 'spiffe://idp.test/gatekeeper',
     'gateway': 'spiffe://idp.test/egress/agentgateway',        # may ask for a decision and a credential
     'broker': 'spiffe://idp.test/egress/credential-broker',    # may ask for a decision only
     'operator': 'spiffe://idp.test/poc/operator',              # the runner: PoC controls of the mock
     'business-app': 'spiffe://idp.test/apps/parcel-service',   # a real workload, but not a gateway
+    'publisher': 'spiffe://idp.test/gateway-control/publisher',  # publishes the configuration and reads it back
 }
-# file name -> (issuing CA, identity, is a server certificate)
+# file name -> (issuing CA, identity, the DNS name a server certificate is for; None: a client certificate)
 LEAVES = {
-    'gatekeeper': ('ca', 'gatekeeper', True),
-    'gateway': ('ca', 'gateway', False),
-    'broker': ('ca', 'broker', False),
-    'operator': ('ca', 'operator', False),
-    'business-app': ('ca', 'business-app', False),
+    'gatekeeper': ('ca', 'gatekeeper', GATEKEEPER_NAME),
+    'gateway': ('ca', 'gateway', None),
+    'gateway-readback': ('ca', 'gateway', READBACK_NAME),   # what the gateway serves its read-back listener with
+    'broker': ('ca', 'broker', None),
+    'operator': ('ca', 'operator', None),
+    'business-app': ('ca', 'business-app', None),
+    'publisher': ('ca', 'publisher', None),
     # Same names, signed by a CA nobody was told to trust.
-    'rogue-gateway': ('rogue-ca', 'gateway', False),
-    'rogue-gatekeeper': ('rogue-ca', 'gatekeeper', True),
+    'rogue-gateway': ('rogue-ca', 'gateway', None),
+    'rogue-gatekeeper': ('rogue-ca', 'gatekeeper', GATEKEEPER_NAME),
+    'rogue-publisher': ('rogue-ca', 'publisher', None),
 }
 
 
@@ -62,11 +67,11 @@ def issue(tls_dir: Path, hours: int = 6):
                 .sign(key, hashes.SHA256()))
         cas[name] = (key, cert)
         _write(tls_dir / f'{name}.crt', cert.public_bytes(serialization.Encoding.PEM))   # CA keys are not kept
-    for name, (ca, identity, server) in LEAVES.items():
+    for name, (ca, identity, served_name) in LEAVES.items():
         ca_key, ca_cert = cas[ca]
         key = ec.generate_private_key(ec.SECP256R1())
-        sans = [x509.UniformResourceIdentifier(ID[identity])] + ([x509.DNSName(GATEKEEPER_NAME)] if server else [])
-        usage = ExtendedKeyUsageOID.SERVER_AUTH if server else ExtendedKeyUsageOID.CLIENT_AUTH
+        sans = [x509.UniformResourceIdentifier(ID[identity])] + ([x509.DNSName(served_name)] if served_name else [])
+        usage = ExtendedKeyUsageOID.SERVER_AUTH if served_name else ExtendedKeyUsageOID.CLIENT_AUTH
         cert = (valid(x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)]))
                       .issuer_name(ca_cert.subject).public_key(key.public_key()).serial_number(x509.random_serial_number()))
                 .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
@@ -106,16 +111,16 @@ def peer_identity(tls_socket) -> str:
 
 
 class GatekeeperConnection(http.client.HTTPSConnection):
-    """Connects to the loopback port, verifies the certificate for GATEKEEPER_NAME."""
+    """Connects to the loopback port, verifies the certificate for name (GATEKEEPER_NAME unless given)."""
 
-    def __init__(self, port: int, context: ssl.SSLContext, timeout: float):
-        super().__init__(GATEKEEPER_NAME, port, timeout=timeout, context=context)
-        self._tls = context
+    def __init__(self, port: int, context: ssl.SSLContext, timeout: float, name: str = GATEKEEPER_NAME):
+        super().__init__(name, port, timeout=timeout, context=context)
+        self._tls, self._name = context, name
 
     def connect(self):
         sock = socket.create_connection(('127.0.0.1', self.port), self.timeout)
         try:
-            self.sock = self._tls.wrap_socket(sock, server_hostname=GATEKEEPER_NAME)
+            self.sock = self._tls.wrap_socket(sock, server_hostname=self._name)
         except BaseException:
             sock.close()
             raise

@@ -234,17 +234,40 @@ class ServiceSpeaksTheContract(unittest.TestCase):
 
 
 class AgentgatewayPin(unittest.TestCase):
-    """One agentgateway release is pinned, and the project manifest names the same one."""
+    """One agentgateway build is pinned, and the project manifest names the same release."""
     LOCK = json.loads(text('deploy/agentgateway/agentgateway.lock.json'))
 
     def test_lock_names_one_release_completely(self):
         self.assertRegex(self.LOCK['version'], r'^\d+\.\d+\.\d+$', 'a release, not a pre-release')
         self.assertRegex(self.LOCK['git_revision'], r'^[0-9a-f]{40}$')
         self.assertTrue(self.LOCK['release'].endswith('/releases/tag/v' + self.LOCK['version']))
-        self.assertTrue(self.LOCK['sha256'], 'no release asset named')
-        for asset, digest in self.LOCK['sha256'].items():
-            with self.subTest(asset=asset):
-                self.assertRegex(digest, r'^[0-9a-f]{64}$')
+
+    def test_lock_names_the_image_by_digest(self):
+        image = self.LOCK['image']
+        self.assertTrue(image['repository'])
+        self.assertEqual(image['tag'], 'v' + self.LOCK['version'])
+        self.assertTrue(image['binary'].startswith('/'))
+        self.assertIn('linux/amd64', image['manifests'])
+        for name, digest in {'index': image['index'], **image['manifests']}.items():
+            with self.subTest(digest_of=name):
+                self.assertRegex(digest, r'^sha256:[0-9a-f]{64}$')
+        self.assertEqual(len({image['index'], *image['manifests'].values()}), 1 + len(image['manifests']), 'two entries share a digest')
+
+    def test_lock_names_one_binary_under_test(self):
+        """The runners start a binary whose SHA-256 is listed here. One entry: there is one build under test."""
+        self.assertEqual(len(self.LOCK['sha256']), 1)
+        for artefact, digest in self.LOCK['sha256'].items():
+            self.assertIn(self.LOCK['image']['binary'], artefact)
+            self.assertRegex(digest, r'^[0-9a-f]{64}$')
+
+    def test_both_suites_put_the_same_front_proxy_before_the_gateway(self):
+        """The Kubernetes suite's pods carry the front proxy the black-box cases were run with."""
+        reference = r"'(public\.ecr\.aws/nginx/nginx-unprivileged:[\w.-]+)'\s*\n?\s*'(@sha256:[0-9a-f]{64})'"
+        blackbox = re.search(r'FRONT_IMAGE = \(' + reference, text('tests/acceptance/blackbox/run.py'))
+        kubernetes = re.search(r'FRONT_IMAGE = \(' + reference, text('tests/integration/kubernetes/run.py'))
+        self.assertIsNotNone(blackbox)
+        self.assertIsNotNone(kubernetes)
+        self.assertEqual(blackbox.groups(), kubernetes.groups())
 
     def test_manifest_names_the_pinned_release(self):
         manifest = json.loads(text('docs/governance/project-manifest.json'))

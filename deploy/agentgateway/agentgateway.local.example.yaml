@@ -1,20 +1,23 @@
-# SYNTAX SAMPLE ONLY. Accepted by `agentgateway --validate-only` 1.7.0 (the release pinned in
+# SYNTAX SAMPLE ONLY. Accepted by `agentgateway --validate-only` 1.7.0 (the build pinned in
 # agentgateway.lock.json); never started.
 # NOT SECURE FOR ANY DEPLOYMENT: there is no authentication policy on this route.
-# A listener has no bind-address field, so starting this file opens the port on every
-# interface of the machine. Do not start it outside an isolated sandbox.
+# Left to its default a listener opens its port on every interface of the machine;
+# bindAddress below keeps this one on loopback. Do not start it outside an isolated sandbox.
 # Started without a SESSION_KEY in its environment, the gateway also writes a generated key
 # into this file (see tests/acceptance/blackbox/README.md).
 # No real secrets. For a route with JWT, ExtAuthZ and credential injection that has actually
 # been run, see tests/acceptance/blackbox/agentgateway.poc.yaml.
 #
-# Ports: the project reserves 27610-27620 so that it never collides with the usual
+# Ports: the project reserves 27610-27622 so that it never collides with the usual
 # 3000/8080 development ports, and stays below the kernel's ephemeral port range
-# (Linux default 32768-60999). 27610 = this sample's listener, 27619 = its placeholder
-# upstream (nothing listens there), 27611-27618 and 27620 = the P1 PoC (see tests/acceptance/blackbox/README.md).
+# (Linux default 32768-60999). 27610 = this sample's listener; 27611-27620 = the black-box
+# suite (see tests/acceptance/blackbox/README.md); 27621-27622 = the local Gatekeeper used by
+# tests/integration/gatekeeper. The upstream is an address reserved for documentation
+# (RFC 5737): nothing answers there.
 gateways:
   demo:
     port: 27610
+    bindAddress: 127.0.0.1
     protocol: HTTP
 routes:
   - name: mockprovider-demo
@@ -24,5 +27,5 @@ routes:
       - path:
           pathPrefix: /providers/mockcarrier/
     backends:
-      - host: 127.0.0.1:27619
+      - host: 192.0.2.1:443
         weight: 1

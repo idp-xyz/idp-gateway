@@ -3,7 +3,17 @@
   "git_revision": "26f5aebe99a36a037fe54f8080a608aca5547e15",
   "release": "https://github.com/agentgateway/agentgateway/releases/tag/v1.7.0",
   "released": "2026-10-27",
+  "image": {
+    "repository": "cr.agentgateway.dev/agentgateway",
+    "tag": "v1.7.0",
+    "index": "sha256:60216aafb03d37f94e952ff3d51d2f630a65b10ecaebdc0a864882f92610c45b",
+    "manifests": {
+      "linux/amd64": "sha256:460dda874be2dfa95fa5713c1f46f26079dce78df576008df704e54a59d5780d",
+      "linux/arm64": "sha256:4562330cd6e580bfac2de5b8905fee608dcf3fff6f1f4900744d27bdddb3b41b"
+    },
+    "binary": "/app/agentgateway"
+  },
   "sha256": {
-    "agentgateway-linux-amd64": "1b2fc01a2de29ca113bbb6258b5cae7b1eb3c724071c09d687a449132f2f42f8"
+    "/app/agentgateway in the linux/amd64 image": "c7ef326b7b5702451e94bab55ff484d600d5abdc5344a4cdf7c72fc0bcff9e24"
   }
 }

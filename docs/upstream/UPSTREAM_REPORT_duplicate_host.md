@@ -1,8 +1,9 @@
 # Draft report for agentgateway: HTTP/1.1 request with two `Host` header lines is accepted
 
-> **Status: draft, not submitted.**
-> Where to send it: agentgateway's `SECURITY.md` asks that anything that might be a vulnerability be reported privately, at <https://github.com/agentgateway/agentgateway/security/advisories/new>, and notes that a public issue cannot be made private afterwards. This draft is written for that channel. If the maintainers consider it a plain conformance bug, they can open the public issue themselves.
-> Everything below the line is the text to submit. The observations were made on 2026-11-10 with the release binary named in it.
+> **Status: draft, not submitted.** Submitting it takes a GitHub account that speaks for the reporter; that is a person's step, and nobody has taken it yet.
+> Where to send it: agentgateway's `SECURITY.md` (read again at the pinned revision on 2026-11-11) asks that anything that might be a vulnerability be reported privately, at <https://github.com/agentgateway/agentgateway/security/advisories/new>, and notes that a private report can later be made public but a public issue cannot be made private. This draft is written for that channel. The same policy counts as a vulnerability what "defeats a promised security boundary"; by that measure the maintainers may well file this as a conformance bug, and can open the public issue themselves.
+> Checked on 2026-11-11 before sending: three keyword searches of the upstream issues and pull requests found no public report of it; #4361, which the text mentions, is still open.
+> Everything below the line is the text to submit. The observations were made on 2026-11-10 with the stand-alone release binary and repeated on 2026-11-11 with the binary of the container image, with the same result in every row.
 
 ---
 
@@ -18,11 +19,12 @@ The missing-`Host` half of that sentence is already implemented (the gateway ans
 
 ## Version
 
-One binary, reporting `build_target: x86_64-unknown-linux-musl`, on Linux (Ubuntu 24.04 under WSL2):
+Version 1.7.0, `git_revision` `26f5aebe99a36a037fe54f8080a608aca5547e15` (from `--version`), on Linux (Ubuntu 24.04 under WSL2). Both published builds of it, with the same result:
 
-| Version | `git_revision` (from `--version`) | Where the binary came from |
-|---|---|---|
-| 1.7.0 | `26f5aebe99a36a037fe54f8080a608aca5547e15` | release asset from the GitHub release page, SHA-256 checked |
+| `build_target` (from `--version`) | Where the binary came from |
+|---|---|
+| `x86_64-unknown-linux-musl` | `agentgateway-linux-amd64` from the GitHub release page, SHA-256 checked |
+| `x86_64-unknown-linux-gnu` | `/app/agentgateway` taken out of `cr.agentgateway.dev/agentgateway:v1.7.0` (linux/amd64 manifest `sha256:460dda874be2dfa95fa5713c1f46f26079dce78df576008df704e54a59d5780d`) and run on the host |
 
 ## Reproduction
 
