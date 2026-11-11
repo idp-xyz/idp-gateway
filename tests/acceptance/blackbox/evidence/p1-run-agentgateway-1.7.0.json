@@ -1,12 +1,12 @@
 {
   "title": "IDP Gateway black-box suite: real agentgateway, gateway-authz (acceptance build), mock provider",
-  "started_at_utc": "2026-11-11T05:58:21.644469+00:00",
-  "finished_at_utc": "2026-11-11T05:58:50.542501+00:00",
+  "started_at_utc": "2026-11-11T06:11:40.903150+00:00",
+  "finished_at_utc": "2026-11-11T06:12:13.258496+00:00",
   "operator": "tops",
   "host": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "python": "3.12.3",
   "command": ".venv/bin/python tests/acceptance/blackbox/run.py",
-  "repository_commit": "692f6715b81060176f6561e8fa7016ce26c0f87d",
+  "repository_commit": "825a8e4fefbc2bb47641a9013252db01af843c89",
   "repository_dirty_files": 0,
   "repository_dirty_files_ignores": "tests/acceptance/blackbox/evidence/",
   "agentgateway": {
@@ -26,17 +26,64 @@
     "config_sha256": "4b53bb3121096c3703f749824d9ea4a846d490b959b25ca6a6800e89e5d2c585",
     "native_validation": "Configuration is valid!",
     "session_key_supplied_by": "SESSION_KEY environment variable, generated per run, not recorded",
-    "start_without_session_key_rewrites_config_file": true
+    "start_without_session_key_rewrites_config_file": true,
+    "unmitigated_defaults": {
+      "configuration": "the reviewed configuration without: urlRewrite.authority; the canonical-path authorization rule on each route; the credential-present authorization rule on each backend; responseHeaderModifier; requestHeaderModifier",
+      "host_header_the_provider_received": [
+        "egress-api.idp.test"
+      ],
+      "caller_headers_the_provider_received": [
+        "cookie",
+        "forwarded",
+        "x-forwarded-for",
+        "x-forwarded-host",
+        "x-forwarded-proto"
+      ],
+      "request_targets_on_the_route_without_a_pdp": {
+        "/providers/mockcarrier/v1/rates/%252e%252e/admin": {
+          "status": 404,
+          "provider_received": [
+            "/v1/rates/%252e%252e/admin"
+          ]
+        },
+        "/providers/mockcarrier/v1/rates/x%00": {
+          "status": 404,
+          "provider_received": [
+            "/v1/rates/x%00"
+          ]
+        },
+        "/providers/mockcarrier/v1/rates/x;x=1": {
+          "status": 404,
+          "provider_received": [
+            "/v1/rates/x;x=1"
+          ]
+        }
+      },
+      "pdp_allows_without_a_credential": {
+        "status": 401,
+        "answered_by": "provider",
+        "requests_the_provider_received": 1,
+        "authorization_headers_among_them": 0
+      },
+      "provider_answers_302_with_a_cookie": {
+        "status": 302,
+        "location_given_to_the_caller": [
+          "http://127.0.0.1:27617/v1/stolen"
+        ],
+        "set_cookie_given_to_the_caller": true,
+        "requests_the_redirect_target_received": 0
+      }
+    }
   },
   "policy_sha256": "44ce8acf064e0d30c06ea7842d20a51077a711e7e364a24bee9f4c98ebcb096a",
-  "runner_sha256": "dbd16d8f9212014c24834abe681b2420cc3e367a5263ef7215d89df1b82a769b",
+  "runner_sha256": "e03275e7ce6fd2672590a75d26616ed964534923f6220fe09c4a5b1ef9d89961",
   "gateway_authz": {
     "what_ran": "cmd/gateway-authz built with the acceptance tag; not the product build",
     "build_command": "go build -trimpath -tags acceptance -o tests/acceptance/blackbox/.run/gateway-authz ./cmd/gateway-authz",
     "go": "go version go1.26.8 linux/amd64",
     "source_sha256": "c84705254a5eb4c172167085360312b75bfab9ac5aa40a7c7d9bac6be4918acb",
     "source_sha256_covers": "go.mod and every non-test .go file under cmd/ and internal/",
-    "binary_sha256": "0a0c6367ec91cf7a1bea691e34293879a0433a88917b8cfd9c0adc6d03df71cc",
+    "binary_sha256": "78a66d70032105fa0ed5ac2223d2fd0a735d7a635e1a7ad2cc059a7b1ae721ef",
     "policy_from": "tests/acceptance/blackbox/policy.poc.json",
     "credentials_from": "a file written for the run, not recorded",
     "revocations": "in memory",
@@ -46,7 +93,7 @@
   },
   "mocks_sha256": {
     "mock_broker.py": "13566ddb1dd1f7da5e43e38b9f7d5199c1f2c903d95d2029b60df9fa675c1000",
-    "mock_provider.py": "db99b02f11123c7648eab9a1e9d6f4d1f1df655191874e92f0a73a4f5ae58dc0",
+    "mock_provider.py": "4411dc76ac1b2a9d7f2f2d463a49ff73feded890ddb995d33fc5f2978128b1ec",
     "pki.py": "5eb56bde345deac0556abf4698813ec24bcec836470c049ffd2a5f46ae8d8aa3",
     "pin.py": "94bfda4672c5ce18bad12ae38b2c7fc6878b91c9b4044f441b3c69a1a4fda40d"
   },
@@ -1320,7 +1367,7 @@
       ],
       "observed": {
         "status": 504,
-        "seconds": 2.003,
+        "seconds": 2.002,
         "provider_hits": 1
       },
       "indicative_for": [
@@ -1453,6 +1500,10 @@
         },
         {
           "check": "Location not passed to the caller",
+          "ok": true
+        },
+        {
+          "check": "Set-Cookie not passed to the caller",
           "ok": true
         }
       ],
@@ -2162,7 +2213,7 @@
         },
         "Gatekeeper slower than the broker waits": {
           "status": 503,
-          "seconds": 0.744
+          "seconds": 0.746
         },
         "Gatekeeper down": {
           "status": 503,
@@ -2170,7 +2221,7 @@
         },
         "broker down": {
           "status": 403,
-          "seconds": 0.001
+          "seconds": 0.002
         }
       },
       "indicative_for": [
