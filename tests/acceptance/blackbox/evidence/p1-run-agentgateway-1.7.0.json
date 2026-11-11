@@ -1,12 +1,12 @@
 {
   "title": "IDP Gateway black-box suite: real agentgateway, gateway-authz (acceptance build), mock provider",
-  "started_at_utc": "2026-11-10T16:07:21.007214+00:00",
-  "finished_at_utc": "2026-11-10T16:07:52.895297+00:00",
+  "started_at_utc": "2026-11-11T04:01:58.361710+00:00",
+  "finished_at_utc": "2026-11-11T04:02:27.368819+00:00",
   "operator": "tops",
   "host": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "python": "3.12.3",
   "command": ".venv/bin/python tests/acceptance/blackbox/run.py --agentgateway /home/tops/.local/opt/agentgateway/1.7.0/agentgateway",
-  "repository_commit": "b6094bc9c844e3a68d0b939c279639317e94332f",
+  "repository_commit": "3cdf3fe4a91c00140f3784021b61fb0ca8341e33",
   "repository_dirty_files": 0,
   "repository_dirty_files_ignores": "tests/acceptance/blackbox/evidence/",
   "agentgateway": {
@@ -36,9 +36,9 @@
     "what_ran": "cmd/gateway-authz built with the acceptance tag; not the product build",
     "build_command": "go build -trimpath -tags acceptance -o tests/acceptance/blackbox/.run/gateway-authz ./cmd/gateway-authz",
     "go": "go version go1.26.8 linux/amd64",
-    "source_sha256": "4dd6bcd84d1bee5ab39bc9c9e4308785ef7f2dc284de150b3ba6fffe149af11a",
+    "source_sha256": "c84705254a5eb4c172167085360312b75bfab9ac5aa40a7c7d9bac6be4918acb",
     "source_sha256_covers": "go.mod and every non-test .go file under cmd/ and internal/",
-    "binary_sha256": "74a03e69c6a2aa1ec196b9a53b03ef0a1b276726bc7a28d614e11f488fb6ed96",
+    "binary_sha256": "8cc9f5ebaa9335873bdf6dc4a0446acb0efaf546d04681ad37dc87e9280b55dd",
     "policy_from": "tests/acceptance/blackbox/policy.poc.json",
     "credentials_from": "a file written for the run, not recorded",
     "revocations": "in memory",
@@ -1129,7 +1129,7 @@
       ],
       "observed": {
         "status": 500,
-        "seconds": 0.002
+        "seconds": 0.001
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1155,7 +1155,7 @@
       ],
       "observed": {
         "status": 403,
-        "seconds": 1.002
+        "seconds": 1.003
       },
       "indicative_for": [
         "GW-ST-008",
@@ -2161,15 +2161,15 @@
       "observed": {
         "Gatekeeper answers 500": {
           "status": 503,
-          "seconds": 0.004
+          "seconds": 0.003
         },
         "Gatekeeper slower than the broker waits": {
           "status": 503,
-          "seconds": 0.747
+          "seconds": 0.745
         },
         "Gatekeeper down": {
           "status": 503,
-          "seconds": 0.002
+          "seconds": 0.001
         },
         "broker down": {
           "status": 403,

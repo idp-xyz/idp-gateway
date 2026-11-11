@@ -123,6 +123,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
 7. 为 `P1-SS-04` 加了前置 nginx 和 `P1-FP-01..04`。`P1-SS-04` 本身没有动，仍然 FAIL。新增的 4 个用例第一次运行就通过；之后只给 `P1-FP-01` 加了一条对照检查（单个 `Host` 的请求确实会在网关日志里留下记录），用来说明"网关日志没有新增"这条检查不是空的。当前 1.7.0 为 53/54，1.6.0 为 50/51 加 3 个 SKIP。
 
 8. PDP 从 Python Mock 换成本仓库的 `gateway-authz`（Go，验收构建）。网关配置里只改了注释，用例和期望没有动。换完第一次运行 37/54：`run.py` 直接调 PDP 时从来不发 `Host` 头，Python Mock 不在乎，Go 的 HTTP 服务端按 RFC 9112 §3.2 答 400，于是控制接口全部失效，靠它们注入故障和读取记录的用例跟着失败。改的是 `run.py` 的客户端（补上 `Host` 头），不是期望。之后两个版本的结果与换之前逐项相同：1.7.0 的 273 项检查、1.6.0 的 254 项检查，没有一项变化。一个不在检查里的差别：网关到 `gateway-authz` 协商出的是 HTTP/2，到 Python Mock 时是 HTTP/1.1（证据的 `gateway_authz.http_versions_seen_from_the_gateway`）。
+9. `gateway-authz` 加了可选的一步：登记表放行之后再向 Gatekeeper 的 PDP 确认账户授权。黑盒套件不启用它（不带 `--gatekeeper-url`），`run.py`、配置和期望都没有动；因为服务的源码变了，两个版本各重跑一次，逐项结果与上一份证据相同。启用这一步时的表现在 `tests/integration/gatekeeper/` 里测。
 
 没有任何期望被放宽过。
 

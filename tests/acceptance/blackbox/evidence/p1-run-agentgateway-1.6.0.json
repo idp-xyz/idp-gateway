@@ -1,12 +1,12 @@
 {
   "title": "IDP Gateway black-box suite: real agentgateway, gateway-authz (acceptance build), mock provider",
-  "started_at_utc": "2026-11-10T16:07:53.929803+00:00",
-  "finished_at_utc": "2026-11-10T16:08:25.527941+00:00",
+  "started_at_utc": "2026-11-11T04:02:28.467557+00:00",
+  "finished_at_utc": "2026-11-11T04:02:59.939043+00:00",
   "operator": "tops",
   "host": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "python": "3.12.3",
-  "command": ".venv/bin/python tests/acceptance/blackbox/run.py",
-  "repository_commit": "b6094bc9c844e3a68d0b939c279639317e94332f",
+  "command": ".venv/bin/python tests/acceptance/blackbox/run.py --agentgateway /usr/local/bin/agentgateway",
+  "repository_commit": "3cdf3fe4a91c00140f3784021b61fb0ca8341e33",
   "repository_dirty_files": 0,
   "repository_dirty_files_ignores": "tests/acceptance/blackbox/evidence/",
   "agentgateway": {
@@ -36,9 +36,9 @@
     "what_ran": "cmd/gateway-authz built with the acceptance tag; not the product build",
     "build_command": "go build -trimpath -tags acceptance -o tests/acceptance/blackbox/.run/gateway-authz ./cmd/gateway-authz",
     "go": "go version go1.26.8 linux/amd64",
-    "source_sha256": "4dd6bcd84d1bee5ab39bc9c9e4308785ef7f2dc284de150b3ba6fffe149af11a",
+    "source_sha256": "c84705254a5eb4c172167085360312b75bfab9ac5aa40a7c7d9bac6be4918acb",
     "source_sha256_covers": "go.mod and every non-test .go file under cmd/ and internal/",
-    "binary_sha256": "6844f76e12a91c7ae7f5e73a48c511bc5bc1daccf99b40743432a29fdb8d230a",
+    "binary_sha256": "b6f806e6f2a50e19d51fa758ec60c1d3f989f487cfdfd57c68e4c186c845f6d9",
     "policy_from": "tests/acceptance/blackbox/policy.poc.json",
     "credentials_from": "a file written for the run, not recorded",
     "revocations": "in memory",
@@ -1155,7 +1155,7 @@
       ],
       "observed": {
         "status": 403,
-        "seconds": 1.003
+        "seconds": 1.002
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1323,7 +1323,7 @@
       ],
       "observed": {
         "status": 504,
-        "seconds": 2.003,
+        "seconds": 2.002,
         "provider_hits": 1
       },
       "indicative_for": [
@@ -1805,7 +1805,7 @@
             503
           ]
         },
-        "seconds_slow": 2.003,
+        "seconds_slow": 2.004,
         "provider_hits": 3
       },
       "indicative_for": [
@@ -2161,11 +2161,11 @@
       "observed": {
         "Gatekeeper answers 500": {
           "status": 503,
-          "seconds": 0.003
+          "seconds": 0.004
         },
         "Gatekeeper slower than the broker waits": {
           "status": 503,
-          "seconds": 0.75
+          "seconds": 0.749
         },
         "Gatekeeper down": {
           "status": 503,
