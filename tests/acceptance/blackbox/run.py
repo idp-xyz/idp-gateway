@@ -28,7 +28,7 @@ Usage (from the repository root):
 The evidence file is tests/acceptance/blackbox/evidence/p1-run-agentgateway-<version>.json.
 """
 from __future__ import annotations
-import argparse, base64, datetime, hashlib, hmac, http.client, json, os, platform, secrets, shutil, socket, subprocess, sys, threading, time
+import argparse, base64, copy, datetime, hashlib, hmac, http.client, json, os, platform, secrets, shutil, socket, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -1155,6 +1155,113 @@ def _(c):
     c.check('provider received nothing in either case', len(provider_hits()) == 0)
     pdp_admin('/admin/restore?account=account-blue')
     c.check('after restore: blue allowed again', gw('GET', PICKUPS + '/PCK-1', blue())['status'] == 200)
+
+
+# ---- reading back what a publisher has published -----------------------------------------------------
+# A publisher replaces the file the gateway runs from and has to learn, per instance, whether
+# the new file is what is now in effect (G03 §3-4). These cases replace the file under the
+# gateway that all the cases run against, and put the reviewed one back before they return.
+ZONES = '/providers/mockcarrier/v1/zones'   # served only while P1-RB-01 has it published
+
+
+def config_with_one_more_route(broken: bool = False) -> bytes:
+    """The reviewed configuration plus a copy of the Mode C route under another path. With
+    broken, a second copy follows that carries a field no route has: a file the gateway cannot load."""
+    doc = yaml.safe_load(CONFIG.read_bytes())
+    static = next(r for r in doc['routes'] if r['name'] == 'mockcarrier-rates-get-static')
+    for name, segment, unknown in [('readback', 'zones', False)] + ([('unloadable', 'depots', True)] if broken else []):
+        extra = copy.deepcopy(static)
+        extra['name'] = f'mockcarrier-{segment}-get-{name}'
+        extra['matches'][0]['path']['pathPrefix'] = f'/providers/mockcarrier/v1/{segment}'
+        extra['policies']['urlRewrite']['path']['prefix'] = f'/v1/{segment}'
+        if unknown:
+            extra['notAFieldOfARoute'] = True
+        doc['routes'].append(extra)
+    return yaml.safe_dump(doc, sort_keys=False).encode()
+
+
+def publish(configuration: bytes):
+    """Replace the file the gateway under test was started from, as a publisher would."""
+    RUN_CONFIG.write_bytes(configuration)
+
+
+def reload_state() -> dict:
+    """What the gateway says about its last attempt to load its file."""
+    return body_json(admin_api('GET', '/api/runtime')).get('configReload') or {}
+
+
+def wait_until(predicate, seconds: float = 6.0) -> float | None:
+    """-> how long it took for predicate() to hold, None if it did not within the time given."""
+    started = time.monotonic()
+    while time.monotonic() - started < seconds:
+        if predicate():
+            return round(time.monotonic() - started, 2)
+        time.sleep(0.1)
+    return None
+
+
+def zones_reaches_the_provider(tok: str) -> bool:
+    return header(gw('GET', ZONES + '/Z-1', tok), 'x-mock-provider') == ['mockcarrier']
+
+
+@case('P1-RB-01', 'the published file is replaced by one with one more route',
+      'the new route is served without a restart; the gateway reports the reload as applied, and what it reports '
+      'running changes with the file and returns when the file does',
+      ('GW-AT-014', 'GW-FR-014', 'GW-AT-041', 'GW-FR-041', 'GW-NAT-004', 'GW-NFR-04'))
+def _(c):
+    tok = blue()
+    published = config_dump_digest()
+    r = gw('GET', ZONES + '/Z-1', tok)
+    c.check('before: the extra path has no route', r['status'] == 404 and header(r, 'x-mock-provider') == [] and not provider_hits())
+    try:
+        publish(config_with_one_more_route())
+        took = wait_until(lambda: zones_reaches_the_provider(tok))
+        c.note('seconds_until_the_new_route_was_served', took)
+        c.check('the new route is served, with no restart', took is not None)
+        c.check('the provider received the request under the rewritten path',
+                any(h['raw_target'] == '/v1/zones/Z-1' for h in provider_hits()))
+        c.check('the gateway reports the reload as applied', reload_state() == {'synchronized': True, 'lastError': None})
+        c.check('what the gateway reports running has changed', config_dump_digest() not in (None, published))
+        c.check('a route that was there before still works', gw('GET', TRACKING + '/TRK-1', tok)['status'] == 200)
+    finally:
+        publish(S.config_bytes)
+        gone = wait_until(lambda: gw('GET', ZONES + '/Z-1', tok)['status'] == 404 and not zones_reaches_the_provider(tok))
+    c.note('seconds_until_the_route_was_gone_again', gone)
+    c.check('with the reviewed file back, the extra route is gone', gone is not None)
+    c.check('what the gateway reports running is again what it was', published is not None and config_dump_digest() == published)
+    c.check('the file is byte-identical to the reviewed configuration', RUN_CONFIG.read_bytes() == S.config_bytes == CONFIG.read_bytes())
+
+
+@case('P1-RB-02', 'the published file is replaced by one the gateway cannot load',
+      'the gateway says so, with a reason; it keeps serving the last configuration it accepted, serves nothing from '
+      'the rejected file, and still reports the accepted one as running',
+      ('GW-AT-014', 'GW-FR-014', 'GW-ST-016', 'GW-AT-039', 'GW-FR-039', 'GW-AT-041', 'GW-FR-041'))
+def _(c):
+    tok = blue()
+    published = config_dump_digest()
+    try:
+        publish(config_with_one_more_route(broken=True))
+        took = wait_until(lambda: reload_state().get('synchronized') is False)
+        state = reload_state()
+        c.note('seconds_until_the_failure_was_reported', took)
+        c.note('configReload', state)
+        c.check('the gateway reports that the reload failed', took is not None)
+        c.check('...with a reason', bool(state.get('lastError')))
+        c.check('routes of the last accepted configuration still work',
+                gw('GET', TRACKING + '/TRK-1', tok)['status'] == 200 and gw('GET', RATES, tok)['status'] == 200)
+        # The rejected file also holds a route there is nothing wrong with. Nothing of the file may be in effect.
+        r = gw('GET', ZONES + '/Z-1', tok)
+        c.check('the loadable route in the rejected file is not served either', r['status'] == 404 and header(r, 'x-mock-provider') == [])
+        c.check('what the gateway reports running is still the accepted configuration', published is not None and config_dump_digest() == published)
+        # Observation, not a check: this endpoint shows the file, not what is in effect.
+        c.note('api_config_effective_shows_the_rejected_file', b'notAFieldOfARoute' in admin_api('GET', '/api/config/effective')['body'])
+    finally:
+        publish(S.config_bytes)
+        back = wait_until(lambda: reload_state().get('synchronized') is True)
+    c.note('seconds_until_the_reload_was_reported_applied_again', back)
+    c.check('with the reviewed file back, the gateway reports the reload as applied', back is not None)
+    c.check('...and reports the same configuration as running', published is not None and config_dump_digest() == published)
+    c.check('the file is byte-identical to the reviewed configuration', RUN_CONFIG.read_bytes() == S.config_bytes == CONFIG.read_bytes())
 
 
 # ---- the gateway's own log ----------------------------------------------------------------------------
