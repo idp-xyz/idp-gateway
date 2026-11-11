@@ -260,14 +260,16 @@ class AgentgatewayPin(unittest.TestCase):
             self.assertIn(self.LOCK['image']['binary'], artefact)
             self.assertRegex(digest, r'^[0-9a-f]{64}$')
 
-    def test_both_suites_put_the_same_front_proxy_before_the_gateway(self):
-        """The Kubernetes suite's pods carry the front proxy the black-box cases were run with."""
+    def test_the_suites_put_the_same_front_proxy_before_the_gateway(self):
+        """The Kubernetes suite's pods and the compose suite's pool carry the front proxy the black-box cases were run with."""
         reference = r"'(public\.ecr\.aws/nginx/nginx-unprivileged:[\w.-]+)'\s*\n?\s*'(@sha256:[0-9a-f]{64})'"
         blackbox = re.search(r'FRONT_IMAGE = \(' + reference, text('tests/acceptance/blackbox/run.py'))
-        kubernetes = re.search(r'FRONT_IMAGE = \(' + reference, text('tests/integration/kubernetes/run.py'))
         self.assertIsNotNone(blackbox)
-        self.assertIsNotNone(kubernetes)
-        self.assertEqual(blackbox.groups(), kubernetes.groups())
+        for suite in ('kubernetes', 'compose'):
+            with self.subTest(suite=suite):
+                found = re.search(r'FRONT_IMAGE = \(' + reference, text(f'tests/integration/{suite}/run.py'))
+                self.assertIsNotNone(found)
+                self.assertEqual(blackbox.groups(), found.groups())
 
     def test_manifest_names_the_pinned_release(self):
         manifest = json.loads(text('docs/governance/project-manifest.json'))

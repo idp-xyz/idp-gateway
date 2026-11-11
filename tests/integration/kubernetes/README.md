@@ -2,6 +2,8 @@
 
 [ADR-0010](../../../docs/adr/ADR-0010.md) 提议数据面用 standalone 模式的 agentgateway。在 Kubernetes 上，一份快照是一个不可变的 ConfigMap，一个网关池是一个 Deployment；发布就是把 Deployment 指到新快照的 ConfigMap 上，由它滚动替换副本。这里在本机的一个 kind 集群里验证这套做法。
 
+运行平台的第一期是单机上的 docker compose（ADR-0010 第 10 条），那里的做法和验证在 [`tests/integration/compose`](../compose/README.md)；这里验证的是以后上 Kubernetes 时的做法。
+
 > 这是机制验证，不是验收，通过不改变验收矩阵里任何用例的 `NOT_RUN`。  
 > 集群只有一个节点。配置是一份只有几条路由的小文件；没有 JWT、ExtAuthZ 和凭证，那些在黑盒套件里。
 
@@ -18,7 +20,7 @@ tests/integration/kubernetes/stack.sh down               # 删除集群和它的
 - 集群叫 `idp-gateway-k8s`。它的 kubeconfig 只写在 `.run/kubeconfig`（已被 git 忽略）；脚本不读也不改 `~/.kube/config`，不动本机上别的 kind 集群。
 - 用到三个镜像，都按摘要引用，由集群节点自己去拉：锁定的上游 agentgateway 镜像（摘要取自 `deploy/agentgateway/agentgateway.lock.json`）、与黑盒套件相同的前置 nginx、一个带 Python 的工具镜像。节点要够得着 `cr.agentgateway.dev` 和 `public.ecr.aws`。
 - `run.py` 只动 `egress-test` 这一个命名空间，每次从头建起。证书每次运行现做，跑完删除。
-- 发布前的离线加载在本机起一个容器，临时占用回环上的 `27619`，所以不能和黑盒套件、Gatekeeper 联调同时跑。
+- 发布前的离线加载在本机起一个容器，临时占用回环上的 `27619`，所以不能和黑盒套件、Gatekeeper 联调、单机 compose 套件同时跑。
 
 ## 部署的样子
 

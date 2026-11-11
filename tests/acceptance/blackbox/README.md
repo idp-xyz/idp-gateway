@@ -118,7 +118,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
 | 27619 | 网关的回读口（TLS，要求发布器的客户端证书；所有网卡） |
 | 27620 | 前置 nginx（仅回环），转发到 27611 |
 
-`27610` 由 `deploy/agentgateway/agentgateway.local.example.yaml` 使用。`tests/integration/kubernetes` 在发布前做离线加载时也临时占用本机的 `27619`，两套不能同时跑。
+`27610` 由 `deploy/agentgateway/agentgateway.local.example.yaml` 使用。`tests/integration/kubernetes` 在发布前做离线加载时也临时占用本机的 `27619`，`tests/integration/compose` 占用 `27618`–`27620`，它们都不能和这套用例同时跑。
 
 端口段选在 `27610-27622`，是因为它低于内核给出站连接分配源端口的临时端口范围（本机为 44620–48715，Linux 默认 32768–60999）。最初用的是 `47611-47617`，落在本机临时范围内：有一次运行中网关绑定就绪端口 47616 时报 `Address in use`、整轮没跑起来，而该端口在运行前后都是空闲的。占用者没有被直接抓到，最可能的解释是某个出站连接临时拿它做了源端口。脚本现在会在端口段与临时范围重叠时拒绝启动。
 

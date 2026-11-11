@@ -25,3 +25,6 @@ tests/integration/gatekeeper/.run/
 
 # 本机的 kind 集群：它的 kubeconfig 和最近一次运行的结果。
 tests/integration/kubernetes/.run/
+
+# 单机 docker compose 的发布验证：每次运行现做的证书和配置，以及最近一次运行的结果。
+tests/integration/compose/.run/

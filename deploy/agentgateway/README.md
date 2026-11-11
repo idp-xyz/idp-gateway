@@ -17,7 +17,7 @@
 
 **测的就是要部署的那个构建。** 发布页上另有一个独立的二进制（`agentgateway-linux-amd64`）。它和镜像里的不是同一个构建：同一个提交，前者链接 musl，后者链接 glibc，两个文件的 SHA-256 不同。本项目原先测的是前者。改锁镜像时，把当时的黑盒套件（提交 `128ca4a`）原样在后者上跑了一遍：57 个用例、298 项检查的结果与前者逐项相同（单独比对，不在证据里）。此后只测镜像里的这一个。
 
-黑盒套件和 Gatekeeper 联调把这个二进制从镜像里取出来，在本机直接启动，不在容器里跑；Kubernetes 上的下发验证跑的是镜像本身。
+黑盒套件和 Gatekeeper 联调把这个二进制从镜像里取出来，在本机直接启动，不在容器里跑；Kubernetes 上和单机 docker compose 上的下发验证跑的是镜像本身。
 
 ```bash
 .venv/bin/python tests/acceptance/blackbox/pin.py --fetch   # 需要 docker：按摘要拉镜像，取出二进制，核对后放到 ~/.local/opt/agentgateway/<version>/agentgateway
@@ -39,7 +39,7 @@ python3 scripts/agentgateway_release.py     # 要联网；只用标准库
 - 只跟上游的正式发布版，不用预发布版。先读新版本发布说明里的破坏性变更。
 - `agentgateway.lock.json` 的各个字段一起改。`image.index` 和各平台的摘要用 `docker buildx imagetools inspect <仓库>:<标签>` 查。`sha256` 是取出来的二进制的摘要：先改 `image`，运行 `pin.py --fetch`，它会报出取到的二进制的 SHA-256 并拒绝安装，把这个值写进 `sha256` 再运行一次。这个值不是另一道来源核对（镜像已经是按摘要拉的），它的用处是让之后每次测试启动的都是这一个文件。
 - `docs/governance/project-manifest.json` 里 `AGENTGATEWAY` 的 `version` 和 `source` 跟着改（`tests/contracts` 里有一条测试检查两处一致）。
-- 重跑黑盒套件、Gatekeeper 联调和 Kubernetes 上的下发验证（`tests/integration/kubernetes`）；旧版本的证据文件删掉，不留作对照。
+- 重跑黑盒套件、Gatekeeper 联调、Kubernetes 上的下发验证（`tests/integration/kubernetes`）和单机上的下发验证（`tests/integration/compose`）；旧版本的证据文件删掉，不留作对照。单机上的下发靠的是网关在配置文件被改名替换之后仍然重载：这是在上游源码和它自己的一条测试里看到的实现，换版本时要重新确认。
 - 提交证据之前看一眼它的 diff 里 `agentgateway.unmitigated_defaults` 有没有变：那是新二进制在不做处理时的默认行为。变了，就回头看 `tests/acceptance/blackbox/agentgateway.poc.yaml` 里对应的处理是否仍然需要、是否仍然够用。
 - 把下面这张核查表重做一遍。
 

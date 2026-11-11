@@ -1,0 +1,61 @@
+# 单机上一个网关池在这套用例里的样子。镜像、目录、端口和会话密钥都由 run.py 经环境变量给出，
+# 单独拿这个文件起不来。
+#
+# front 和 agentgateway 共用一个网络命名空间，相当于 Kubernetes 上的同一个 Pod：网关收业务请求的
+# 监听、管理端口和指标端口只绑回环，别的容器和本机都够不着；对外的只有 front 的端口和回读口，
+# 两个都只映射到本机回环。
+name: idp-gateway-compose
+
+services:
+  front:
+    image: ${FRONT_IMAGE:?}
+    # 不经镜像自带的入口脚本：它要改 /etc/nginx 下的文件，而这里的根文件系统是只读的。
+    entrypoint: ["nginx", "-c", "/etc/front/nginx.conf", "-g", "daemon off;"]
+    ports:
+      - "127.0.0.1:${FRONT_PORT:?}:8080"      # 业务请求
+      - "127.0.0.1:${READBACK_PORT:?}:8443"   # 回读口；监听它的是共用这个网络命名空间的 agentgateway
+    volumes:
+      - "${RUN_DIR:?}/front:/etc/front:ro"
+    tmpfs:
+      - /tmp
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [pool]
+
+  agentgateway:
+    image: ${GATEWAY_IMAGE:?}
+    network_mode: "service:front"
+    depends_on: [front]
+    working_dir: /work
+    command: ["-f", "config/config.yaml"]
+    user: "${RUN_AS:?}"
+    environment:
+      SESSION_KEY: ${SESSION_KEY:?}
+    volumes:
+      # 挂的是目录，不是 config.yaml 这一个文件：发布器换文件靠改名，只挂文件的话容器里看到的
+      # 一直是旧的那一个（用例 SH-05）。
+      - "${RUN_DIR:?}/pool/config:/work/config:ro"
+      - "${RUN_DIR:?}/pool/tls:/work/tls:ro"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 60s
+
+  echo:
+    image: ${TOOLS_IMAGE:?}
+    command: ["python", "/scripts/probe.py", "echo"]
+    environment:
+      ECHO_PORT: "8000"
+      PYTHONUNBUFFERED: "1"
+    user: "65534:65534"
+    volumes:
+      - "${PROBE:?}:/scripts/probe.py:ro"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 2s
+    networks: [pool]
+
+networks:
+  pool: {}

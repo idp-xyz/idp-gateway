@@ -17,7 +17,8 @@
 | `deploy/agentgateway/` | 数据面的版本锁定（`agentgateway.lock.json`：上游 1.7.0 的容器镜像，按摘要）与原生配置（目前只有一份示意样例） |
 | `tests/acceptance/` | 正式验收矩阵；`blackbox/` 是对着真实 agentgateway 跑的黑盒用例 |
 | `tests/integration/gatekeeper/` | 与本机起的一套真实 Gatekeeper 的联调 |
-| `tests/integration/kubernetes/` | 在本机的一个 kind 集群里验证 ADR-0010 的发布方式：不可变的快照，滚动替换，逐个副本回读 |
+| `tests/integration/kubernetes/` | 在本机的一个 kind 集群里验证 ADR-0010 在 Kubernetes 上的发布方式：不可变的快照，滚动替换，逐个副本回读 |
+| `tests/integration/compose/` | 在本机用 docker compose 验证 ADR-0010 在单机上的发布方式：换掉挂载目录里的配置文件，网关不重启，经回读口确认 |
 | `tests/contracts`、`tests/security`、`scripts/` | 针对契约的离线检查与尚未移植的 Python 参考实现 |
 | `docs/` | G01–G06 设计文档、[ADR](docs/adr/README.md)、治理记录、运行手册 |
 
@@ -39,10 +40,12 @@ tests/integration/gatekeeper/stack.sh up                                   # 本
 tests/integration/kubernetes/stack.sh up                                   # 本机起一个 kind 集群（自己的 kubeconfig，不动别的集群）
 .venv/bin/python tests/integration/kubernetes/run.py                       # 约四分钟；跑完用 stack.sh down 删掉集群
 
+.venv/bin/python tests/integration/compose/run.py                          # 一分半钟左右；自己起 compose 项目，跑完自己拆（需要 docker）
+
 python3 scripts/agentgateway_release.py                                    # 锁定的 agentgateway 是否仍是上游最新发布版（要联网）
 ```
 
-黑盒用例说明与最近一次结果见 [tests/acceptance/blackbox/README.md](tests/acceptance/blackbox/README.md)；与 Gatekeeper 联调的做法和结论见 [tests/integration/gatekeeper/README.md](tests/integration/gatekeeper/README.md)；Kubernetes 上的发布验证见 [tests/integration/kubernetes/README.md](tests/integration/kubernetes/README.md)。本项目在本机只使用 `27610-27622` 端口段；三套用例共用其中的端口，不能同时跑。
+黑盒用例说明与最近一次结果见 [tests/acceptance/blackbox/README.md](tests/acceptance/blackbox/README.md)；与 Gatekeeper 联调的做法和结论见 [tests/integration/gatekeeper/README.md](tests/integration/gatekeeper/README.md)；Kubernetes 上的发布验证见 [tests/integration/kubernetes/README.md](tests/integration/kubernetes/README.md)；单机 docker compose 上的发布验证见 [tests/integration/compose/README.md](tests/integration/compose/README.md)。本项目在本机只使用 `27610-27622` 端口段；四套用例共用其中的端口，不能同时跑。
 
 已发布的 Gatekeeper（`gk.idp.xyz`）是生产环境：本仓库的任何测试都不访问它，联调只对本机实例。
 
