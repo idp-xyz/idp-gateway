@@ -33,6 +33,8 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt        # 一�
 
 tests/integration/gatekeeper/stack.sh up                                   # 本机起一套 Gatekeeper（需要它的只读检出）
 .venv/bin/python tests/integration/gatekeeper/run.py                       # 与黑盒套件共用端口，不能同时跑
+
+python3 scripts/agentgateway_release.py                                    # 锁定的 agentgateway 是否仍是上游最新发布版（要联网）
 ```
 
 黑盒用例说明与最近一次结果见 [tests/acceptance/blackbox/README.md](tests/acceptance/blackbox/README.md)；与 Gatekeeper 联调的做法和结论见 [tests/integration/gatekeeper/README.md](tests/integration/gatekeeper/README.md)。本项目只使用 `27610-27622` 端口段。
