@@ -1,0 +1,55 @@
+# Runs the offline checks listed under "构建与测试" in README.md, with the same commands, on every
+# push to main and on every pull request.
+#
+# Nothing here starts agentgateway, docker or a Gatekeeper: the black-box suite and the two
+# integration suites are still run by hand, and their committed evidence is not produced here.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# The jobs only read the repository. No secrets are used, so a pull request from a fork runs
+# exactly the same way.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  go:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # The module has no dependencies, so there is no go.sum to key a cache on.
+          cache: false
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
+      # The acceptance build is the one the black-box suite drives. It is not the product.
+      - run: go vet -tags acceptance ./...
+      - run: go test -tags acceptance ./cmd/...
+
+  contract-checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - run: python -m unittest discover -s tests/contracts -p 'test_*.py'
+      - run: python -m unittest discover -s tests/security -p 'test_*.py'
