@@ -1,12 +1,12 @@
 {
   "title": "IDP Gateway black-box suite: real agentgateway, gateway-authz (acceptance build), mock provider",
-  "started_at_utc": "2026-11-11T10:43:48.086932+00:00",
-  "finished_at_utc": "2026-11-11T10:44:24.275517+00:00",
+  "started_at_utc": "2026-11-11T11:15:35.560734+00:00",
+  "finished_at_utc": "2026-11-11T11:16:11.101541+00:00",
   "operator": "tops",
   "host": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "python": "3.12.3",
   "command": ".venv/bin/python tests/acceptance/blackbox/run.py",
-  "repository_commit": "affaff55824ff2dc38874938bb7c2f1b155101b9",
+  "repository_commit": "d8b8a432c8c27dc657db4a8b003cb2264cfa3037",
   "repository_dirty_files": 0,
   "repository_dirty_files_ignores": "tests/acceptance/blackbox/evidence/",
   "agentgateway": {
@@ -93,9 +93,9 @@
     "what_ran": "cmd/gateway-authz built with the acceptance tag; not the product build",
     "build_command": "go build -trimpath -tags acceptance -o tests/acceptance/blackbox/.run/gateway-authz ./cmd/gateway-authz",
     "go": "go version go1.26.8 linux/amd64",
-    "source_sha256": "c84705254a5eb4c172167085360312b75bfab9ac5aa40a7c7d9bac6be4918acb",
+    "source_sha256": "4f16c49611d49bb4a2e51785e3e077444dd64b00a76cd61a82b33f9c58f8200a",
     "source_sha256_covers": "go.mod and every non-test .go file under cmd/ and internal/",
-    "binary_sha256": "45114c6cf899a51ef894a2aca2ef466f9d9be1aec3471131b0e37326cfd952d7",
+    "binary_sha256": "031b029c981de95c943dcc7a9017390d78cd9309c59d202df790757919310d16",
     "policy_from": "tests/acceptance/blackbox/policy.poc.json",
     "credentials_from": "a file written for the run, not recorded",
     "revocations": "in memory",
@@ -1215,7 +1215,7 @@
       ],
       "observed": {
         "status": 403,
-        "seconds": 1.001
+        "seconds": 1.002
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1869,7 +1869,7 @@
             503
           ]
         },
-        "seconds_slow": 2.003,
+        "seconds_slow": 2.002,
         "provider_hits": 3
       },
       "indicative_for": [
@@ -2229,7 +2229,7 @@
         },
         "Gatekeeper slower than the broker waits": {
           "status": 503,
-          "seconds": 0.752
+          "seconds": 0.749
         },
         "Gatekeeper down": {
           "status": 503,
@@ -2541,7 +2541,7 @@
         }
       ],
       "observed": {
-        "seconds_until_the_failure_was_reported": 0.4,
+        "seconds_until_the_failure_was_reported": 0.3,
         "configReload": {
           "synchronized": false,
           "lastError": "routes[7]: unknown field `notAFieldOfARoute` at line 403 column 3"
