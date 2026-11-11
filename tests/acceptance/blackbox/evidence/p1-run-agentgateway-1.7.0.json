@@ -1,12 +1,12 @@
 {
   "title": "IDP Gateway black-box suite: real agentgateway, gateway-authz (acceptance build), mock provider",
-  "started_at_utc": "2026-11-11T04:01:58.361710+00:00",
-  "finished_at_utc": "2026-11-11T04:02:27.368819+00:00",
+  "started_at_utc": "2026-11-11T05:58:21.644469+00:00",
+  "finished_at_utc": "2026-11-11T05:58:50.542501+00:00",
   "operator": "tops",
   "host": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "python": "3.12.3",
-  "command": ".venv/bin/python tests/acceptance/blackbox/run.py --agentgateway /home/tops/.local/opt/agentgateway/1.7.0/agentgateway",
-  "repository_commit": "3cdf3fe4a91c00140f3784021b61fb0ca8341e33",
+  "command": ".venv/bin/python tests/acceptance/blackbox/run.py",
+  "repository_commit": "692f6715b81060176f6561e8fa7016ce26c0f87d",
   "repository_dirty_files": 0,
   "repository_dirty_files_ignores": "tests/acceptance/blackbox/evidence/",
   "agentgateway": {
@@ -20,25 +20,23 @@
       "crypto_fips": false
     },
     "binary_sha256": "1b2fc01a2de29ca113bbb6258b5cae7b1eb3c724071c09d687a449132f2f42f8",
+    "pinned_by": "deploy/agentgateway/agentgateway.lock.json",
+    "lock_sha256": "eceb1fb6f9d9f4250bca8725ea2fd20e2129bf4c93f644094d978957b15a7cf1",
     "config_file": "tests/acceptance/blackbox/agentgateway.poc.yaml",
-    "config_sha256": "924adb0c5951c894a2e2f3e76c278f4064ed7cfc86db4c825a727901e1a1ba1d",
+    "config_sha256": "4b53bb3121096c3703f749824d9ea4a846d490b959b25ca6a6800e89e5d2c585",
     "native_validation": "Configuration is valid!",
-    "overlay_file": "tests/acceptance/blackbox/agentgateway.poc.key-expression.yaml",
-    "overlay_sha256": "28a1fa6f3d14133cb8f182892d7f1125cd3ad6e3cc77baaf293e7adb7b77cbdc",
-    "overlay_accepted_by_this_binary": true,
-    "overlay_native_validation": "Configuration is valid!",
     "session_key_supplied_by": "SESSION_KEY environment variable, generated per run, not recorded",
     "start_without_session_key_rewrites_config_file": true
   },
   "policy_sha256": "44ce8acf064e0d30c06ea7842d20a51077a711e7e364a24bee9f4c98ebcb096a",
-  "runner_sha256": "134cfbf806dd543a1af9daf4403907c1eb705ef633f04b09d67ff8c7b9fe220f",
+  "runner_sha256": "dbd16d8f9212014c24834abe681b2420cc3e367a5263ef7215d89df1b82a769b",
   "gateway_authz": {
     "what_ran": "cmd/gateway-authz built with the acceptance tag; not the product build",
     "build_command": "go build -trimpath -tags acceptance -o tests/acceptance/blackbox/.run/gateway-authz ./cmd/gateway-authz",
     "go": "go version go1.26.8 linux/amd64",
     "source_sha256": "c84705254a5eb4c172167085360312b75bfab9ac5aa40a7c7d9bac6be4918acb",
     "source_sha256_covers": "go.mod and every non-test .go file under cmd/ and internal/",
-    "binary_sha256": "8cc9f5ebaa9335873bdf6dc4a0446acb0efaf546d04681ad37dc87e9280b55dd",
+    "binary_sha256": "0a0c6367ec91cf7a1bea691e34293879a0433a88917b8cfd9c0adc6d03df71cc",
     "policy_from": "tests/acceptance/blackbox/policy.poc.json",
     "credentials_from": "a file written for the run, not recorded",
     "revocations": "in memory",
@@ -49,13 +47,14 @@
   "mocks_sha256": {
     "mock_broker.py": "13566ddb1dd1f7da5e43e38b9f7d5199c1f2c903d95d2029b60df9fa675c1000",
     "mock_provider.py": "db99b02f11123c7648eab9a1e9d6f4d1f1df655191874e92f0a73a4f5ae58dc0",
-    "pki.py": "5eb56bde345deac0556abf4698813ec24bcec836470c049ffd2a5f46ae8d8aa3"
+    "pki.py": "5eb56bde345deac0556abf4698813ec24bcec836470c049ffd2a5f46ae8d8aa3",
+    "pin.py": "94bfda4672c5ce18bad12ae38b2c7fc6878b91c9b4044f441b3c69a1a4fda40d"
   },
   "front_proxy": {
     "image": "public.ecr.aws/nginx/nginx-unprivileged:stable-alpine@sha256:c3fc8fa482be50ef709c6438eb1bc98d50dbfe5a9b48be90711b8814f4dfd701",
     "version": "nginx version: nginx/1.30.6",
     "config_file": "tests/acceptance/blackbox/front.nginx.conf",
-    "config_sha256": "183524010feb404be5dac3275c86f8231858b2f5337485390c624429f08a5731",
+    "config_sha256": "5ac9a567d499b822dac04b4a746d9b98a234b04e9592a1d4b765cc8e32c582f0",
     "runs_as": "container on the host network, unprivileged user, read-only root, no capabilities"
   },
   "workload_identities": {
@@ -94,10 +93,8 @@
   "ports_left_open_after_run": [],
   "summary": {
     "cases": 54,
-    "run": 54,
     "pass": 53,
-    "fail": 1,
-    "skip": 0
+    "fail": 1
   },
   "scope_limits": [
     "The PDP is this repository's gateway-authz, built with the `acceptance` tag: the product code plus the test controls this runner uses (request log, fault modes, revoke/restore). The product build, which has none of them, is not what ran. Where a case says \"Gatekeeper\" or \"PDP\" it means this process.",
@@ -107,7 +104,7 @@
     "The local broker (Mode B) is a mock with a JSON file as its store. The gateway reaches it over loopback HTTP and proves itself with a key file, standing in for a Unix socket or pod-local restriction; that restriction itself is untested.",
     "The front proxy is one nginx build with a minimal configuration, there to show that a component in front can refuse what the gateway accepts (P1-SS-04). Four cases go through it; the others address the gateway listener directly, which stays reachable. Whether the eventual entry component behaves like this nginx has to be tested on that component.",
     "Single gateway process: nothing here speaks to multi-replica behaviour, config rollout, quotas or load.",
-    "The result holds for the agentgateway build named in this file only; each version tested has its own evidence file.",
+    "The result holds for the agentgateway build named in this file only: the release pinned in deploy/agentgateway/agentgateway.lock.json at the time of the run. No other version is tested.",
     "HTTP ExtAuthZ only. gRPC ExtAuthZ, decision caching, CONNECT, gRPC upstreams, HMAC signing and mTLS towards providers are untested.",
     "DNS rebinding and network-layer egress ACLs are untested: the upstream is a fixed loopback address.",
     "This is PoC evidence. It does not change any NOT_RUN acceptance case or STD-CP gate."
@@ -1155,7 +1152,7 @@
       ],
       "observed": {
         "status": 403,
-        "seconds": 1.003
+        "seconds": 1.002
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1323,7 +1320,7 @@
       ],
       "observed": {
         "status": 504,
-        "seconds": 2.002,
+        "seconds": 2.003,
         "provider_hits": 1
       },
       "indicative_for": [
@@ -2165,11 +2162,11 @@
         },
         "Gatekeeper slower than the broker waits": {
           "status": 503,
-          "seconds": 0.745
+          "seconds": 0.744
         },
         "Gatekeeper down": {
           "status": 503,
-          "seconds": 0.001
+          "seconds": 0.002
         },
         "broker down": {
           "status": 403,
@@ -2435,7 +2432,7 @@
       ],
       "observed": {
         "start_without_session_key_rewrites_config_file": true,
-        "reviewed_configuration": "tests/acceptance/blackbox/agentgateway.poc.yaml + tests/acceptance/blackbox/agentgateway.poc.key-expression.yaml"
+        "reviewed_configuration": "tests/acceptance/blackbox/agentgateway.poc.yaml"
       },
       "indicative_for": [
         "GW-NAT-004",
