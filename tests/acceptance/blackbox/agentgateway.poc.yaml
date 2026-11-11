@@ -1,5 +1,5 @@
-# P1 PoC — native agentgateway configuration. The same file is accepted and run, unchanged,
-# by the 1.6.0 and the 1.7.0 binary.
+# P1 PoC — native agentgateway configuration, written for and run on the one release pinned
+# in deploy/agentgateway/agentgateway.lock.json.
 #
 # Real:  the agentgateway data plane (JWT validation, HTTP ExtAuthZ, header handling, routing,
 #        and its side of the mutual TLS session with the PDP).
@@ -12,16 +12,10 @@
 # Run through run.py: it creates the .run/ files referenced below and starts the
 # gateway with tests/acceptance/blackbox as working directory (relative paths resolve against the cwd).
 #
-# A second file, agentgateway.poc.key-expression.yaml, holds one more route that only the
-# 1.7.0 schema accepts. run.py appends that route to the copy the gateway is started
-# from when the binary's own validator accepts the result. Keep `routes` the last key of
-# this file.
-#
-# There is deliberately no config.session.key here. 1.7.0 started without one generates a
-# key and WRITES IT INTO THE CONFIG FILE it was started from. run.py therefore starts
-# the gateway from a copy in .run/ and passes a per-run key in the SESSION_KEY environment
-# variable, which stops the rewrite (case P1-CF-01). "key: disabled" is not usable in a
-# file shared by both versions: 1.7.0 accepts it, 1.6.0 rejects it.
+# There is deliberately no config.session.key here. Started without one, the gateway
+# generates a key and WRITES IT INTO THE CONFIG FILE it was started from. run.py therefore
+# starts the gateway from a copy in .run/ and passes a per-run key in the SESSION_KEY
+# environment variable, which stops the rewrite (case P1-CF-01).
 #
 # Ports 27611-27618 and 27620 are reserved for this PoC:
 #   27611 gateway listener   27612 mock provider      27613 gateway-authz (TLS)
@@ -30,7 +24,7 @@
 #   27618 mock local broker (Mode B)
 #   27620 front proxy (nginx, front.nginx.conf) that forwards to 27611
 #
-# Neither schema has a bind-address field for a gateway listener: 27611 listens on every
+# The schema has no bind-address field for a gateway listener: 27611 listens on every
 # interface of the machine for as long as the PoC runs. Admin, stats and readiness are
 # pinned to loopback below.
 #
@@ -331,3 +325,93 @@ routes:
         - x-forwarded-for
         - x-forwarded-proto
         - forwarded
+
+# ---------------------------------------------------------------------------------------
+# Mode A again, with the credential placed by backendAuth.key.expression. Same PDP, same
+# ExtAuthZ exchange and same answer as the two Mode A routes at the top. What differs is
+# how the gateway takes the credential out of that answer:
+#   those routes   includeResponseHeaders copies the PDP's `authorization` header.
+#   this route     `metadata` reads it into extauthz.credential, and
+#                  backendAuth.key.expression places that value on the upstream request.
+# ADR-0008 proposes header copying for Mode A; this is the alternative it considered
+# (cases P1-KX-01..03).
+# ---------------------------------------------------------------------------------------
+- name: mockcarrier-pickups-get-expression
+  gateways: [egress-test]
+  hostnames: ["egress-api.idp.test"]
+  matches:
+  - path:
+      pathPrefix: /providers/mockcarrier/v1/pickups
+    method: GET
+  policies:
+    authorization:
+      rules:
+      - allow: 'request.path.matches("^(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$")'
+    extAuthz:
+      host: 127.0.0.1:27613
+      failureMode: deny
+      includeRequestHeaders:
+      - x-provider-account
+      policies:
+        backendTLS:
+          cert: .run/tls/gateway.crt
+          key: .run/tls/gateway.key
+          root: .run/tls/ca.crt
+          hostname: gatekeeper.idp.test
+        http:
+          requestTimeout: 1s
+      protocol:
+        http:
+          path: '"/v1/extauthz/check"'
+          addRequestHeaders:
+            x-idp-verified-subject: jwt.sub
+            x-idp-verified-tenant: jwt.tenant_id
+            x-idp-verified-env: jwt.env
+            x-idp-route-id: '"mockcarrier-pickups-get-expression"'
+            x-idp-provider-id: '"mockcarrier"'
+            x-idp-operation-id: '"pickups.get"'
+            x-idp-environment: '"TEST"'
+            x-idp-method: request.method
+            x-idp-path: request.path
+          # Nothing from the PDP's answer is copied onto the upstream request. One value
+          # is read out of it. If the header is absent the expression fails, the gateway
+          # logs the failure and extauthz.credential stays unset.
+          metadata:
+            credential: 'response.headers["authorization"]'
+    urlRewrite:
+      authority:
+        full: 127.0.0.1:27612
+      path:
+        prefix: /v1/pickups
+    responseHeaderModifier:
+      remove:
+      - location
+      - set-cookie
+    timeout:
+      requestTimeout: 2s
+  backends:
+  - host: 127.0.0.1:27612
+    policies:
+      # Fail closed if the PDP allowed but released no credential. This rule runs BEFORE
+      # backendAuth: at this point the request has no Authorization header yet, so the
+      # header test used on the Mode A routes would deny every request here.
+      authorization:
+        rules:
+        - allow: 'has(extauthz.credential) && extauthz.credential.startsWith("Bearer ")'
+      backendAuth:
+        key:
+          expression: extauthz.credential
+          location:
+            header:
+              name: authorization
+      requestHeaderModifier:
+        remove:
+        - x-provider-account
+        - cookie
+        - x-forwarded-host
+        - x-forwarded-for
+        - x-forwarded-proto
+        - forwarded
+        - x-idp-verified-subject
+        - x-idp-verified-tenant
+        - x-idp-verified-env

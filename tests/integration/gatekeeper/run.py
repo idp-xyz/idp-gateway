@@ -29,6 +29,7 @@ RUN = HERE / '.run'
 TLS = RUN / 'tls'
 BLACKBOX = ROOT / 'tests/acceptance/blackbox'
 sys.path.insert(0, str(BLACKBOX))
+import pin  # noqa: E402
 import pki  # noqa: E402
 
 PROJECT = 'idp-gateway-gk'
@@ -37,7 +38,6 @@ BRIDGE = 'http://127.0.0.1:27622'
 AUDIENCE = 'idp-egress-gateway'   # 与黑盒套件相同。本机实例的 TOKEN_AUDIENCE 里加了它，见 compose.local.yml
 OTHER_AUDIENCE = 'bip-api'        # Gatekeeper 默认的受众：发给别的服务的令牌
 PORTS = {'gateway': 27611, 'provider': 27612, 'authz': 27613, 'admin': 27614, 'stats': 27615, 'readiness': 27616}
-BINARIES = {'1.7.0': '/home/tops/.local/opt/agentgateway/1.7.0/agentgateway', '1.6.0': '/usr/local/bin/agentgateway'}
 HOST = 'egress-api.idp.test'
 TRACKING = '/providers/mockcarrier/v1/tracking/TRK-1'
 BINDING = 'gatekeeper:mockcarrier-test'
@@ -50,7 +50,7 @@ GATEWAY_DIFFERENCES = [
     ('        file: .run/jwks.json\n', f'        url: {ISSUER}/.well-known/jwks.json\n', 1),
     # Gatekeeper 的令牌里没有 env 声明。这里的"Token 环境"是这个网关实例的常量：
     # 它只信一个签发者，签发者属于哪个环境是部署时定下的。
-    ("x-idp-verified-env: jwt.env\n", "x-idp-verified-env: '\"TEST\"'\n", 3),
+    ("x-idp-verified-env: jwt.env\n", "x-idp-verified-env: '\"TEST\"'\n", 4),
 ]
 
 
@@ -553,37 +553,37 @@ def main() -> int:
     global KEY_ROTATION
     parser = argparse.ArgumentParser(description='gateway-authz 与本机 Gatekeeper 的联调')
     parser.add_argument('--key-rotation', action='store_true',
-                        help=f'加跑 GK-12：给本机 Hydra 换访问令牌的签名密钥（每个网关版本多等至多 {ROTATION_WAIT} 秒，并给本机实例留下一把新密钥）')
+                        help=f'加跑 GK-12：给本机 Hydra 换访问令牌的签名密钥（多等至多 {ROTATION_WAIT} 秒，并给本机实例留下一把新密钥）')
     KEY_ROTATION = parser.parse_args().key_rotation
+    # 只跑 deploy/agentgateway/agentgateway.lock.json 锁定的那个发布版；找到的二进制不是它就不开始。
+    try:
+        binary, reported = pin.resolve()
+    except pin.PinError as e:
+        die(str(e))
+    version = reported['version']
     if call('GET', ISSUER + '/health/ready')[0] != 200 or call('GET', BRIDGE + '/admin/me')[0] != 200:
         die('本机的 Gatekeeper 没有就绪：运行 tests/integration/gatekeeper/stack.sh up')
     state = seed()
     sync_tuples(state)
     made = prepare(state)
-    summary, exit_code = {}, 0
-    for version, binary in BINARIES.items():
-        if not Path(binary).exists():
-            print(f'agentgateway {version}: 没有找到 {binary}，跳过')
-            continue
-        results = Results(version)
-        try:
-            start_all(binary)
-            run_cases(results, state, made)
-        finally:
-            stop_all()
-            sync_tuples(state)
-        print(f'\nagentgateway {version}')
-        results.report()
-        failed = results.failed()
-        summary[version] = {'cases': results.cases, 'passed': len(results.cases) - len(failed), 'failed': [c['id'] for c in failed]}
-        exit_code |= bool(failed)
+    results = Results(version)
+    try:
+        start_all(binary)
+        run_cases(results, state, made)
+    finally:
+        stop_all()
+        sync_tuples(state)
+    print(f'\nagentgateway {version}（{binary}）')
+    results.report()
+    failed = results.failed()
+    summary = {version: {'cases': results.cases, 'passed': len(results.cases) - len(failed), 'failed': [c['id'] for c in failed]}}
     gatekeeper_commit = subprocess.run(['git', '-C', os.environ.get('GK_SRC', str(Path.home() / '.local/src/idp-gatekeeper')),
                                         'rev-parse', '--short', 'HEAD'], capture_output=True, text=True).stdout.strip()
     (RUN / 'result.json').write_text(json.dumps({'gatekeeper_commit': gatekeeper_commit, 'gateway_differences': GATEWAY_DIFFERENCES,
                                                  'agentgateway': summary}, ensure_ascii=False, indent=1), encoding='utf-8')
-    print('\n' + '；'.join(f"{v}: {s['passed']}/{len(s['cases'])}" for v, s in summary.items()),
+    print(f"\n{version}: {len(results.cases) - len(failed)}/{len(results.cases)}",
           f'（Gatekeeper {gatekeeper_commit}；详细结果在 {RUN / "result.json"}）')
-    return int(exit_code)
+    return int(bool(failed))
 
 
 if __name__ == '__main__':

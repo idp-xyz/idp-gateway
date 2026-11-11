@@ -5,8 +5,10 @@ Builds cmd/gateway-authz, starts the processes (gateway, gateway-authz, mock loc
 mock provider and a target no route may reach), drives requests through the gateway, checks
 what the PDP, the broker and the provider actually received, and writes one evidence file.
 Expectations are taken from G01/G03/G04 and are fixed in this file before the run; a case
-that does not meet its expectation is reported as FAIL, not adjusted. A case for a route the
-binary's own validator does not accept is reported as SKIP.
+that does not meet its expectation is reported as FAIL, not adjusted.
+
+The gateway is the one release pinned in deploy/agentgateway/agentgateway.lock.json. A binary
+that is not that release (version, git revision and SHA-256; see pin.py) is not started.
 
 The PDP on the "gatekeeper" port is gateway-authz built with the `acceptance` tag: the same
 code as the product build plus the controls this runner needs (see what it received, make it
@@ -14,10 +16,10 @@ answer 500, slow, or without a credential, revoke an account). Case titles, port
 certificate names still say "Gatekeeper" and "PDP" from the time a Python mock stood there.
 
 Usage (from the repository root):
-    .venv/bin/python tests/acceptance/blackbox/run.py                              the agentgateway on PATH
-    .venv/bin/python tests/acceptance/blackbox/run.py --agentgateway /path/to/bin  another build of it
-    .venv/bin/python tests/acceptance/blackbox/run.py --check-evidence             are the evidence files about the current tree?
-Each agentgateway version writes its own evidence file, tests/acceptance/blackbox/evidence/p1-run-agentgateway-<version>.json.
+    .venv/bin/python tests/acceptance/blackbox/run.py                              the pinned agentgateway, from ~/.local/opt/agentgateway/<version>/ or else PATH
+    .venv/bin/python tests/acceptance/blackbox/run.py --agentgateway /path/to/bin  the pinned agentgateway, kept somewhere else
+    .venv/bin/python tests/acceptance/blackbox/run.py --check-evidence             is the evidence file about the current tree?
+The evidence file is tests/acceptance/blackbox/evidence/p1-run-agentgateway-<version>.json.
 """
 from __future__ import annotations
 import argparse, base64, datetime, hashlib, hmac, http.client, json, os, platform, secrets, shutil, socket, subprocess, sys, threading, time
@@ -29,6 +31,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jsonschema import Draft202012Validator
 
+import pin
 import pki
 
 HERE = Path(__file__).resolve().parent
@@ -36,10 +39,9 @@ ROOT = HERE.parents[2]
 RUN = HERE / '.run'
 TLS = RUN / 'tls'
 CONFIG = HERE / 'agentgateway.poc.yaml'
-# One more route, appended to the configuration when the binary accepts it (1.7.0 does).
-OVERLAY = HERE / 'agentgateway.poc.key-expression.yaml'
 # The gateway is started from a per-run copy: a gateway that writes to its own config file
-# (1.7.0 does, see P1-CF-01) must not be able to alter the reviewed file in the repository.
+# (it does when it has no session key, see P1-CF-01) must not be able to alter the reviewed
+# file in the repository.
 RUN_CONFIG = RUN / 'agentgateway.yaml'
 PORTS = {'gateway': 27611, 'provider': 27612, 'gatekeeper': 27613, 'admin': 27614,
          'stats': 27615, 'readiness': 27616, 'forbidden': 27617, 'broker': 27618, 'front': 27620}
@@ -55,7 +57,7 @@ TRACKING = '/providers/mockcarrier/v1/tracking'
 LABELS = '/providers/mockcarrier/v1/labels'
 RATES = '/providers/mockcarrier/v1/rates'
 MANIFESTS = '/providers/mockcarrier/v1/manifests'   # Mode B route
-PICKUPS = '/providers/mockcarrier/v1/pickups'       # backendAuth.key.expression route (overlay)
+PICKUPS = '/providers/mockcarrier/v1/pickups'       # backendAuth.key.expression route
 
 # --------------------------------------------------------------------------------------
 # keys, tokens
@@ -196,7 +198,7 @@ def stop(name: str, port: int | None = None):
 
 AUTHZ_BINARY = RUN / 'gateway-authz'
 AUTHZ_BUILD = ['build', '-trimpath', '-tags', 'acceptance', '-o', 'tests/acceptance/blackbox/.run/gateway-authz', './cmd/gateway-authz']
-MOCKS = ('mock_broker.py', 'mock_provider.py', 'pki.py')
+MOCKS = ('mock_broker.py', 'mock_provider.py', 'pki.py', 'pin.py')   # the modules beside this file; not all of them are mocks
 
 
 def find_go() -> str | None:
@@ -350,7 +352,6 @@ class S:  # per-run secrets; never written to the evidence file
     token = {}  # account -> provider token
     # not secrets: what the runner observed about the binary before the cases
     default_start_rewrites = None  # default_start_rewrites_config()
-    overlay_accepted = False       # does the binary's validator accept the key-expression route?
     config_bytes = b''             # what the gateway is started from
     pdp_protocols: set = set()     # HTTP versions the gateway spoke to the PDP
 
@@ -358,9 +359,9 @@ class S:  # per-run secrets; never written to the evidence file
 CASES: list[tuple] = []
 
 
-def case(cid: str, title: str, expectation: str, maps_to: tuple = (), needs_overlay: bool = False):
+def case(cid: str, title: str, expectation: str, maps_to: tuple = ()):
     def deco(fn):
-        CASES.append((cid, title, expectation, maps_to, fn, needs_overlay))
+        CASES.append((cid, title, expectation, maps_to, fn))
         return fn
     return deco
 
@@ -1070,10 +1071,10 @@ def _(c):
             r['status'] == 200 and carries_credential(r))
 
 
-# ---- backendAuth.key.expression (route from the overlay; needs a binary that accepts it) ---------------
+# ---- backendAuth.key.expression ------------------------------------------------------------------------
 @case('P1-KX-01', 'credential placed by backendAuth.key.expression instead of header copying',
       'the same result as on the Mode A routes: each tenant leaves with exactly its own account\'s credential',
-      ('GW-AT-006', 'GW-NAT-001', 'GW-AT-008', 'GW-FR-006', 'GW-FR-008'), needs_overlay=True)
+      ('GW-AT-006', 'GW-NAT-001', 'GW-AT-008', 'GW-FR-006', 'GW-FR-008'))
 def _(c):
     tok = blue()
     r = gw('GET', PICKUPS + '/PCK-1', tok, [('Cookie', 'session=caller-session'), ('X-Provider-Account', 'account-blue')])
@@ -1095,7 +1096,7 @@ def _(c):
 
 @case('P1-KX-02', 'key.expression route: PDP allows but releases no credential',
       'the gateway itself refuses to forward; no Authorization header of any kind reaches the provider',
-      ('GW-ST-009', 'GW-AT-043', 'GW-FR-006', 'GW-FR-043'), needs_overlay=True)
+      ('GW-ST-009', 'GW-AT-043', 'GW-FR-006', 'GW-FR-043'))
 def _(c):
     pdp_admin('/admin/mode?value=allow_without_credential')
     tok = blue()
@@ -1111,7 +1112,7 @@ def _(c):
 
 @case('P1-KX-03', 'key.expression route: denial and revocation',
       'another tenant\'s account and a revoked account are each refused on that request; nothing is forwarded',
-      ('GW-AT-004', 'GW-AT-026', 'GW-FR-004', 'GW-FR-026'), needs_overlay=True)
+      ('GW-AT-004', 'GW-AT-026', 'GW-FR-004', 'GW-FR-026'))
 def _(c):
     r = gw('GET', PICKUPS + '/PCK-1', blue(), [('X-Provider-Account', 'account-green')])
     c.check('tenant-blue asks for account-green: 403', r['status'] == 403)
@@ -1130,7 +1131,7 @@ def _(c):
       ('GW-AT-007', 'GW-FR-007', 'GW-NFR-05'))
 def _(c):
     tok = blue()
-    routes = [TRACKING + '/TRK-1', MANIFESTS + '/MAN-1', RATES] + ([PICKUPS + '/PCK-1'] if S.overlay_accepted else [])
+    routes = [TRACKING + '/TRK-1', MANIFESTS + '/MAN-1', RATES, PICKUPS + '/PCK-1']
     ok = [gw('GET', t, tok)['status'] for t in routes]
     pdp_admin('/admin/mode?value=allow_without_credential')   # makes the gateway log its own credential-handling failures
     for t in routes:
@@ -1152,9 +1153,9 @@ def _(c):
 def _(c):
     # Observation, not a check: what the same binary does when nobody supplies a session key.
     c.note('start_without_session_key_rewrites_config_file', S.default_start_rewrites)
-    c.note('reviewed_configuration', 'tests/acceptance/blackbox/agentgateway.poc.yaml' + (' + tests/acceptance/blackbox/agentgateway.poc.key-expression.yaml' if S.overlay_accepted else ''))
+    c.note('reviewed_configuration', 'tests/acceptance/blackbox/agentgateway.poc.yaml')
     c.check('the file the gateway is running from is byte-identical to the reviewed configuration',
-            RUN_CONFIG.read_bytes() == S.config_bytes and S.config_bytes.startswith(CONFIG.read_bytes()))
+            RUN_CONFIG.read_bytes() == S.config_bytes == CONFIG.read_bytes())
     c.check('the gateway is serving while this is checked', gw('GET', TRACKING + '/TRK-1', blue())['status'] == 200)
 
 
@@ -1177,7 +1178,8 @@ SCOPE_LIMITS = [
     'what the gateway accepts (P1-SS-04). Four cases go through it; the others address the gateway listener directly, '
     'which stays reachable. Whether the eventual entry component behaves like this nginx has to be tested on that component.',
     'Single gateway process: nothing here speaks to multi-replica behaviour, config rollout, quotas or load.',
-    'The result holds for the agentgateway build named in this file only; each version tested has its own evidence file.',
+    'The result holds for the agentgateway build named in this file only: the release pinned in '
+    'deploy/agentgateway/agentgateway.lock.json at the time of the run. No other version is tested.',
     'HTTP ExtAuthZ only. gRPC ExtAuthZ, decision caching, CONNECT, gRPC upstreams, HMAC signing and mTLS towards providers are untested.',
     'DNS rebinding and network-layer egress ACLs are untested: the upstream is a fixed loopback address.',
     'This is PoC evidence. It does not change any NOT_RUN acceptance case or STD-CP gate.',
@@ -1209,25 +1211,13 @@ def prepare():
             os.chmod(f, 0o600)
 
 
-def compose_config(binary: str) -> dict:
-    """Decide what the gateway is started from: the base file, plus the key-expression route
-    when this binary's validator accepts the two together. Then tell the mocks."""
-    def validate(data: bytes):
-        RUN_CONFIG.write_bytes(data)
-        v = subprocess.run([binary, '--validate-only', '-f', str(RUN_CONFIG.relative_to(HERE))], cwd=HERE, capture_output=True, text=True)
-        return v.returncode == 0, (v.stdout + v.stderr).strip()
-
-    # Both files end with their `routes` list, so the overlay's items can follow the base
-    # file's as text: what the gateway reads is the reviewed bytes, not a re-serialisation.
-    base = CONFIG.read_bytes()
-    _, key, items = OVERLAY.read_bytes().partition(b'\nroutes:\n')
-    if not key or not items.startswith(b'- name:'):
-        raise SystemExit(f'{OVERLAY.name}: expected a single top-level "routes:" list')
-    base_ok, base_said = validate(base)
-    overlay_ok, overlay_said = validate(base + b'\n' + items) if base_ok else (False, 'not tried')
-    S.overlay_accepted = overlay_ok
-    S.config_bytes = base + b'\n' + items if overlay_ok else base
+def stage_config(binary: str) -> tuple[bool, str]:
+    """Copy the reviewed configuration to where the gateway is started from, have the binary's
+    own validator read that copy, and tell the mocks. -> (accepted, what the validator said)"""
+    S.config_bytes = CONFIG.read_bytes()
     RUN_CONFIG.write_bytes(S.config_bytes)
+    v = subprocess.run([binary, '--validate-only', '-f', str(RUN_CONFIG.relative_to(HERE))], cwd=HERE, capture_output=True, text=True)
+    RUN_CONFIG.write_bytes(S.config_bytes)   # start from the reviewed bytes even if validating wrote to the copy
     state = {'admin_secret': S.admin, 'ports': PORTS, 'tls_dir': str(TLS),
              'config_digest': 'sha256:' + hashlib.sha256(S.config_bytes).hexdigest(),
              'provider_slow_seconds': PROVIDER_SLOW_SECONDS, 'pdp_slow_seconds': PDP_SLOW_SECONDS,
@@ -1235,7 +1225,7 @@ def compose_config(binary: str) -> dict:
     (RUN / 'state.json').write_text(json.dumps(state), encoding='utf-8')
     for f in (RUN_CONFIG, RUN / 'state.json'):
         os.chmod(f, 0o600)
-    return {'base_ok': base_ok, 'base_said': base_said, 'overlay_said': ' '.join(overlay_said.split())[:400]}
+    return v.returncode == 0, (v.stdout + v.stderr).strip()
 
 
 def ephemeral_range() -> tuple[int, int] | None:
@@ -1248,9 +1238,10 @@ def ephemeral_range() -> tuple[int, int] | None:
 
 
 def input_digests() -> dict:
-    """What a run depends on besides the agentgateway binary, as recorded in every evidence file."""
+    """What a run depends on, as recorded in every evidence file. The agentgateway binary is
+    covered through the lock: a run starts only the binary the lock names."""
     sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
-    return {('agentgateway', 'config_sha256'): sha(CONFIG), ('agentgateway', 'overlay_sha256'): sha(OVERLAY),
+    return {('agentgateway', 'lock_sha256'): sha(pin.LOCK), ('agentgateway', 'config_sha256'): sha(CONFIG),
             ('policy_sha256',): sha(HERE / 'policy.poc.json'), ('runner_sha256',): sha(Path(__file__).resolve()),
             ('front_proxy', 'config_sha256'): sha(FRONT_CONF), ('gateway_authz', 'source_sha256'): authz_source_sha256(),
             **{('mocks_sha256', f): sha(HERE / f) for f in MOCKS}}
@@ -1269,7 +1260,7 @@ def check_evidence() -> int:
             if node != value:
                 differs.append('.'.join(keys))
         s = recorded.get('summary', {})
-        print(f"{'STALE' if differs else 'OK   '}  {f.name}  ({s.get('pass')}/{s.get('run')} passed, commit {str(recorded.get('repository_commit'))[:7]})")
+        print(f"{'STALE' if differs else 'OK   '}  {f.name}  ({s.get('pass')}/{s.get('cases')} passed, commit {str(recorded.get('repository_commit'))[:7]})")
         for key in differs:
             print(f'        differs from that run: {key}')
         stale += bool(differs)
@@ -1278,8 +1269,9 @@ def check_evidence() -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description='black-box runner')
-    ap.add_argument('--agentgateway', default='agentgateway', metavar='BINARY',
-                    help='agentgateway binary to test (default: the one on PATH)')
+    ap.add_argument('--agentgateway', metavar='BINARY',
+                    help='where the pinned agentgateway binary is (default: ~/.local/opt/agentgateway/<version>/agentgateway, '
+                         'else the one on PATH); a binary that is not the pinned release is refused')
     ap.add_argument('--check-evidence', action='store_true',
                     help='run nothing; report whether each evidence file was produced from the files as they are now')
     args = ap.parse_args()
@@ -1288,15 +1280,12 @@ def main() -> int:
     go = find_go()
     if not go:
         print('go toolchain not found (needed to build cmd/gateway-authz)'); return 2
-    binary = shutil.which(args.agentgateway)
-    if not binary:
-        print(f'agentgateway binary not found: {args.agentgateway}'); return 2
-    binary = str(Path(binary).resolve())
-    version = json.loads(sh([binary, '--version']) or '{}')
-    if not version.get('version'):
-        print(f'{binary} did not report a version'); return 2
+    try:
+        binary, version = pin.resolve(args.agentgateway)
+    except pin.PinError as e:
+        print(e); return 2
     evidence_file = HERE / 'evidence' / f"p1-run-agentgateway-{version['version']}.json"
-    print(f"agentgateway {version['version']} at {binary}")
+    print(f"agentgateway {version['version']} at {binary}, the release pinned in {pin.LOCK.relative_to(ROOT).as_posix()}")
 
     busy = [f'{n}:{p}' for n, p in PORTS.items() if port_open(p)]
     if busy:
@@ -1318,11 +1307,10 @@ def main() -> int:
         print('gateway-authz did not build:', build_said); return 2
     go_version = sh([go, 'version'])
     print('gateway-authz (acceptance build):', go_version)
-    validation = compose_config(binary)
-    print('native config validation:', validation['base_said'])
-    if not validation['base_ok']:
+    config_ok, config_said = stage_config(binary)
+    print('native config validation:', config_said)
+    if not config_ok:
         return 2
-    print('key-expression route:', 'accepted' if S.overlay_accepted else f"not accepted by this binary ({validation['overlay_said'][:160]})")
 
     started = datetime.datetime.now(datetime.timezone.utc)
     results, listeners = [], ''
@@ -1339,13 +1327,8 @@ def main() -> int:
         listeners = sh(['ss', '-ltnH'])
         listeners = sorted(l.split()[3] for l in listeners.splitlines() if any(f':{p}' in l for p in PORTS.values()))
 
-        for cid, title, expectation, maps_to, fn, needs_overlay in CASES:
+        for cid, title, expectation, maps_to, fn in CASES:
             record = {'id': cid, 'title': title, 'expectation': expectation}
-            if needs_overlay and not S.overlay_accepted:
-                results.append({**record, 'result': 'SKIP', 'checks': [], 'indicative_for': list(maps_to),
-                                'observed': {'skipped_because': f"this binary's validator does not accept {OVERLAY.name}"}})
-                print(f'SKIP  {cid}  {title}')
-                continue
             reset_all()
             c = Ctx()
             try:
@@ -1374,28 +1357,25 @@ def main() -> int:
         still_open = [p for p in PORTS.values() if port_open(p)]
 
     passed = sum(r['result'] == 'PASS' for r in results)
-    skipped = sum(r['result'] == 'SKIP' for r in results)
     evidence = {
         'title': 'IDP Gateway black-box suite: real agentgateway, gateway-authz (acceptance build), mock provider',
         'started_at_utc': started.isoformat(), 'finished_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
         'operator': sh(['git', 'config', 'user.name']), 'host': platform.platform(), 'python': sys.version.split()[0],
         'command': ' '.join(['.venv/bin/python', 'tests/acceptance/blackbox/run.py'] + sys.argv[1:]),
         'repository_commit': sh(['git', 'rev-parse', 'HEAD']),
-        # Evidence files are this runner's output, not its input: a run on a second version
-        # must not count the first version's fresh evidence as a modified repository.
+        # Evidence files are this runner's output, not its input: a rerun must not count the
+        # evidence of the run before it, not yet committed, as a modified repository.
         # (A porcelain line is "XY path"; X may be a blank that sh() has stripped off the first line.)
         'repository_dirty_files': len([l for l in sh(['git', 'status', '--porcelain', '--untracked-files=all']).splitlines()
                                        if l.strip() and not l.split(None, 1)[-1].strip('"').startswith('tests/acceptance/blackbox/evidence/')]),
         'repository_dirty_files_ignores': 'tests/acceptance/blackbox/evidence/',
         'agentgateway': {'version': version,
                          'binary_sha256': hashlib.sha256(Path(binary).read_bytes()).hexdigest(),
+                         'pinned_by': pin.LOCK.relative_to(ROOT).as_posix(),
+                         'lock_sha256': hashlib.sha256(pin.LOCK.read_bytes()).hexdigest(),
                          'config_file': 'tests/acceptance/blackbox/agentgateway.poc.yaml',
                          'config_sha256': hashlib.sha256(CONFIG.read_bytes()).hexdigest(),
-                         'native_validation': validation['base_said'],
-                         'overlay_file': 'tests/acceptance/blackbox/agentgateway.poc.key-expression.yaml',
-                         'overlay_sha256': hashlib.sha256(OVERLAY.read_bytes()).hexdigest(),
-                         'overlay_accepted_by_this_binary': S.overlay_accepted,
-                         'overlay_native_validation': validation['overlay_said'],
+                         'native_validation': config_said,
                          'session_key_supplied_by': 'SESSION_KEY environment variable, generated per run, not recorded',
                          'start_without_session_key_rewrites_config_file': S.default_start_rewrites},
         'policy_sha256': hashlib.sha256((HERE / 'policy.poc.json').read_bytes()).hexdigest(),
@@ -1416,17 +1396,16 @@ def main() -> int:
         'workload_identities': pki.ID,
         'ports': PORTS, 'host_ephemeral_port_range': ephemeral_range(),
         'listen_addresses_observed': listeners, 'ports_left_open_after_run': still_open,
-        'summary': {'cases': len(results), 'run': len(results) - skipped, 'pass': passed,
-                    'fail': len(results) - skipped - passed, 'skip': skipped},
+        'summary': {'cases': len(results), 'pass': passed, 'fail': len(results) - passed},
         'scope_limits': SCOPE_LIMITS,
         'formal_acceptance': 'NOT_RUN (unchanged by this PoC)',
         'cases': results,
     }
     evidence_file.parent.mkdir(exist_ok=True)
     evidence_file.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-    print(f"\n{passed}/{len(results) - skipped} cases passed, {skipped} skipped; evidence: {evidence_file.relative_to(ROOT)}; "
+    print(f"\n{passed}/{len(results)} cases passed; evidence: {evidence_file.relative_to(ROOT)}; "
           f"ports left open: {still_open or 'none'}")
-    return 0 if passed == len(results) - skipped else 1
+    return 0 if passed == len(results) else 1
 
 
 if __name__ == '__main__':

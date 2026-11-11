@@ -14,7 +14,7 @@
 | `internal/platform` | 与上下文无关的技术件 |
 | `internal/architecture` | 包依赖方向的测试 |
 | `contracts/` | OpenAPI 与 JSON Schema |
-| `deploy/agentgateway/` | 数据面的原生配置（目前只有一份示意样例） |
+| `deploy/agentgateway/` | 数据面的版本锁定（`agentgateway.lock.json`，目前是 1.7.0）与原生配置（目前只有一份示意样例） |
 | `tests/acceptance/` | 正式验收矩阵；`blackbox/` 是对着真实 agentgateway 跑的黑盒用例 |
 | `tests/integration/gatekeeper/` | 与本机起的一套真实 Gatekeeper 的联调 |
 | `tests/contracts`、`tests/security`、`scripts/` | 针对契约的离线检查与尚未移植的 Python 参考实现 |
@@ -29,7 +29,7 @@ go vet -tags acceptance ./... && go test -tags acceptance ./cmd/...        # 黑
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt        # 一次
 .venv/bin/python -m unittest discover -s tests/contracts -p 'test_*.py'
 .venv/bin/python -m unittest discover -s tests/security -p 'test_*.py'
-.venv/bin/python tests/acceptance/blackbox/run.py                          # 需要 agentgateway、go 和 docker
+.venv/bin/python tests/acceptance/blackbox/run.py                          # 需要锁定版本的 agentgateway（见 deploy/agentgateway/README.md）、go 和 docker
 
 tests/integration/gatekeeper/stack.sh up                                   # 本机起一套 Gatekeeper（需要它的只读检出）
 .venv/bin/python tests/integration/gatekeeper/run.py                       # 与黑盒套件共用端口，不能同时跑
@@ -41,7 +41,7 @@ tests/integration/gatekeeper/stack.sh up                                   # 本
 
 ## 读设计文档时要知道的
 
-G01–G06 是 V1.0 设计基线的原文，只改过文件路径。其中提到的 `portal/`、`tests/ux`、`tests/evidence`、`validate_baseline.py`、`build_html.py` 和各 HTML 页面已随 ADR-0009 移出主干，要看请检出标签 `baseline-v1.0-poc`。
+G01–G06 是 V1.0 设计基线的原文，只改过文件路径和两处提到的 agentgateway 版本（G03、G04；目标版本现在只有锁定的 1.7.0）。其中提到的 `portal/`、`tests/ux`、`tests/evidence`、`validate_baseline.py`、`build_html.py` 和各 HTML 页面已随 ADR-0009 移出主干，要看请检出标签 `baseline-v1.0-poc`。
 
 | 文档 | 作用 |
 |---|---|

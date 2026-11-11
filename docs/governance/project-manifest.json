@@ -59,8 +59,8 @@
     "components": [
       {
         "id": "AGENTGATEWAY",
-        "version": "1.7.x-UNPINNED",
-        "source": "https://agentgateway.dev/docs/kubernetes/latest/release-notes/versions/"
+        "version": "1.7.0",
+        "source": "https://github.com/agentgateway/agentgateway/releases/tag/v1.7.0"
       }
     ]
   },

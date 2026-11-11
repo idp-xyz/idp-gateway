@@ -66,9 +66,8 @@ class CredentialRedemption(unittest.TestCase):
     POC_PORTS = {'gatekeeper': '127.0.0.1:27613', 'broker': '127.0.0.1:27618'}
 
     def poc_routes(self):
-        """Every PoC route with ExtAuthZ: the base file plus the route only 1.7.0 accepts."""
-        routes = (yaml.safe_load(text('tests/acceptance/blackbox/agentgateway.poc.yaml'))['routes']
-                  + yaml.safe_load(text('tests/acceptance/blackbox/agentgateway.poc.key-expression.yaml'))['routes'])
+        """Every black-box route with ExtAuthZ."""
+        routes = yaml.safe_load(text('tests/acceptance/blackbox/agentgateway.poc.yaml'))['routes']
         routes = [r for r in routes if 'extAuthz' in r.get('policies', {})]
         self.assertEqual(len(routes), 4)
         return routes
@@ -232,6 +231,26 @@ class ServiceSpeaksTheContract(unittest.TestCase):
         self.assertIsNotNone(service)
         self.assertIsNotNone(preflight)
         self.assertEqual('^' + preflight[1] + '$', service[1])
+
+
+class AgentgatewayPin(unittest.TestCase):
+    """One agentgateway release is pinned, and the project manifest names the same one."""
+    LOCK = json.loads(text('deploy/agentgateway/agentgateway.lock.json'))
+
+    def test_lock_names_one_release_completely(self):
+        self.assertRegex(self.LOCK['version'], r'^\d+\.\d+\.\d+$', 'a release, not a pre-release')
+        self.assertRegex(self.LOCK['git_revision'], r'^[0-9a-f]{40}$')
+        self.assertTrue(self.LOCK['release'].endswith('/releases/tag/v' + self.LOCK['version']))
+        self.assertTrue(self.LOCK['sha256'], 'no release asset named')
+        for asset, digest in self.LOCK['sha256'].items():
+            with self.subTest(asset=asset):
+                self.assertRegex(digest, r'^[0-9a-f]{64}$')
+
+    def test_manifest_names_the_pinned_release(self):
+        manifest = json.loads(text('docs/governance/project-manifest.json'))
+        component = next(c for c in manifest['technology']['components'] if c['id'] == 'AGENTGATEWAY')
+        self.assertEqual(component['version'], self.LOCK['version'])
+        self.assertEqual(component['source'], self.LOCK['release'])
 
 
 if __name__ == '__main__':

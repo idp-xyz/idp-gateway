@@ -1,0 +1,9 @@
+{
+  "version": "1.7.0",
+  "git_revision": "26f5aebe99a36a037fe54f8080a608aca5547e15",
+  "release": "https://github.com/agentgateway/agentgateway/releases/tag/v1.7.0",
+  "released": "2026-10-27",
+  "sha256": {
+    "agentgateway-linux-amd64": "1b2fc01a2de29ca113bbb6258b5cae7b1eb3c724071c09d687a449132f2f42f8"
+  }
+}

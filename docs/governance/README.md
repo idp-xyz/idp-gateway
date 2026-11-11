@@ -21,7 +21,7 @@ CORE + TECH + GO 为候选；因 AI/LLM/MCP/A2A 被纳入当前项目目标范�
 
 ## PoC 证据不是门禁证据
 
-`tests/acceptance/blackbox` 在真实 agentgateway 1.6.0 和 1.7.0 上用 Mock Gatekeeper 和 Mock Provider 跑过，结果记在 `design-status.json` 的 `poc` 下。它回答"技术上走不走得通"，不改变任何门禁、`runtime_verification` 或验收用例的 `NOT_RUN`：Gatekeeper 与 Provider 都是 Mock，版本没有锁定，没有具名执行人与批准。验收用例要离开 `NOT_RUN`，必须在矩阵里填写指向仓库内证据文件的 `evidence_uri`，`scripts/validate_baseline.py` 会检查。
+`tests/acceptance/blackbox` 在真实 agentgateway 1.7.0 上用 Mock Gatekeeper 和 Mock Provider 跑过，结果记在 `design-status.json` 的 `poc` 下。它回答"技术上走不走得通"，不改变任何门禁、`runtime_verification` 或验收用例的 `NOT_RUN`：Gatekeeper 与 Provider 都是 Mock，版本只是为开发和测试锁定的（`deploy/agentgateway/agentgateway.lock.json`，没有做 G05 §7 要求的核查），没有具名执行人与批准。验收用例要离开 `NOT_RUN`，必须在矩阵里填写指向仓库内证据文件的 `evidence_uri`，`scripts/validate_baseline.py` 会检查。
 
 ## UI/UX 范围冻结
 

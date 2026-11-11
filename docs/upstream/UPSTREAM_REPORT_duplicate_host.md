@@ -2,7 +2,7 @@
 
 > **Status: draft, not submitted.**
 > Where to send it: agentgateway's `SECURITY.md` asks that anything that might be a vulnerability be reported privately, at <https://github.com/agentgateway/agentgateway/security/advisories/new>, and notes that a public issue cannot be made private afterwards. This draft is written for that channel. If the maintainers consider it a plain conformance bug, they can open the public issue themselves.
-> Everything below the line is the text to submit. The observations were made on 2026-11-10 with the two release binaries named in it.
+> Everything below the line is the text to submit. The observations were made on 2026-11-10 with the release binary named in it.
 
 ---
 
@@ -16,16 +16,13 @@ RFC 9112 §3.2 requires a 400 response here:
 
 The missing-`Host` half of that sentence is already implemented (the gateway answers `400 invalid request`). The more-than-one half is not.
 
-## Versions
+## Version
 
-Two binaries, both reporting `build_target: x86_64-unknown-linux-musl`, on Linux (Ubuntu 24.04 under WSL2):
+One binary, reporting `build_target: x86_64-unknown-linux-musl`, on Linux (Ubuntu 24.04 under WSL2):
 
 | Version | `git_revision` (from `--version`) | Where the binary came from |
 |---|---|---|
 | 1.7.0 | `26f5aebe99a36a037fe54f8080a608aca5547e15` | release asset from the GitHub release page, SHA-256 checked |
-| 1.6.0 | `ea5608642b9d5c94c5baf5fd9f2f9849b808e963` | already installed on the machine; origin not re-checked |
-
-The results below are identical on both.
 
 ## Reproduction
 
@@ -130,7 +127,7 @@ Stated carefully, because we did not find a bypass in agentgateway alone:
 
 - The gateway is consistent with itself. Routing, the access log and the forwarded request all use the first line, and the backend never sees two. We did not observe a disagreement between the gateway and the backend behind it.
 - The exposure is in a chain. A component in front of agentgateway that does not reject such a request, makes a decision on a different `Host` line than the first (a WAF rule, a per-host ACL, a tenant mapping, a cache key), and passes both lines on, will have made its decision about one host while agentgateway routes to another. Rejecting the request is what removes that ambiguity regardless of what sits in front, which is why the RFC puts the obligation on every server.
-- We found no way to detect or refuse the request from configuration. Neither version's schema has a setting for it. In a CEL authorization rule, on both versions, `request.headers["host"]` did not yield a value we could test and `request.host` reflected the first line only, so a rule cannot tell that a second line was present. (Tried separately from the reproduction above.)
+- We found no way to detect or refuse the request from configuration. The configuration schema has no setting for it. In a CEL authorization rule, `request.headers["host"]` did not yield a value we could test and `request.host` reflected the first line only, so a rule cannot tell that a second line was present. (Tried separately from the reproduction above.)
 
 ## Not tested
 

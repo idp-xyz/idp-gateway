@@ -1,9 +1,10 @@
-# SYNTAX SAMPLE ONLY. Accepted by `agentgateway --validate-only` 1.6.0 and 1.7.0; never started.
+# SYNTAX SAMPLE ONLY. Accepted by `agentgateway --validate-only` 1.7.0 (the release pinned in
+# agentgateway.lock.json); never started.
 # NOT SECURE FOR ANY DEPLOYMENT: there is no authentication policy on this route.
-# Neither version has a bind-address field for a listener, so starting this file opens
-# the port on every interface of the machine. Do not start it outside an isolated sandbox.
-# Started without a SESSION_KEY in its environment, 1.7.0 also writes a generated key into
-# this file (see tests/acceptance/blackbox/README.md).
+# A listener has no bind-address field, so starting this file opens the port on every
+# interface of the machine. Do not start it outside an isolated sandbox.
+# Started without a SESSION_KEY in its environment, the gateway also writes a generated key
+# into this file (see tests/acceptance/blackbox/README.md).
 # No real secrets. For a route with JWT, ExtAuthZ and credential injection that has actually
 # been run, see tests/acceptance/blackbox/agentgateway.poc.yaml.
 #

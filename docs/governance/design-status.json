@@ -24,16 +24,15 @@
     "p1_credential_injection": {
       "status": "RUN_WITH_OPEN_FINDINGS",
       "evidence": [
-        "tests/acceptance/blackbox/evidence/p1-run-agentgateway-1.6.0.json",
         "tests/acceptance/blackbox/evidence/p1-run-agentgateway-1.7.0.json"
       ],
       "report": "tests/acceptance/blackbox/README.md",
-      "agentgateway_versions_run": ["1.6.0", "1.7.0"],
-      "agentgateway_version_targeted": "1.7.x (1.7.0 run; no version or image digest locked)",
+      "agentgateway_versions_run": ["1.7.0"],
+      "agentgateway_version_targeted": "1.7.0 (pinned for development and test in deploy/agentgateway/agentgateway.lock.json: version, git revision, SHA-256 of the linux-amd64 release binary; no container image digest locked; licence and dependency-vulnerability review and named approval per G05 §7 not done)",
       "gatekeeper": "MOCK (no Gatekeeper implementation was available; mutual TLS to the mock is real)",
       "local_broker": "MOCK",
       "provider": "MOCK",
-      "credential_modes_run": ["A (response header)", "A (backendAuth.key.expression, 1.7.0 only)", "B (local broker)", "C (static)"],
+      "credential_modes_run": ["A (response header)", "A (backendAuth.key.expression)", "B (local broker)", "C (static)"],
       "counts_as_gate_or_acceptance_evidence": false,
       "proposed_decision": "docs/adr/ADR-0008.md"
     }
