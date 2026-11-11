@@ -1,12 +1,12 @@
 {
   "title": "IDP Gateway black-box suite: real agentgateway, gateway-authz (acceptance build), mock provider",
-  "started_at_utc": "2026-11-11T07:27:03.756243+00:00",
-  "finished_at_utc": "2026-11-11T07:27:37.807279+00:00",
+  "started_at_utc": "2026-11-11T08:01:05.746630+00:00",
+  "finished_at_utc": "2026-11-11T08:01:41.401652+00:00",
   "operator": "tops",
   "host": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "python": "3.12.3",
   "command": ".venv/bin/python tests/acceptance/blackbox/run.py",
-  "repository_commit": "20557e0dc4b1607f5adb7bd90b70f280428c8e67",
+  "repository_commit": "8e6aca5d8d6f96e32536e9842fd79c979632d41d",
   "repository_dirty_files": 0,
   "repository_dirty_files_ignores": "tests/acceptance/blackbox/evidence/",
   "agentgateway": {
@@ -83,14 +83,14 @@
     }
   },
   "policy_sha256": "44ce8acf064e0d30c06ea7842d20a51077a711e7e364a24bee9f4c98ebcb096a",
-  "runner_sha256": "30d11aedd6e2c401e6a61a2c4c964e2a1f0c0e9b031ccb0f33c71ef49cc7290a",
+  "runner_sha256": "bce8740909a60cb48c1575a9dea4f921caabba64e6c626c614b33a7f6144e1dd",
   "gateway_authz": {
     "what_ran": "cmd/gateway-authz built with the acceptance tag; not the product build",
     "build_command": "go build -trimpath -tags acceptance -o tests/acceptance/blackbox/.run/gateway-authz ./cmd/gateway-authz",
     "go": "go version go1.26.8 linux/amd64",
     "source_sha256": "c84705254a5eb4c172167085360312b75bfab9ac5aa40a7c7d9bac6be4918acb",
     "source_sha256_covers": "go.mod and every non-test .go file under cmd/ and internal/",
-    "binary_sha256": "c4ffae3e0f548be7279d1f1ca58d7ffe50cf3540757d5c04ab9c779ad3037711",
+    "binary_sha256": "efe9260f293df03ae85750fe37b9f5b1c36f6ce0b042a907be23db50a7ab1440",
     "policy_from": "tests/acceptance/blackbox/policy.poc.json",
     "credentials_from": "a file written for the run, not recorded",
     "revocations": "in memory",
@@ -146,8 +146,8 @@
   ],
   "ports_left_open_after_run": [],
   "summary": {
-    "cases": 55,
-    "pass": 54,
+    "cases": 57,
+    "pass": 56,
     "fail": 1
   },
   "scope_limits": [
@@ -1180,7 +1180,7 @@
       ],
       "observed": {
         "status": 500,
-        "seconds": 0.001
+        "seconds": 0.002
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1860,7 +1860,7 @@
             503
           ]
         },
-        "seconds_slow": 2.002,
+        "seconds_slow": 2.003,
         "provider_hits": 3
       },
       "indicative_for": [
@@ -2216,19 +2216,19 @@
       "observed": {
         "Gatekeeper answers 500": {
           "status": 503,
-          "seconds": 0.004
+          "seconds": 0.003
         },
         "Gatekeeper slower than the broker waits": {
           "status": 503,
-          "seconds": 0.705
+          "seconds": 0.751
         },
         "Gatekeeper down": {
           "status": 503,
-          "seconds": 0.002
+          "seconds": 0.003
         },
         "broker down": {
           "status": 403,
-          "seconds": 0.001
+          "seconds": 0.002
         }
       },
       "indicative_for": [
@@ -2437,6 +2437,120 @@
       ]
     },
     {
+      "id": "P1-RB-01",
+      "title": "the published file is replaced by one with one more route",
+      "expectation": "the new route is served without a restart; the gateway reports the reload as applied, and what it reports running changes with the file and returns when the file does",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "before: the extra path has no route",
+          "ok": true
+        },
+        {
+          "check": "the new route is served, with no restart",
+          "ok": true
+        },
+        {
+          "check": "the provider received the request under the rewritten path",
+          "ok": true
+        },
+        {
+          "check": "the gateway reports the reload as applied",
+          "ok": true
+        },
+        {
+          "check": "what the gateway reports running has changed",
+          "ok": true
+        },
+        {
+          "check": "a route that was there before still works",
+          "ok": true
+        },
+        {
+          "check": "with the reviewed file back, the extra route is gone",
+          "ok": true
+        },
+        {
+          "check": "what the gateway reports running is again what it was",
+          "ok": true
+        },
+        {
+          "check": "the file is byte-identical to the reviewed configuration",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "seconds_until_the_new_route_was_served": 0.3,
+        "seconds_until_the_route_was_gone_again": 0.33
+      },
+      "indicative_for": [
+        "GW-AT-014",
+        "GW-FR-014",
+        "GW-AT-041",
+        "GW-FR-041",
+        "GW-NAT-004",
+        "GW-NFR-04"
+      ]
+    },
+    {
+      "id": "P1-RB-02",
+      "title": "the published file is replaced by one the gateway cannot load",
+      "expectation": "the gateway says so, with a reason; it keeps serving the last configuration it accepted, serves nothing from the rejected file, and still reports the accepted one as running",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "the gateway reports that the reload failed",
+          "ok": true
+        },
+        {
+          "check": "...with a reason",
+          "ok": true
+        },
+        {
+          "check": "routes of the last accepted configuration still work",
+          "ok": true
+        },
+        {
+          "check": "the loadable route in the rejected file is not served either",
+          "ok": true
+        },
+        {
+          "check": "what the gateway reports running is still the accepted configuration",
+          "ok": true
+        },
+        {
+          "check": "with the reviewed file back, the gateway reports the reload as applied",
+          "ok": true
+        },
+        {
+          "check": "...and reports the same configuration as running",
+          "ok": true
+        },
+        {
+          "check": "the file is byte-identical to the reviewed configuration",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "seconds_until_the_failure_was_reported": 0.3,
+        "configReload": {
+          "synchronized": false,
+          "lastError": "routes[6]: unknown field `notAFieldOfARoute` at line 376 column 3"
+        },
+        "api_config_effective_shows_the_rejected_file": true,
+        "seconds_until_the_reload_was_reported_applied_again": 0.3
+      },
+      "indicative_for": [
+        "GW-AT-014",
+        "GW-FR-014",
+        "GW-ST-016",
+        "GW-AT-039",
+        "GW-FR-039",
+        "GW-AT-041",
+        "GW-FR-041"
+      ]
+    },
+    {
       "id": "P1-CR-04",
       "title": "what the gateway has written to its log during this run",
       "expectation": "no provider credential, caller JWT, broker key or session key in any line, including the lines for failed credential handling",
@@ -2464,7 +2578,7 @@
         }
       ],
       "observed": {
-        "log_lines": 142,
+        "log_lines": 161,
         "routes_exercised": 4
       },
       "indicative_for": [
