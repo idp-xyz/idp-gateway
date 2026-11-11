@@ -3,6 +3,10 @@
 // 它问的是 PDP 的 /authz/check：调用方是不是这个账户的获授调用方，并且属于账户所属的租户。
 // 调用方属于哪个租户由本服务从已验签的 Token 得知，随每次询问以上下文关系的形式带过去，
 // Gatekeeper 不需要事先存一份。
+//
+// PDP 没能求出判定时（它背后的查询失败了）仍然答 200 和 decision=false，只是多带一个
+// "indeterminate": true。这里把这样的应答读成没有结论，不读成拒绝。这个字段是 Gatekeeper
+// 10dc843 加的：更早的 Gatekeeper 查询失败时的应答与拒绝没有区别，在这里会被读成拒绝。
 package gatekeeper
 
 import (
@@ -34,9 +38,10 @@ const (
 
 	checkPath        = "/authz/check"
 	maxResponseBytes = 16 << 10
-	// PDP 对"查过了，没有授权"和"没查成"都答 200 加 decision=false，只有 reason 不同。
-	// 只有这一个 reason 算作拒绝，其余一律算作没有结论。
-	reasonNotGranted = "rebac denied"
+	// PDP 的授权模型里没有 Action 这个动作时，它不做查询就答 decision=false，不带 indeterminate，
+	// reason 以这段文字开头。那不是对这个调用方的判定，而是模型里还没有 Provider 账户这个类型。
+	// Gatekeeper 自己的 SDK 也按这个开头认"动作没有映射"。它改了措辞的话，这种情况会被读成拒绝。
+	reasonUnknownAction = "unknown action"
 )
 
 // identifier 是可以原样写进授权关系的标识：不含会被授权引擎当作语法的字符
@@ -156,12 +161,18 @@ type checkRequest struct {
 type checkResponse struct {
 	Decision *bool  `json:"decision"`
 	Reason   string `json:"reason"`
+	// Indeterminate 为 true 时 PDP 没能求出判定，Decision 里的 false 不是拒绝。
+	Indeterminate bool `json:"indeterminate"`
 }
 
 // MayUse 实现 ports.Grants。
 //
 // 三个标识里只要有一个不能原样写进授权关系，就直接答"没有授权"，不去问：这样的标识
 // 不可能持有授权，而把它发过去会被授权引擎当作别的东西来解释。
+//
+// 返回错误表示没有结论：PDP 不可达、答的不是 200、应答读不出判定、应答带着 indeterminate，
+// 或者 PDP 的模型里没有这个动作。拒绝只有一种：一份读得出来、不带 indeterminate 的
+// decision=false，不看 reason 的措辞。
 func (g *Grants) MayUse(ctx context.Context, subject, tenantID, accountID string) (bool, error) {
 	for _, id := range []string{subject, tenantID, accountID} {
 		if !identifier.MatchString(id) {
@@ -199,15 +210,18 @@ func (g *Grants) MayUse(ctx context.Context, subject, tenantID, accountID string
 	}
 	var answer checkResponse
 	if err := json.Unmarshal(raw, &answer); err != nil || answer.Decision == nil {
-		return false, errors.New("gatekeeper: the PDP's answer carries no decision")
+		return false, errors.New("gatekeeper: the PDP's answer cannot be read as a decision")
 	}
 	switch {
+	case answer.Indeterminate:
+		// 先看这个标记：带着它的应答不管 decision 写的是什么，都不是判定。
+		return false, fmt.Errorf("gatekeeper: the PDP could not evaluate the decision (%.80q)", answer.Reason)
 	case *answer.Decision:
 		return true, nil
-	case answer.Reason == reasonNotGranted:
-		return false, nil
+	case strings.HasPrefix(answer.Reason, reasonUnknownAction):
+		return false, fmt.Errorf("gatekeeper: the PDP's authorization model has no action %s", Action)
 	default:
-		return false, fmt.Errorf("gatekeeper: the PDP reached no decision (%.80q)", answer.Reason)
+		return false, nil
 	}
 }
 

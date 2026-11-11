@@ -333,7 +333,7 @@ func TestAsksGatekeeperWhenConfigured(t *testing.T) {
 		t.Fatalf("Gatekeeper 说没有授权：%d %s", denied.status, denied.body)
 	}
 
-	set(`{"decision":false,"reason":"rebac lookup failed"}`)
+	set(`{"decision":false,"indeterminate":true,"reason":"rebac lookup failed"}`)
 	// 给网关的接口用状态码说话；只返回判定的接口把结果写在响应体里。
 	for _, c := range []struct {
 		call

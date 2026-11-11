@@ -15,6 +15,8 @@ tests/integration/gatekeeper/stack.sh up        # 构建并拉起，约半分钟
 tests/integration/gatekeeper/stack.sh down      # 删除容器、网络、卷和测试客户端的凭据
 ```
 
+检出要在 Gatekeeper `10dc843` 或之后，原因见下面第 3 点。检出更新之后，下一次 `stack.sh up` 会重新构建。
+
 | 谁 | 是什么 |
 |---|---|
 | 真的 | Gatekeeper（Hydra v26.2.0 签发的令牌与 JWKS、login-consent 的 PDP、OpenFGA）、agentgateway 1.7.0（`deploy/agentgateway/agentgateway.lock.json` 锁定的构建，即上游镜像里的那个二进制；启动前核对，做法与黑盒套件相同）、`gateway-authz` 的产品构建 |
@@ -36,13 +38,15 @@ type provider_account
     define use:    caller and member from org     # 能用 = 获授，并且属于账户所属的租户
 ```
 
-这是本仓库的提议。它不在 Gatekeeper 的仓库里，也不在已发布的实例里；`gateway-authz` 的 Gatekeeper 适配器在这个类型进入 Gatekeeper 自己的模型之前，对任何别的 Gatekeeper 实例都只会得到"没有结论"。
+这是本仓库的提议。它不在 Gatekeeper 的仓库里，也不在已发布的实例里；`gateway-authz` 的 Gatekeeper 适配器在这个类型进入 Gatekeeper 自己的模型之前，对任何别的 Gatekeeper 实例都只会得到"没有结论"（下面第 3 点）。
 
 本机实例的 `TOKEN_AUDIENCE` 也改过：在默认的 `bip-api` 之外加了 `idp-egress-gateway`，原因见下面第 1 点。
 
 ## 结果
 
-2026-11-11，Gatekeeper `0920e96`，agentgateway 1.7.0：默认的 11 个用例全部通过；加上 `--key-rotation` 后的第 12 个用例 FAIL（见下面第 4 点）。逐项结果写在 `.run/result.json`，不入库；这里没有像黑盒套件那样的证据文件。
+2026-11-11，Gatekeeper `f36dc06`，agentgateway 1.7.0：默认的 11 个用例全部通过；加上 `--key-rotation` 后的第 12 个用例 FAIL（见下面第 4 点）。逐项结果写在 `.run/result.json`，不入库；这里没有像黑盒套件那样的证据文件。
+
+同一天早些时候对着 Gatekeeper `0920e96` 是同样的结果，那时适配器还靠 `reason` 的措辞认拒绝。现在的适配器对着 `0920e96` 过不了 GK-08（见下面第 3 点）。
 
 | 用例 | 内容 | 结果 |
 |---|---|---|
@@ -94,9 +98,23 @@ Gatekeeper 的 PDP 把模型里的"类型.关系"自动当作动作，所以加�
 
 在 `gateway-authz` 里，这一问排在登记表和撤销检查之后：登记表拒绝的请求不会去问，Gatekeeper 只能把登记表收窄，不能放宽。不带 `--gatekeeper-url` 启动时不问，行为与之前完全相同。
 
-### 3. PDP 对"没有授权"和"没查成"都答 200
+### 3. PDP 对"没有授权"和"没查成"都答 200，用 `indeterminate` 字段区分
 
-OpenFGA 停掉时，PDP 仍然返回 `200 {"decision": false, "reason": "rebac lookup failed"}`，和真正的拒绝（`"rebac denied"`）只差 `reason` 这个字符串。适配器现在只把 `rebac denied` 当作拒绝，其余一律当作没有结论（网关答 503，不记成策略拒绝）。这依赖一个没有写进任何契约的字符串：**Gatekeeper 改了措辞，拒绝就会全部变成 503。** 需要它用状态码或单独的字段区分这两种情况。
+直接问本机实例的 PDP 得到的应答（2026-11-11，Gatekeeper `f36dc06`），状态码都是 200：
+
+| 情况 | PDP 的应答 | 适配器读成 |
+|---|---|---|
+| 有授权 | `{"decision":true,"reason":"rebac:use"}` | 有授权 |
+| 没有被授予这个账户，或账户属于别的租户 | `{"decision":false,"reason":"rebac denied"}` | 没有授权：403 `ACCOUNT_NOT_GRANTED` |
+| OpenFGA 停了 | `{"decision":false,"indeterminate":true,"reason":"rebac lookup failed"}` | 没有结论：503 `GRANT_STATE_UNAVAILABLE` |
+| 问的动作不在模型里 | `{"decision":false,"reason":"unknown action"}` | 没有结论：503 `GRANT_STATE_UNAVAILABLE` |
+
+`indeterminate` 是 Gatekeeper `10dc843` 加的：PDP 没能求出判定（它背后的查询失败了）时带上它，状态码和 `decision` 不变。适配器按两个字段读应答：带 `"indeterminate": true` 的是没有结论，不管 `decision` 和 `reason` 写的是什么；`decision` 为 `true` 是有授权；其余是没有授权。**拒绝不再取决于 `reason` 的措辞。** 此前适配器只把 `rebac denied` 这一个 `reason` 当作拒绝，Gatekeeper 改了措辞，拒绝就会全部变成 503。
+
+两点要知道：
+
+- **Gatekeeper 要在 `10dc843` 或之后。** 更早的版本在 OpenFGA 停掉时答的是 `{"decision": false, "reason": "rebac lookup failed"}`，没有这个字段，和拒绝没有区别。拿现在的适配器对着 `0920e96` 跑了一遍：GK-08 FAIL，OpenFGA 停着的时候调用方看到 403，`gateway-authz` 记成 `ACCOUNT_NOT_GRANTED`；其余 10 个用例通过。
+- **"动作不在模型里"仍然靠 `reason` 认。** 这种应答不带 `indeterminate`（PDP 不做查询就答了，OpenFGA 停着的时候也是这样答），适配器按 `reason` 以 `unknown action` 开头来认，读成没有结论：它说的是模型里还没有 Provider 账户这个类型，不是这个调用方没有授权。Gatekeeper 自己的三个 SDK 也按这个开头认"动作没有映射"。它改了措辞的后果比以前小：模型里没有这个类型的实例从 503 变成 403 `ACCOUNT_NOT_GRANTED`，有这个类型的实例不受影响。上表第四行是拿一个模型里没有的动作名直接问 PDP 得到的；适配器怎么读它只有单元测试，联调里没有这个用例。
 
 ### 4. 换了签名密钥，网关要到下一次定时重取 JWKS 才认新密钥
 
@@ -156,12 +174,12 @@ Gatekeeper 的控制台目前轮换的是 ID 令牌的密钥集；访问令牌�
 
 ## 需要 Gatekeeper 一侧决定的
 
-这些都没有动，也不该由本仓库动：
+第 4 条 Gatekeeper 已经定了。其余的都没有动，也不该由本仓库动：
 
 1. 授权模型里要不要有 Provider 账户这个类型，长什么样。M2M 客户端现在被 PDP 归一成 `user:<client_id>`，要不要单独的类型也在这里。
 2. 出站网关的专属受众，以及 M2M 客户端怎么登记它。
 3. 令牌里要不要带环境；不带的话，按签发者区分环境是否就是约定。
-4. PDP 怎么区分"拒绝"和"没查成"。
+4. PDP 怎么区分"拒绝"和"没查成"。已定：没查成的应答带 `"indeterminate": true`（Gatekeeper `10dc843`），适配器已改用它，见上面第 3 点。
 5. 给 `gateway-authz` 的 PDP 访问方式：现在是一个共享的 Bearer 令牌，Gatekeeper 自己的注释建议再加 mTLS。
 6. 访问令牌的签名密钥怎么换：新密钥先发布、过一个重取周期再启用，还是让 JWKS 响应带上可缓存的时长（见上面第 4 点的三条路）。
 
@@ -174,7 +192,7 @@ Gatekeeper 的控制台目前轮换的是 ID 令牌的密钥集；访问令牌�
 | 1 | 采用这里试过的 `provider_account` 类型。M2M 客户端归成哪种主体类型，网关侧没有要求，只要 PDP 对同一个客户端给出的主体稳定 | 加了这个类型之后 PDP 一行代码不用改，`GK-01`、`02`、`05`、`06`、`07` 都通过 |
 | 2 | 给出站网关一个专属受众，并且**按客户端登记**。不要用全局的 `TOKEN_AUDIENCE` | 没有专属受众，任何发给 `bip-api` 的令牌都能拿来敲出站网关的门，`GK-03` 挡的就是这个。全局开关会让之后新建的每个 M2M 客户端都能申请这个受众 |
 | 3 | 令牌里带环境：由令牌钩子写入 `env`，并把它加进 Hydra 的顶层声明白名单。至少要约定一个签发者只属于一个环境 | 不带也能跑，联调就是按签发者区分的。但那样"令牌的环境"和"路由的环境"都出自同一份网关配置，签发者配错时没有第二道检查；带了，`gateway-authz` 现有的那条比对就仍然有用 |
-| 4 | PDP 用状态码或单独的字段区分"拒绝"和"没查成"，比如查不成时答 5xx | 现在两者只差 `reason` 里的一个字符串（上面第 3 点）。适配器已经把"不是明确的拒绝"一律当作没有结论；Gatekeeper 改了之后，适配器改成按新的信号认拒绝，不再靠那个字符串 |
+| 4 | PDP 用状态码或单独的字段区分"拒绝"和"没查成"。**Gatekeeper 已经定了**：单独的字段 `indeterminate`（`10dc843`），状态码仍是 200 | 当时两者只差 `reason` 里的一个字符串。适配器已改成按这个字段认"没查成"，拒绝不再取决于措辞（上面第 3 点） |
 | 5 | `gateway-authz` 到 PDP 用工作负载 mTLS，共享的 Bearer 令牌只作过渡 | 与 ADR-0008 第 5 条一致：网关到 `gateway-authz` 那一跳已经是这样（`P1-AZ-11`、`P1-TL-01`）。这一跳的适配器现在只会带 Bearer 令牌，还不会出示客户端证书；它对非回环地址只接受 https，这一条只有单元测试。Gatekeeper 定了之后这边要跟着做 |
 | 6 | 先发布、后启用：新密钥先进 JWKS，过一段约定的时间再用它签发 | 网关侧按 ADR-0010 第 8 条把 JWKS 放在快照里，不按地址去取，那段时间要长于"发现 JWKS 变了，加一次发布"。不建议只靠缩短缓存时长：那样网关启动仍然依赖 JWKS 地址可达，重取遇到 5xx 时的表现也不好（上面第 4 点） |
 
@@ -183,6 +201,7 @@ Gatekeeper 的控制台目前轮换的是 ID 令牌的密钥集；访问令牌�
 ## 没有覆盖的
 
 - 生产形态的 Gatekeeper：这里是它的开发配置（Hydra `--dev`、明文 HTTP、开发用的固定密钥，只是换了管理密钥并给 PDP 加了令牌）。
+- 模型里没有 `provider_account` 类型的 Gatekeeper 实例：适配器把 `unknown action` 读成没有结论，这一条只有单元测试（上面第 3 点）。
 - `gateway-authz` 到 PDP 的 TLS：本机是回环上的明文；适配器对非回环地址只接受 https，这一条只有单元测试。
 - 用户令牌（授权码流程）、Mode B 的 Broker 路由、写操作路由。
 - 并发与负载；上面的耗时是单连接顺序请求。

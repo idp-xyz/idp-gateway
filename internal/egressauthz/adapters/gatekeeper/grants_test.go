@@ -91,18 +91,35 @@ func TestAsksThePDPInItsOwnTerms(t *testing.T) {
 	}
 }
 
-func TestOnlyAnExplicitDenialIsADenial(t *testing.T) {
+// 应答按 indeterminate 和 decision 两个字段读。reason 的措辞只在一处起作用：模型里没有这个动作。
+func TestHowThePDPsAnswerIsRead(t *testing.T) {
 	cases := map[string]struct {
 		answer  http.HandlerFunc
 		granted bool
 		failed  bool
 	}{
-		"放行":               {says(200, `{"decision":true,"reason":"rebac:use"}`), true, false},
-		"没有授权":             {says(200, `{"decision":false,"reason":"rebac denied"}`), false, false},
-		"授权引擎查不了":          {says(200, `{"decision":false,"reason":"rebac lookup failed"}`), false, true},
-		"模型里没有这个动作":        {says(200, `{"decision":false,"reason":"unknown action"}`), false, true},
-		"没见过的原因":           {says(200, `{"decision":false,"reason":"something new"}`), false, true},
-		"拒绝但没有原因":          {says(200, `{"decision":false}`), false, true},
+		"放行": {says(200, `{"decision":true,"reason":"rebac:use"}`), true, false},
+
+		// 拒绝：读得出来、不带 indeterminate 的 decision=false，不管 reason 怎么写。
+		"没有授权":                    {says(200, `{"decision":false,"reason":"rebac denied"}`), false, false},
+		"功能权限不够":                  {says(200, `{"decision":false,"reason":"rbac denied"}`), false, false},
+		"拒绝，措辞没见过":                {says(200, `{"decision":false,"reason":"something new"}`), false, false},
+		"拒绝但没有原因":                 {says(200, `{"decision":false}`), false, false},
+		"indeterminate 写明是 false": {says(200, `{"decision":false,"reason":"rebac denied","indeterminate":false}`), false, false},
+		// 更早的 Gatekeeper 没有 indeterminate：它查询失败时的应答在这里就是拒绝。
+		"查询失败但没有标记": {says(200, `{"decision":false,"reason":"rebac lookup failed"}`), false, false},
+
+		// 没有结论：PDP 自己标了没能求出判定。
+		"授权引擎查不了":            {says(200, `{"decision":false,"indeterminate":true,"reason":"rebac lookup failed"}`), false, true},
+		"权限来源查不了":            {says(200, `{"decision":false,"indeterminate":true,"reason":"rbac lookup failed"}`), false, true},
+		"没有结论，措辞没见过":         {says(200, `{"decision":false,"indeterminate":true,"reason":"something new"}`), false, true},
+		"没有结论但没有原因":          {says(200, `{"decision":false,"indeterminate":true}`), false, true},
+		"标着没有结论却写着放行":        {says(200, `{"decision":true,"indeterminate":true,"reason":"rebac:use"}`), false, true},
+		"indeterminate 不是布尔": {says(200, `{"decision":false,"indeterminate":"true","reason":"rebac denied"}`), false, true},
+		"模型里没有这个动作":          {says(200, `{"decision":false,"reason":"unknown action"}`), false, true},
+		"模型里没有这个动作，后面还有说明":   {says(200, `{"decision":false,"reason":"unknown action: provider_account.use"}`), false, true},
+
+		// 没有结论：读不出判定，或者答的不是 200。
 		"答案里没有 decision":   {says(200, `{"reason":"rebac:use"}`), false, true},
 		"decision 不是布尔":    {says(200, `{"decision":"true"}`), false, true},
 		"不是 JSON":          {says(200, `<html>ok</html>`), false, true},
