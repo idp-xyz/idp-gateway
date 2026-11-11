@@ -2,7 +2,7 @@
 
 出站（Egress）API 网关：数据面用 agentgateway，本仓库是围绕它的 Go 代码、契约、部署配置和测试。
 
-> **状态**：开发早期。95 条正式验收用例与六个 STD-CP 门禁全部 `NOT_RUN`；ADR-0001 至 0008 仍是 Proposed。  
+> **状态**：开发早期。95 条正式验收用例与六个 STD-CP 门禁全部 `NOT_RUN`；ADR-0001 至 0008 和 ADR-0010 仍是 Proposed。  
 > 设计基线交付包与 PoC 的原貌在标签 `baseline-v1.0-poc`；之后的目录结构见 [ADR-0009](docs/adr/ADR-0009.md)。
 
 ## 目录
