@@ -82,7 +82,7 @@ G03 要求发布之后逐个实例回读，确认生效的是批准的那一份�
 
 - **`P1-SS-04` FAIL：带两个 `Host` 头的请求被接受**（RFC 9112 §3.2 要求 400）。网关用第一个做路由，第二个不会到达上游；上游 `Host` 已被第 1 项改写，所以没有形成越权，但请求本身应当被拒。配置层面没有办法：配置 Schema 里没有相关开关；CEL 规则里也识别不出来，`request.headers["host"]` 取不到值，`request.host` 只反映第一个（这是单独试验的结果，不在证据文件里）。这个用例保留为 FAIL，因为它记录的是网关自身的行为。处置分两头：
   - **前置组件**。在网关前面放了一个 nginx 1.30.6（`front.nginx.conf`，监听 `127.0.0.1:27620`，转发到 `27611`）。经它发送时，两个 `Host`（顺序正反、两个相同、写请求）和没有 `Host` 的请求都由 nginx 自己答 400，网关日志里没有新增记录，PDP 和 Provider 什么也没收到（`P1-FP-01`）。另外三个用例确认加了这一跳之后原有性质不变：租户隔离、Provider 收到的头和请求体、401/403/404（`P1-FP-02`）；Provider 变慢或断连时写请求只到达一次，nginx 没有重放（`P1-FP-03`）；指定上游和路径变形仍然到不了 Provider，nginx 把路径原样交给网关，拒绝它们的仍是网关和 PDP，只有 `%00` 是 nginx 直接拒的（`P1-FP-04`）。**限制**：其余用例仍直接打网关端口。这个端口现在只绑回环（上面第 8 项），别的机器连不上它，只能经前置组件进来；同一台机器上的进程仍然可以直接连它。Kubernetes 上对应的做法是把前置组件和网关放在同一个 Pod 里，Pod 对外只有前置组件的端口，见 `tests/integration/kubernetes`。这里验证的是这一个 nginx 版本加这份配置，正式的入口组件要重新跑。
-  - **上游**。在只有两条路由、没有任何策略的最小配置上单独复现过：网关按第一个 `Host` 路由，后端只收到第一个，第二个被丢弃；没有 `Host` 的请求网关会答 400。也就是说网关自己前后一致，风险出在它前面有一个按另一个 `Host` 做判断的组件时。报告草稿在 `docs/upstream/UPSTREAM_REPORT_duplicate_host.md`，**尚未提交**；agentgateway 的 `SECURITY.md` 要求拿不准是否属于安全问题时走私下报告，所以草稿是按私下报告写的。
+  - **上游**。在只有两条路由、没有任何策略的最小配置上单独复现过：网关按第一个 `Host` 路由，后端只收到第一个，第二个被丢弃；没有 `Host` 的请求网关会答 400。也就是说网关自己前后一致，风险出在它前面有一个按另一个 `Host` 做判断的组件时。报告在 `docs/upstream/UPSTREAM_REPORT_duplicate_host.md`，**已于 2026-11-11 提交，上游还没有答复**；agentgateway 的 `SECURITY.md` 要求拿不准是否属于安全问题时走私下报告，所以走的是私下渠道（公告 `GHSA-gccc-c8q8-cjmm`，只有报告方和上游维护者能打开）。
 - **请求头是"删黑名单"而不是"放白名单"**。G03 §5 要求只传播 Provider 允许的头。本 PoC 只做到了按名字删除，调用方的任意自定义头（如 `X-Client-Trace`）仍会到达 Provider。
 - **PDP 不可用与策略拒绝无法区分**。PDP 超时或不在时调用方得到 403，与正常拒绝相同；PDP 返回 500 时调用方得到 500。PDP 证书不被信任、网关自己的证书不被接受时同样是 403。G01 的失败来源区分（`GW-FR-043`）在这一点上没有满足。
 - **mTLS 证明的是"谁在调用 PDP"，不是"调用方 Token 里写了什么"**。租户和服务身份仍然是网关转述的：PDP 相信它们，是因为对面是网关。网关被攻破等于这些声明可以伪造，这一点 mTLS 不改变。
@@ -129,7 +129,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
 - PDP 不在这个目录里：是仓库根下的 `cmd/gateway-authz`，双向 TLS，按客户端证书里的身份决定谁能调哪个端点；实现了 `contracts/gatekeeper/openapi.yaml` 的 `/v1/extauthz/check`（模式 A）和 `/v1/egress/authorizations/decision`（模式 B）。本套件用的控制接口在 `cmd/gateway-authz/hooks_on.go`，只有带 `acceptance` 标签的构建里才有。
 - `mock_broker.py`：Mock 本地 Broker。`pki.py`：每次运行的 CA、证书和 TLS 连接。
 - `mock_provider.py`：记录收到的每个请求；`policy.poc.json`：两租户两账户的授权数据。
-- `front.nginx.conf`：前置 nginx 的配置。给 agentgateway 上游的报告草稿（英文，含最小复现）在 `docs/upstream/`。
+- `front.nginx.conf`：前置 nginx 的配置。给 agentgateway 上游的报告（英文，含最小复现）在 `docs/upstream/`。
 - `run.py`：用例与期望。`evidence/p1-run-agentgateway-<版本>.json`：最近一次运行的逐项检查与观察值，含二进制、锁定文件与配置的 SHA-256。
 
 ## 期望是怎么定的

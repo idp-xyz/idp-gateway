@@ -1,9 +1,9 @@
-# Draft report for agentgateway: HTTP/1.1 request with two `Host` header lines is accepted
+# Report to agentgateway: HTTP/1.1 request with two `Host` header lines is accepted
 
-> **Status: draft, not submitted.** Submitting it takes a GitHub account that speaks for the reporter; that is a person's step, and nobody has taken it yet.
-> Where to send it: agentgateway's `SECURITY.md` (read again at the pinned revision on 2026-11-11) asks that anything that might be a vulnerability be reported privately, at <https://github.com/agentgateway/agentgateway/security/advisories/new>, and notes that a private report can later be made public but a public issue cannot be made private. This draft is written for that channel. The same policy counts as a vulnerability what "defeats a promised security boundary"; by that measure the maintainers may well file this as a conformance bug, and can open the public issue themselves.
+> **Status: submitted on 2026-11-11, not answered yet.** It was filed through agentgateway's private reporting channel as advisory `GHSA-gccc-c8q8-cjmm`, which only the reporting account and the maintainers can open. On 2026-11-11 it was in triage.
+> Why that channel: agentgateway's `SECURITY.md` (read again at the pinned revision on 2026-11-11) asks that anything that might be a vulnerability be reported privately, at <https://github.com/agentgateway/agentgateway/security/advisories/new>, and notes that a private report can later be made public but a public issue cannot be made private. The same policy counts as a vulnerability what "defeats a promised security boundary"; by that measure the maintainers may well file this as a conformance bug, and can open the public issue themselves.
 > Checked on 2026-11-11 before sending: three keyword searches of the upstream issues and pull requests found no public report of it; #4361, which the text mentions, is still open.
-> Everything below the line is the text to submit. The observations were made on 2026-11-10 with the stand-alone release binary and repeated on 2026-11-11 with the binary of the container image, with the same result in every row.
+> What was sent is the text below the line as it stood at commit `128ca4a`, followed by two notes from the reporter: when it was observed, and that the text was already public in this repository. Only the "Version" section has changed since: it now also lists the binary of the container image, on which the observations were repeated on 2026-11-11 with the same result in every row. The advisory names the release binary only.
 
 ---
 
