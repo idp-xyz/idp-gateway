@@ -1,12 +1,12 @@
 {
   "title": "IDP Gateway black-box suite: real agentgateway, gateway-authz (acceptance build), mock provider",
-  "started_at_utc": "2026-11-12T04:00:40.966426+00:00",
-  "finished_at_utc": "2026-11-12T04:01:17.982243+00:00",
+  "started_at_utc": "2026-11-12T08:30:02.040637+00:00",
+  "finished_at_utc": "2026-11-12T08:30:38.970069+00:00",
   "operator": "tops",
   "host": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "python": "3.12.3",
   "command": ".venv/bin/python tests/acceptance/blackbox/run.py",
-  "repository_commit": "b730b760cb46d5441cdcbe514912f20f2429648c",
+  "repository_commit": "9d59bf6c7c2878b15069402559213000896c0ffa",
   "repository_dirty_files": 0,
   "repository_dirty_files_ignores": "tests/acceptance/blackbox/evidence/",
   "agentgateway": {
@@ -93,9 +93,9 @@
     "what_ran": "cmd/gateway-authz built with the acceptance tag; not the product build",
     "build_command": "go build -trimpath -tags acceptance -o tests/acceptance/blackbox/.run/gateway-authz ./cmd/gateway-authz",
     "go": "go version go1.26.8 linux/amd64",
-    "source_sha256": "88b62b13b55e816b63440fd6df459532b4774b9a38231f961b63267ac5a8f4c0",
+    "source_sha256": "c8965cfe055ce401b0670cc4fa2b50e47589ddc419a8ed210b32cd682524b371",
     "source_sha256_covers": "go.mod and every non-test .go file under cmd/ and internal/",
-    "binary_sha256": "b242823da57143a818736f2c8aad02d8f43c8cc571e67361e8e4d3417cfa13a6",
+    "binary_sha256": "0d99acd0340d0d9a0c7c81629303773b643e8aaadc89142934e1d550d533dffc",
     "policy_from": "tests/acceptance/blackbox/policy.poc.json",
     "credentials_from": "a file written for the run, not recorded",
     "revocations": "in memory",
@@ -1189,7 +1189,7 @@
       ],
       "observed": {
         "status": 500,
-        "seconds": 0.002
+        "seconds": 0.001
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1215,7 +1215,7 @@
       ],
       "observed": {
         "status": 403,
-        "seconds": 1.003
+        "seconds": 1.002
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1383,7 +1383,7 @@
       ],
       "observed": {
         "status": 504,
-        "seconds": 2.003,
+        "seconds": 2.001,
         "provider_hits": 1
       },
       "indicative_for": [
@@ -2225,11 +2225,11 @@
       "observed": {
         "Gatekeeper answers 500": {
           "status": 503,
-          "seconds": 0.01
+          "seconds": 0.004
         },
         "Gatekeeper slower than the broker waits": {
           "status": 503,
-          "seconds": 0.747
+          "seconds": 0.745
         },
         "Gatekeeper down": {
           "status": 503,
@@ -2237,7 +2237,7 @@
         },
         "broker down": {
           "status": 403,
-          "seconds": 0.001
+          "seconds": 0.002
         }
       },
       "indicative_for": [
@@ -2489,7 +2489,7 @@
         }
       ],
       "observed": {
-        "seconds_until_the_new_route_was_served": 0.31,
+        "seconds_until_the_new_route_was_served": 0.3,
         "seconds_until_the_route_was_gone_again": 0.34
       },
       "indicative_for": [
@@ -2541,13 +2541,13 @@
         }
       ],
       "observed": {
-        "seconds_until_the_failure_was_reported": 0.31,
+        "seconds_until_the_failure_was_reported": 0.3,
         "configReload": {
           "synchronized": false,
           "lastError": "routes[7]: unknown field `notAFieldOfARoute` at line 403 column 3"
         },
         "api_config_effective_shows_the_rejected_file": true,
-        "seconds_until_the_reload_was_reported_applied_again": 0.3
+        "seconds_until_the_reload_was_reported_applied_again": 0.4
       },
       "indicative_for": [
         "GW-AT-014",
