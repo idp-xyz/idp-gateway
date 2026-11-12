@@ -69,6 +69,7 @@ type fakeGateway struct {
 	startup      json.RawMessage // 启动时读到的 config 段
 	down         bool            // 重启时拿到的是一份加载不了的文件：没有起来
 	restarts     int
+	requests     int // 回读口被问过几次
 }
 
 // restart 让网关从现在的文件重新启动。文件加载不了，它就起不来。
@@ -92,6 +93,7 @@ func (g *fakeGateway) restart() {
 func (g *fakeGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.requests++
 	g.peers[workloadtls.PeerIdentity(r.TLS)] = true
 	path := g.file()
 	if path == "" || g.down {
@@ -157,6 +159,13 @@ func (g *fakeGateway) setting() string {
 	}
 	_ = json.Unmarshal([]byte(g.running), &document)
 	return document.Config["terminationMaxDeadline"]
+}
+
+// asked 是回读口到现在被问过几次。
+func (g *fakeGateway) asked() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.requests
 }
 
 func (g *fakeGateway) sawOnly(identity string) bool {
@@ -407,6 +416,11 @@ func (h *harness) reconcileArgs() []string {
 func (h *harness) reconcile() result {
 	h.t.Helper()
 	return h.run(h.reconcileArgs())
+}
+
+// placeArgs 是 place 命令的参数：只有配置目录。（harness.place 是另一回事：测试绕过发布器直接放文件。）
+func (h *harness) placeArgs() []string {
+	return []string{"place", "--config-dir", h.poolDir}
 }
 
 // count 数某条 docker 命令被叫过几次。
@@ -718,6 +732,8 @@ func TestExitCodesSayWhatStateThePoolIsIn(t *testing.T) {
 		application.OutcomeInSync:          0,
 		application.OutcomeUnconfirmed:     3,
 		application.OutcomeRestartPending:  6,
+		application.OutcomeInPlace:         0,
+		application.OutcomeNoRecord:        0,
 		// 这里不认识的结局不当成成功，也不当成"池没有被碰过"。
 		"SOMETHING_NEW": 5,
 		"":              5,
@@ -959,7 +975,112 @@ func TestRestartWithoutASnapshotUsesTheConfirmedOne(t *testing.T) {
 	}
 }
 
-func TestUsageOfRestartAndReconcile(t *testing.T) {
+// 网关启动之前把确认过的那一份放到位。place 只碰配置目录：不读网关，不用 docker。
+func TestPlacePutsTheConfirmedSnapshotInPlaceBeforeTheGatewayStarts(t *testing.T) {
+	h := newHarness(t)
+	config := filepath.Join(h.poolDir, configFile)
+
+	// 这个池上还没有确认过任何发布：没有可放的，什么都不写；网关可以启动。
+	none := h.run(h.placeArgs())
+	if none.code != exitActive || none.report.Outcome != "NO_RECORD" || none.report.Replaced || none.report.Snapshot != "" ||
+		none.report.Previous != id(one) || none.report.Observed != nil || none.report.Reason == "" || h.inPlace() != one {
+		t.Fatalf("没有记录：退出码 %d，%s%s", none.code, none.stdout, none.stderr)
+	}
+
+	published := h.publish(two)
+	if published.code != exitActive {
+		t.Fatalf("发布：退出码 %d，%s%s", published.code, published.stdout, published.stderr)
+	}
+	asked, commands := h.pool.asked(), len(h.docker.commands)
+	before, err := os.Stat(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	same := h.run(h.placeArgs())
+	after, err := os.Stat(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if same.code != exitActive || same.report.Outcome != "IN_PLACE" || same.report.Replaced || same.report.Reason != "" ||
+		same.report.Snapshot != id(two) || same.report.Previous != id(two) || same.report.Observed != nil || !os.SameFile(before, after) {
+		t.Fatalf("已经在那里：退出码 %d，%s%s", same.code, same.stdout, same.stderr)
+	}
+	if same.report.ExpectedDigest == "" || same.report.ExpectedDigest != published.report.ExpectedDigest {
+		t.Fatalf("期望摘要 %q，发布时是 %q", same.report.ExpectedDigest, published.report.ExpectedDigest)
+	}
+
+	// 放在那里的不是记录的那一份：不管它是什么，放回去。
+	for _, c := range []struct {
+		name     string
+		spoil    func() error
+		previous string
+		says     string
+	}{
+		{"没做完的发布留下的一份", func() error { h.place(one); return nil }, id(one), "was not the snapshot last confirmed on this pool"},
+		{"一份网关加载不了的文件", func() error { h.place(unloadable); return nil }, id(unloadable), "was not the snapshot last confirmed on this pool"},
+		{"文件不见了", func() error { return os.Remove(config) }, "", "there was no configuration file in place"},
+		{"一个空文件", func() error { h.place(""); return nil }, "", "could not be read as a configuration"},
+	} {
+		if err := c.spoil(); err != nil {
+			t.Fatal(err)
+		}
+		r := h.run(h.placeArgs())
+		if r.code != exitActive || r.report.Outcome != "IN_PLACE" || !r.report.Replaced || r.report.Restarted || r.report.Observed != nil ||
+			r.report.Snapshot != id(two) || r.report.Previous != c.previous || !strings.Contains(r.report.Reason, c.says) {
+			t.Errorf("%s：退出码 %d，%s%s", c.name, r.code, r.stdout, r.stderr)
+		}
+		info, err := os.Stat(config)
+		if err != nil || info.Mode().Perm() != 0o644 || h.inPlace() != two || len(h.leftovers()) != 0 {
+			t.Fatalf("%s：配置目录里是 %q（err=%v），另外留下了 %v", c.name, h.inPlace(), err, h.leftovers())
+		}
+	}
+	if h.pool.asked() != asked || len(h.docker.commands) != commands {
+		t.Fatalf("place 不读网关，不用 docker：网关被问了 %d 次，docker 命令 %v", h.pool.asked()-asked, h.docker.commands[commands:])
+	}
+	// 网关读到的是放回去的那一份：对账对得上。
+	if r := h.reconcile(); r.code != exitActive || r.report.Outcome != "IN_SYNC" || r.report.Snapshot != id(two) {
+		t.Fatalf("之后对账：退出码 %d，%s%s", r.code, r.stdout, r.stderr)
+	}
+
+	// 下面三种情况它什么都不做，退出码 1：这时不该启动网关。
+	h.place(one)
+	delivery, err := directory.New(h.poolDir, configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := delivery.Hold(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	busy := h.run(h.placeArgs())
+	release()
+	if busy.code != exitError || busy.stdout != "" || !strings.Contains(busy.stderr, "another publication") || h.inPlace() != one {
+		t.Fatalf("池被占着：退出码 %d，%q %q", busy.code, busy.stdout, busy.stderr)
+	}
+	record := filepath.Join(h.poolDir, recordFile)
+	intact, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(record, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := h.run(h.placeArgs()); r.code != exitError || r.stdout != "" || !strings.Contains(r.stderr, "damaged") || h.inPlace() != one {
+		t.Fatalf("记录坏了：退出码 %d，%q %q", r.code, r.stdout, r.stderr)
+	}
+	if err := os.WriteFile(record, intact, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := h.run([]string{"place", "--config-dir", filepath.Join(h.poolDir, "missing")}); r.code != exitError || r.stdout != "" || !strings.Contains(r.stderr, "directory:") {
+		t.Fatalf("配置目录不存在：退出码 %d，%q %q", r.code, r.stdout, r.stderr)
+	}
+	// 对照：锁放开、记录修好之后，同一条命令把那一份放回去了。
+	if r := h.run(h.placeArgs()); r.code != exitActive || r.report.Outcome != "IN_PLACE" || !r.report.Replaced || h.inPlace() != two {
+		t.Fatalf("对照：退出码 %d，%s%s", r.code, r.stdout, r.stderr)
+	}
+}
+
+func TestUsageOfRestartReconcileAndPlace(t *testing.T) {
 	h := newHarness(t)
 	restart := h.restartArgs(h.snapshot(needsRestart))
 	cases := []struct {
@@ -977,6 +1098,12 @@ func TestUsageOfRestartAndReconcile(t *testing.T) {
 		{"restart 的停止时限是负的", append(append([]string(nil), restart...), "--stop-timeout", "-5s"), "--stop-timeout must be a whole number of seconds"},
 		{"publish 不要容器", append(h.args(h.snapshot(two)), "--container", gatewayContainer), "flag provided but not defined: -container"},
 		{"restart 要帮助", []string{"restart", "--help"}, "-stop-timeout"},
+		{"place 只有子命令", []string{"place"}, "missing required flags: --config-dir\n"},
+		{"place 不要回读口", append(h.placeArgs(), "--read-back", h.poolAddr), "flag provided but not defined: -read-back"},
+		{"place 不要时限", append(h.placeArgs(), "--timeout", "3s"), "flag provided but not defined: -timeout"},
+		{"place 不要快照", append(h.placeArgs(), "--snapshot", h.snapshot(two)), "flag provided but not defined: -snapshot"},
+		{"place 多余的参数", append(h.placeArgs(), "now"), `unexpected argument "now"`},
+		{"place 要帮助", []string{"place", "--help"}, "-config-dir"},
 	}
 	for _, c := range cases {
 		r := h.run(c.args)

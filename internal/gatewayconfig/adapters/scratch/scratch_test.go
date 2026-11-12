@@ -324,21 +324,21 @@ func TestNewRefusesAnUnsafeOrIncompleteConfiguration(t *testing.T) {
 	}
 }
 
-// 离线加载用的容器，布局必须和池里的网关容器相同。compose 套件的 compose.yml 是目前唯一写着
-// 池的布局的地方；deploy/compose 建起来之后，这里改成对着它核对。
+// 离线加载用的容器，布局必须和池里的网关容器相同。池的布局写在部署文件里
+// （deploy/compose/compose.yml）；compose 套件跑的也是那个文件。
 func TestTheLayoutIsTheOneThePoolUses(t *testing.T) {
-	raw, err := os.ReadFile("../../../../tests/integration/compose/compose.yml")
+	raw, err := os.ReadFile("../../../../deploy/compose/compose.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, line := range []string{
 		"working_dir: " + WorkingDirectory,
 		`command: ["-f", "` + ConfigArgument + `"]`,
-		`/pool/config:` + ConfigMount + `:ro"`,
-		`/pool/tls:` + TLSMount + `:ro"`,
+		`}/config:` + ConfigMount + `:ro"`,
+		`}/tls:` + TLSMount + `:ro"`,
 	} {
 		if strings.Count(string(raw), line) != 1 {
-			t.Errorf("compose.yml 里没有恰好一处 %s", line)
+			t.Errorf("deploy/compose/compose.yml 里没有恰好一处 %s", line)
 		}
 	}
 	if ConfigArgument != strings.TrimPrefix(ConfigMount, WorkingDirectory+"/")+"/"+ConfigFile {

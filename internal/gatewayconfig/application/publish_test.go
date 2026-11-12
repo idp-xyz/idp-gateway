@@ -55,6 +55,8 @@ type pool struct {
 	file     *domain.Snapshot
 	reloadAt *time.Time
 	running  domain.Observation
+	// currentErr：放在那里的文件读不成一份配置时，读它返回的错误。换上一份之后就没有了。
+	currentErr error
 
 	held        bool
 	puts        []string
@@ -182,6 +184,9 @@ func (p *pool) Hold(context.Context) (func(), error) {
 }
 
 func (p *pool) Current(context.Context) (domain.Snapshot, bool, error) {
+	if p.currentErr != nil {
+		return domain.Snapshot{}, false, p.currentErr
+	}
 	if p.file == nil {
 		return domain.Snapshot{}, false, nil
 	}
@@ -200,7 +205,7 @@ func (p *pool) Put(ctx context.Context, snapshot domain.Snapshot) error {
 	if err := p.failPut[len(p.puts)]; err != nil {
 		return err
 	}
-	p.file = &snapshot
+	p.file, p.currentErr = &snapshot, nil
 	at := p.now.Add(p.reloadIn)
 	p.reloadAt = &at
 	return nil

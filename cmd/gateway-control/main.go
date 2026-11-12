@@ -3,29 +3,37 @@
 //	gateway-control publish   --snapshot <文件> --config-dir <池的配置目录> --read-back <host:port> …
 //	gateway-control restart   [--snapshot <文件>] --container <网关容器> …   （其余参数与 publish 相同）
 //	gateway-control reconcile --config-dir <池的配置目录> --read-back <host:port> …
+//	gateway-control place     --config-dir <池的配置目录>
 //
 // publish 把一份网关配置发布到池里，网关不重启。restart 发布一份要重启网关才能全部生效的配置
 // （启动设置变了的那种），会让这个池中断一下；不给 --snapshot 时，用的是这个池上最后一次得到确认的那一份。
 // reconcile 对账：池和记录对不上时，把最后一次得到确认的那一份放回去。
+// place 是网关启动之前做的：放在目录里的不是最后一次得到确认的那一份，就把那一份放回去。它不读网关。
 //
 // 记录是配置目录里的一个文件（.config.yaml.confirmed），由这个命令自己写：每次发布得到网关确认之后，
 // 记下是哪一份。放在那里的不是记录的那一份时，publish 和 restart 不动手（POOL_NOT_READY），先要 reconcile；
 // 只有一种情况 publish 自己补得上：放在那里的正是要发布的这一份，网关也报告它在生效。
-// 没有谁会自动去跑 reconcile：机器重启之后、发布器被强行杀掉之后，要有人或者定时任务来跑。
+//
+// 这个命令不是常驻的服务，四条命令都要有人来叫。deploy/compose 在启动一个池时叫其中两条：网关启动之前
+// place，网关起来之后 reconcile，对上了才开前置代理。发布器被强行杀掉而池没有重新启动时，仍要有人或者
+// 定时任务来跑 reconcile。
 //
 // 结果以 JSON 写到标准输出；退出码说明池现在的状态：
 //
-//	0  ACTIVE：这份配置正在网关上生效。IN_SYNC：池就是记录的样子，什么都没有写
+//	0  ACTIVE：这份配置正在网关上生效。IN_SYNC：池就是记录的样子，什么都没有写。
+//	   place 的两个结局：IN_PLACE，记录的那一份放在目录里了；NO_RECORD，还没有确认过任何发布，
+//	   什么都没有写。两个都表示网关可以启动
 //	1  出了错，池没有被碰过（这时没有 JSON，原因在标准错误上）
 //	2  命令行写得不对（缺参数、不认识的参数），什么都没做
 //	3  什么都没有做，池没有被碰过（REFUSED、RESTART_REQUIRED、POOL_NOT_READY、UNCONFIRMED）
 //	4  RESTORED：换上去了但没有生效，上一份已经放回去并得到确认。对账时：记录的那一份已经放回去并得到确认
-//	5  UNKNOWN：换上去了，没有生效，也没能确认放回去了；要对账。对账时：没能确认网关在跑记录的那一份
+//	5  UNKNOWN：换上去了，没有生效，也没能确认放回去了；要对账。对账时：没能确认网关在跑记录的那一份。
+//	   place 时：记录的那一份没能放回去，不该启动网关
 //	6  RESTART_PENDING：文件和运行配置都对得上，但网关的启动设置不是确认那份配置时的那一套；要重启
 //
 // 途中收到 SIGINT、SIGTERM 或 SIGHUP 时它不立刻退出：还没碰过池的，以退出码 1 结束；
 // 已经换上文件的，先把上一份放回去，结局是 RESTORED 或 UNKNOWN。重启一旦开始就做完。
-// 被强行杀掉时它来不及收拾，留下的由下一次 reconcile 收拾。
+// 被强行杀掉时它来不及收拾，留下的由下一次 reconcile 或 place 收拾。
 //
 // 它不在请求路径上。RouteIntent 到网关配置的编译、发布的状态和审批都还没有。
 package main
@@ -66,6 +74,7 @@ const (
 	commandPublish   = "publish"
 	commandRestart   = "restart"
 	commandReconcile = "reconcile"
+	commandPlace     = "place"
 )
 
 // dockerRunner 是 scratch.Config.Docker 的类型；nil 表示用本机的 docker 命令行。
@@ -80,8 +89,9 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer, docker dockerRunner) int {
-	if len(args) == 0 || (args[0] != commandPublish && args[0] != commandRestart && args[0] != commandReconcile) {
-		fmt.Fprintln(stderr, "usage: gateway-control publish|restart|reconcile [flags]   (gateway-control <command> --help lists them)")
+	known := map[string]bool{commandPublish: true, commandRestart: true, commandReconcile: true, commandPlace: true}
+	if len(args) == 0 || !known[args[0]] {
+		fmt.Fprintln(stderr, "usage: gateway-control publish|restart|reconcile|place [flags]   (gateway-control <command> --help lists them)")
 		return exitUsage
 	}
 	o, err := parse(args[0], args[1:], stderr)
@@ -93,6 +103,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, docker do
 	}
 	var result application.Result
 	switch o.command {
+	case commandPlace:
+		result, err = place(ctx, o)
 	case commandReconcile:
 		result, err = reconcile(ctx, o)
 	default:
@@ -112,7 +124,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, docker do
 
 func exitCode(outcome application.Outcome) int {
 	switch outcome {
-	case application.OutcomeActive, application.OutcomeInSync:
+	case application.OutcomeActive, application.OutcomeInSync, application.OutcomeInPlace, application.OutcomeNoRecord:
 		return exitActive
 	case application.OutcomeRefused, application.OutcomeRestartRequired, application.OutcomePoolNotReady, application.OutcomeUnconfirmed:
 		return exitNotDone
@@ -160,16 +172,19 @@ func parse(command string, args []string, output io.Writer) (options, error) {
 			required[name] = target
 		}
 	}
-	// 三条命令都要的：池的配置目录和回读口。
+	// 四条命令都要的：池的配置目录。
 	text(&o.configDir, "config-dir", "池的配置目录：挂进网关容器的那个目录，里面的 "+scratch.ConfigFile+" 是网关读的文件", true)
-	text(&o.pool.address, "read-back", "池里网关的回读口，host:port", true)
-	text(&o.pool.name, "read-back-name", "回读口证书上的名字", true)
-	text(&o.pool.cert, "tls-cert", "发布器的证书（PEM）", true)
-	text(&o.pool.key, "tls-key", "发布器的私钥（PEM）", true)
-	text(&o.pool.ca, "tls-ca", "签发回读口证书的 CA（PEM）", true)
-	flags.DurationVar(&o.timing.Settle, "settle", o.timing.Settle, "换上文件之后至少过这么久，读到的才算数")
-	flags.DurationVar(&o.timing.Timeout, "timeout", o.timing.Timeout, "最多等网关这么久；到时没有生效就把上一份放回去")
-	staged := command != commandReconcile
+	if command != commandPlace {
+		// place 是网关启动之前做的，没有回读口可读；其余三条都要回读口和读它用的证书。
+		text(&o.pool.address, "read-back", "池里网关的回读口，host:port", true)
+		text(&o.pool.name, "read-back-name", "回读口证书上的名字", true)
+		text(&o.pool.cert, "tls-cert", "发布器的证书（PEM）", true)
+		text(&o.pool.key, "tls-key", "发布器的私钥（PEM）", true)
+		text(&o.pool.ca, "tls-ca", "签发回读口证书的 CA（PEM）", true)
+		flags.DurationVar(&o.timing.Settle, "settle", o.timing.Settle, "换上文件之后至少过这么久，读到的才算数")
+		flags.DurationVar(&o.timing.Timeout, "timeout", o.timing.Timeout, "最多等网关这么久；到时没有生效就把上一份放回去")
+	}
+	staged := command == commandPublish || command == commandRestart
 	if staged {
 		// 发布和重启要的：要发布的快照，和离线加载它用的东西。
 		if command == commandPublish {
@@ -321,23 +336,33 @@ func reconcile(ctx context.Context, o options) (application.Result, error) {
 	return reconciler.Reconcile(ctx)
 }
 
+// place 在网关启动之前把记录的那一份放到位。它只碰配置目录。返回错误时什么都没做。
+func place(ctx context.Context, o options) (application.Result, error) {
+	delivery, err := directory.New(o.configDir, scratch.ConfigFile)
+	if err != nil {
+		return application.Result{}, err
+	}
+	return application.Place(ctx, delivery)
+}
+
 // outcome 是写到标准输出的那份 JSON。
 type outcome struct {
 	Outcome string `json:"outcome"`
 	// Reason 说明为什么不是 ACTIVE（对账时：为什么不是 IN_SYNC）；是的时候为空。
+	// place 时说明为什么要往回放，或者为什么没有可放的；本来就在那里时为空。
 	Reason string `json:"reason"`
-	// Snapshot 是要发布的那个文件的 SHA-256（对账时是记录里确认过的那一份，没有记录时为空）；
+	// Snapshot 是要发布的那个文件的 SHA-256（对账和 place 时是记录里确认过的那一份，没有记录时为空）；
 	// Previous 是动手之前放在那里的。
 	Snapshot string `json:"snapshot"`
 	Previous string `json:"previous"`
 	// Replaced 为真表示这一次往池的配置目录里写过配置；Restarted 为真表示这一次重启过网关。
 	Replaced  bool `json:"replaced"`
 	Restarted bool `json:"restarted"`
-	// ExpectedDigest 是期望的运行配置摘要：来自离线加载（没有通过时为空），对账时来自记录。
+	// ExpectedDigest 是期望的运行配置摘要：来自离线加载（没有通过时为空），对账和 place 时来自记录。
 	ExpectedDigest string `json:"expected_digest"`
 	// Restart 列出不同的启动设置：RESTART_REQUIRED、RESTART_PENDING，以及 restart 要改的那几项。
 	Restart []string `json:"restart"`
-	// Observed 是最后一次从池里的网关读到的；一次都没读到时为 null。
+	// Observed 是最后一次从池里的网关读到的；一次都没读到时为 null。place 不读网关，总是 null。
 	Observed *observed `json:"observed"`
 }
 

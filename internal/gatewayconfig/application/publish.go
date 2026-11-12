@@ -1,5 +1,6 @@
 // Package application 把往一个池发布一份快照这件事串起来：先离线加载，再换上去，经回读确认；
-// 没有生效就把上一份放回去。要重启网关才生效的快照走 Restart；池和记录对不上时由 Reconcile 收拾。
+// 没有生效就把上一份放回去。要重启网关才生效的快照走 Restart；池和记录对不上时由 Reconcile 收拾；
+// 网关启动之前由 Place 把记录的那一份放到位。
 // 它不知道快照是怎么送到网关那里的，也不知道回读走的是什么协议。
 //
 // 做法和它的依据见 docs/adr/ADR-0010.md 第 6、10 条和 tests/integration/compose/README.md。
@@ -36,7 +37,7 @@ const (
 	// 对账时：池和记录对不上，记录的那一份已经放回去并得到确认。
 	OutcomeRestored Outcome = "RESTORED"
 	// OutcomeUnknown：换上去了，没有生效，也没能确认放回去了。不是成功也不是失败，要对账。
-	// 对账时：记录的那一份在不在网关上生效，没能读到。
+	// 对账时：记录的那一份在不在网关上生效，没能读到。就位时：记录的那一份没能放回去。
 	OutcomeUnknown Outcome = "UNKNOWN"
 )
 
@@ -55,19 +56,19 @@ const (
 // Result 是一次操作做了什么、看到了什么。
 type Result struct {
 	Outcome Outcome
-	// Snapshot 是要发布的快照（对账时是记录里确认过的那一份）；Previous 是动手之前放在那里的，
-	// 那里什么都没有时为空。
+	// Snapshot 是要发布的快照（对账和就位时是记录里确认过的那一份）；Previous 是动手之前放在那里的，
+	// 那里什么都没有、或者读不成一份配置时为空。
 	Snapshot string
 	Previous string
 	// Replaced 报告这一次有没有往池里写过配置。
 	Replaced bool
 	// Restarted 报告这一次有没有重启过网关。
 	Restarted bool
-	// Expected 是期望的运行配置摘要：发布时来自离线加载（没有通过时为空），对账时来自记录。
+	// Expected 是期望的运行配置摘要：发布时来自离线加载（没有通过时为空），对账和就位时来自记录。
 	Expected string
 	// Observed 是最后一次从池里的网关读到的。
 	Observed domain.Observation
-	// Reason 说明为什么不是 ACTIVE（对账时：为什么不是 IN_SYNC）。
+	// Reason 说明为什么不是 ACTIVE（对账时：为什么不是 IN_SYNC；就位时：为什么要往回放）。
 	Reason string
 	// Restart 列出不同的启动设置：RESTART_REQUIRED、RESTART_PENDING，以及重启时要改的那几项。
 	Restart []string

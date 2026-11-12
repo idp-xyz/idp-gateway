@@ -13,7 +13,7 @@
 
 当前锁定 **1.7.0**。2026-11-11 核对时它是上游最新的正式发布版。
 
-部署时引用 `<repository>@<index>`，不引用标签：标签可以被改指别的镜像，摘要不能。
+部署时引用 `<repository>@<index>`，不引用标签：标签可以被改指别的镜像，摘要不能。单机的部署文件（`deploy/compose/compose.yml`）里写的就是这个引用。
 
 **测的就是要部署的那个构建。** 发布页上另有一个独立的二进制（`agentgateway-linux-amd64`）。它和镜像里的不是同一个构建：同一个提交，前者链接 musl，后者链接 glibc，两个文件的 SHA-256 不同。本项目原先测的是前者。改锁镜像时，把当时的黑盒套件（提交 `128ca4a`）原样在后者上跑了一遍：57 个用例、307 项检查的结果与前者逐项相同（单独比对，不在证据里）。此后只测镜像里的这一个。
 
@@ -39,6 +39,7 @@ python3 scripts/agentgateway_release.py     # 要联网；只用标准库
 - 只跟上游的正式发布版，不用预发布版。先读新版本发布说明里的破坏性变更。
 - `agentgateway.lock.json` 的各个字段一起改。`image.index` 和各平台的摘要用 `docker buildx imagetools inspect <仓库>:<标签>` 查。`sha256` 是取出来的二进制的摘要：先改 `image`，运行 `pin.py --fetch`，它会报出取到的二进制的 SHA-256 并拒绝安装，把这个值写进 `sha256` 再运行一次。这个值不是另一道来源核对（镜像已经是按摘要拉的），它的用处是让之后每次测试启动的都是这一个文件。
 - `docs/governance/project-manifest.json` 里 `AGENTGATEWAY` 的 `version` 和 `source` 跟着改（`tests/contracts` 里有一条测试检查两处一致）。
+- `deploy/compose/compose.yml` 和 `deploy/compose/.env.example` 里网关镜像的默认值跟着改（`tests/contracts` 里也有测试检查它们与锁定文件一致）。
 - 重跑黑盒套件、Gatekeeper 联调、Kubernetes 上的下发验证（`tests/integration/kubernetes`）和单机上的下发验证（`tests/integration/compose`）；旧版本的证据文件删掉，不留作对照。单机上的下发靠的是网关在配置文件被改名替换之后仍然重载：这是在上游源码和它自己的一条测试里看到的实现，换版本时要重新确认。
 - 发布器（`cmd/gateway-control`）另外依赖这个版本上看到的几样行为，换版本时由单机下发验证的 `SH-08` 至 `SH-11` 把关：
   - 网关解析配置文件之前，先拿加载它的那个进程的环境变量替换正文里的 `$名字`、`${名字}`，`$$` 是字面的 `$`（上游 `crates/agentgateway/src/types/local.rs`）。发布器据此拒绝正文里带这类引用的快照（`internal/gatewayconfig/domain/environment.go`）。上游要是多认一种写法，这条检查就漏掉一种，所以除了重跑用例，还要对着新版本的这段源码再看一遍。
@@ -46,7 +47,8 @@ python3 scripts/agentgateway_release.py     # 要联网；只用标准库
   - 发布器从回读口读的字段：`/config_dump` 整份（算摘要，取 `config` 段），`/api/runtime` 的 `build.version`、`build.gitRevision`、`ui.configStoreMode`、`configReload.synchronized`。
   - 配置文件被删掉时网关不退出：它报告读不到文件，继续跑原来那份，文件放回去之后照常重载（`SH-10`）。
   - 发布器的记录里有 `/config_dump` 的 `config` 段逐项的指纹，对账拿它判断网关是不是带着别的设置重启过（`SH-11`）。新版本的 `config` 段多一项、少一项或者换了写法，指纹就对不上。
-- 换了镜像之后，发布器的记录还是在旧的构建上做的，对账会报告 `UNCONFIRMED`。把在用的那份快照拿新镜像再 `publish` 一次，记录才跟到新的构建上（这一步只有单元测试；换镜像本身怎么做还没有设计）。
+- 单机的部署（`deploy/compose`）另外记着这个版本上看到的一样行为，由 `SH-15` 把关：后端的名字是网关第一次用到它时才解析的；那一次解析不了，那条路由就一直答 503，名字解析得了之后也不恢复，重启网关才好。新版本上这一点要是变了，`SH-15` 会不通过；那时把 `deploy/compose/README.md` 和 ADR-0010 里说这件事的两处改掉。
+- 换了镜像之后，发布器的记录还是在旧的构建上做的，对账会报告 `UNCONFIRMED`；单机的池这时启动，`front` 不会开。把在用的那份快照拿新镜像再 `publish` 一次，记录才跟到新的构建上（这一步只有单元测试；换镜像本身怎么做还没有设计）。
 - 提交证据之前看一眼它的 diff 里 `agentgateway.unmitigated_defaults` 有没有变：那是新二进制在不做处理时的默认行为。变了，就回头看 `tests/acceptance/blackbox/agentgateway.poc.yaml` 里对应的处理是否仍然需要、是否仍然够用。
 - 把下面这张核查表重做一遍。
 

@@ -24,8 +24,8 @@ import (
 )
 
 // 容器里的布局。池里的网关容器必须是同一个布局：配置里的相对路径（证书等）是相对工作目录解析的，
-// 两边不同，离线加载的结果就说明不了池里会怎样。internal 里有一条测试拿它对着
-// tests/integration/compose/compose.yml 核对。
+// 两边不同，离线加载的结果就说明不了池里会怎样。这个包里有一条测试拿它对着部署文件
+// （deploy/compose/compose.yml）核对。
 const (
 	WorkingDirectory = "/work"
 	ConfigMount      = "/work/config"

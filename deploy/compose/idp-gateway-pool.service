@@ -1,0 +1,33 @@
+# 开机时启动这个池，关机时停下它（deploy/compose/README.md）。
+#
+# 装之前把 WorkingDirectory 改成 compose.yml 和 .env 所在的目录，然后：
+#
+#   sudo install -m 0644 idp-gateway-pool.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now idp-gateway-pool.service
+#
+# 池里的容器都没有重启策略，docker 开机时不会自己去起它们；起它们的是这里的 docker compose up -d，
+# 先后见 compose.yml。对账没有通过时 up 以非零码结束，这个单元的状态是 failed，front 没有启动：
+# 看 docker compose logs place confirm，处理之后 systemctl restart idp-gateway-pool.service。
+#
+# 这个单元没有在真机上跑过，见 README.md 的"没有验证的"。
+
+[Unit]
+Description=IDP Gateway pool on this host (docker compose)
+Requires=docker.service
+After=docker.service network-online.target time-sync.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/idp-gateway/deploy/compose
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose stop
+# 启动：confirm 最多等网关 CONFIRM_TIMEOUT（默认 60 秒）。
+TimeoutStartSec=180
+# 停下：front 和网关先后各等在途的请求，各自最多 60 秒（compose.yml 的 stop_grace_period）。
+TimeoutStopSec=180
+
+[Install]
+WantedBy=multi-user.target

@@ -28,3 +28,6 @@ tests/integration/kubernetes/.run/
 
 # 单机 docker compose 的发布验证：每次运行现做的证书和配置，以及最近一次运行的结果。
 tests/integration/compose/.run/
+
+# 单机部署：照 .env.example 填好的那一份是这台机器自己的，不进仓库。
+deploy/compose/.env

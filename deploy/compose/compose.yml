@@ -1,0 +1,116 @@
+# 单机上的一个网关池（docs/adr/ADR-0010.md 第 10 条）。怎么装、怎么用见同目录的 README.md；
+# 各个变量的意思见 .env.example。
+#
+#   docker compose up -d     启动这个池，或者把停下的部分重新起起来
+#   docker compose stop      停下这个池
+#
+# 启动的先后由 depends_on 定：netns 和 place 一起开始，两个之间没有先后；netns 起来了、place 也以
+# 退出码 0 跑完了，才是 agentgateway；然后是 confirm；它的退出码是 0，才是 front。
+#
+# place 和 confirm 是跑完就退出的两步，每次 up 都重新跑一遍，跑的都是发布器 gateway-control：
+#   place    网关启动之前，把这个池上最后一次得到确认的那份配置放回目录里。它失败，网关不启动。
+#   confirm  网关起来之后对账：经回读口确认网关在跑的就是那一份。它的退出码不是 0，front 不启动，
+#            业务端口上没有人在听，请求进不来。
+#
+# 每个容器都写了 restart: "no"，docker 自己不去起其中任何一个：由 docker 起来的网关不经过 place，
+# 读到的是目录里当时放着的文件，不管有没有人确认过它。机器开机时启动这个池的是
+# idp-gateway-pool.service，它做的就是 docker compose up -d。
+name: idp-gateway-pool
+
+x-locked-down: &locked-down
+  restart: "no"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
+# place 和 confirm 共用的部分。镜像只是个壳：跑的是从本机挂进去的 gateway-control，
+# 与在本机上发布时用的是同一个文件；它必须是静态链接的。
+x-gateway-control: &gateway-control
+  <<: *locked-down
+  image: ${FRONT_IMAGE:-public.ecr.aws/nginx/nginx-unprivileged:stable-alpine@sha256:c3fc8fa482be50ef709c6438eb1bc98d50dbfe5a9b48be90711b8814f4dfd701}
+  entrypoint: ["/usr/local/bin/gateway-control"]
+  user: "${CONTROL_USER:?see .env.example}"
+
+services:
+  # 只占着网络命名空间和本机上的两个端口，自己什么都不做。网关和 front 都接在它的网络命名空间里，
+  # 相当于 Kubernetes 上同一个 Pod 里的两个容器：其中一个重启，另一个不受影响。
+  # 它自己重启过的话，另外两个要跟着重启才接得回来（README.md 的"要知道的"）。
+  netns:
+    <<: *locked-down
+    image: ${FRONT_IMAGE:-public.ecr.aws/nginx/nginx-unprivileged:stable-alpine@sha256:c3fc8fa482be50ef709c6438eb1bc98d50dbfe5a9b48be90711b8814f4dfd701}
+    entrypoint: ["sleep", "infinity"]
+    user: "65534:65534"
+    stop_signal: SIGKILL   # sleep 是容器里的 1 号进程，不理会 SIGTERM
+    ports:
+      - "${CALLERS_LISTEN:?see .env.example}:8080"            # 业务请求，听它的是 front
+      - "127.0.0.1:${READBACK_PORT:?see .env.example}:8443"   # 回读口，听它的是 agentgateway；只给本机上的发布器
+
+  place:
+    <<: *gateway-control
+    network_mode: none
+    command: ["place", "--config-dir=/pool/config"]
+    volumes:
+      - "${GATEWAY_CONTROL:?see .env.example}:/usr/local/bin/gateway-control:ro"
+      - "${POOL_DIR:?see .env.example}/config:/pool/config"
+
+  agentgateway:
+    <<: *locked-down
+    image: ${GATEWAY_IMAGE:-cr.agentgateway.dev/agentgateway@sha256:60216aafb03d37f94e952ff3d51d2f630a65b10ecaebdc0a864882f92610c45b}
+    network_mode: "service:netns"
+    depends_on:
+      netns:
+        condition: service_started
+      place:
+        condition: service_completed_successfully
+    working_dir: /work
+    command: ["-f", "config/config.yaml"]
+    user: "${GATEWAY_USER:?see .env.example}"
+    env_file:
+      - "${GATEWAY_ENV_FILE:?see .env.example}"   # 会话密钥 SESSION_KEY
+    volumes:
+      # 挂的是目录，不是 config.yaml 这一个文件：发布器换文件靠改名，只挂文件的话容器里看到的
+      # 一直是旧的那一个（tests/integration/compose 的 SH-05）。
+      - "${POOL_DIR:?see .env.example}/config:/work/config:ro"
+      - "${POOL_DIR:?see .env.example}/tls:/work/tls:ro"
+    # 收到终止信号之后，网关等在途的请求做完才退出，最多等到配置里的 connectionTerminationDeadline。
+    # 这里要比它长，不然到时 docker 直接杀掉网关。
+    stop_grace_period: 60s
+
+  confirm:
+    <<: *gateway-control
+    depends_on:
+      agentgateway:
+        condition: service_started
+    command:
+      - reconcile
+      - --config-dir=/pool/config
+      - --read-back=netns:8443
+      - --read-back-name=${READBACK_NAME:?see .env.example}
+      - --tls-cert=/publisher/tls.crt
+      - --tls-key=/publisher/tls.key
+      - --tls-ca=/publisher/ca.crt
+      - --timeout=${CONFIRM_TIMEOUT:-60s}
+    volumes:
+      - "${GATEWAY_CONTROL:?see .env.example}:/usr/local/bin/gateway-control:ro"
+      - "${POOL_DIR:?see .env.example}/config:/pool/config"
+      - "${PUBLISHER_CERT:?see .env.example}:/publisher/tls.crt:ro"
+      - "${PUBLISHER_KEY:?see .env.example}:/publisher/tls.key:ro"
+      - "${READBACK_CA:?see .env.example}:/publisher/ca.crt:ro"
+
+  front:
+    <<: *locked-down
+    image: ${FRONT_IMAGE:-public.ecr.aws/nginx/nginx-unprivileged:stable-alpine@sha256:c3fc8fa482be50ef709c6438eb1bc98d50dbfe5a9b48be90711b8814f4dfd701}
+    network_mode: "service:netns"
+    depends_on:
+      agentgateway:
+        condition: service_started
+      confirm:
+        condition: service_completed_successfully
+    # 不经镜像自带的入口脚本：它要改 /etc/nginx 下的文件，而这里的根文件系统是只读的。
+    entrypoint: ["nginx", "-c", "/etc/front/nginx.conf", "-g", "daemon off;"]
+    volumes:
+      - "./front.nginx.conf:/etc/front/nginx.conf:ro"
+    tmpfs:
+      - /tmp
+    # 停下时 nginx 收到的是 SIGQUIT（镜像里设的）：不再接新连接，等在途的请求做完。等多久与网关的一致。
+    stop_grace_period: 60s

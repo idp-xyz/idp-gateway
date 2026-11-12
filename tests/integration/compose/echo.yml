@@ -1,0 +1,18 @@
+# 套在 deploy/compose/compose.yml 上用的，单独拿这个文件起不来。
+#
+# 这套用例跑的池就是部署文件描述的那一个，一处不改；这里只添一个容器：路由的后端。
+# 部署文件自己不带后端，真的池里后端在别处。镜像和脚本的位置由 run.py 经环境变量给出。
+services:
+  echo:
+    image: ${TOOLS_IMAGE:?}
+    command: ["python", "/scripts/probe.py", "echo"]
+    environment:
+      ECHO_PORT: "8000"
+      PYTHONUNBUFFERED: "1"
+    user: "65534:65534"
+    volumes:
+      - "${PROBE:?}:/scripts/probe.py:ro"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 2s
