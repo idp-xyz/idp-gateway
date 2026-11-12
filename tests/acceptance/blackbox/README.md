@@ -153,6 +153,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
 14. 复核 ADR-0010 时改了三处。其一，被测的二进制换了：锁定的对象从发布页上的独立二进制改成上游容器镜像里的那一个（两者是同一个提交的两个构建），因为要部署的是镜像。其二，评审配置给收业务请求的监听加了 `bindAddress`（"默认配置不安全的地方"第 8 项），新增 `P1-NL-01`，默认行为的观察里多了一项。其三，评审配置加了回读口，新增 `P1-RB-03`。两个新用例第一次运行就通过；回读口的写法事先在单独的试验里试过。其余用例和期望没有动。重跑后是 58/59；除新增的两个用例外，307 项检查的结果与上一份证据逐项相同，而上一份证据是在另一个构建上跑的。不做处理时的默认行为，除新增的那一项外，两个构建上也相同。
 15. `gateway-authz` 的 Gatekeeper 适配器改成按 PDP 应答里的 `indeterminate` 字段区分"没查成"和拒绝（见 `tests/integration/gatekeeper/README.md` 第 3 点）。黑盒套件不启用这一步，`run.py`、配置和期望都没有动；因为服务的源码变了，重跑一次：仍是 58/59，326 项检查的结果与上一份证据逐项相同。
 16. 仓库里多了控制面的命令 `cmd/gateway-control` 和它的上下文 `internal/gatewayconfig`；`internal/platform/workloadtls` 加了客户端一侧的 TLS 配置，`gateway-authz` 用的服务端一侧行为没有变。证据的源码哈希覆盖 `cmd/` 和 `internal/` 下所有非测试的 Go 文件，所以重跑一次。`run.py`、配置和期望都没有动：仍是 58/59，326 项检查的结果与上一份证据逐项相同。
+17. `gateway-control` 多了 `reconcile` 和 `restart` 两条命令，`internal/gatewayconfig` 跟着多了记录和重启网关容器的部分；`gateway-authz` 自己的代码没有动。证据的源码哈希覆盖 `cmd/` 和 `internal/` 下所有非测试的 Go 文件，所以重跑一次。`run.py`、配置和期望都没有动：仍是 58/59，326 项检查的结果与上一份证据逐项相同。
 
 没有任何期望被放宽过。
 
