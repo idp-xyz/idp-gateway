@@ -32,6 +32,15 @@ func loaded(digest string) domain.Observation {
 		Version: version, Revision: revision, Settings: domain.Settings{"terminationMaxDeadline": `"45s"`, "dns": `"here"`}}
 }
 
+// startedWith 是一个网关从某份内容启动之后报告的样子：内容里写着 deadline=46 的，启动设置里那一项是 46 秒。
+func startedWith(content, digest string) domain.Observation {
+	observation := loaded(digest)
+	if strings.Contains(content, "deadline=46") {
+		observation.Settings["terminationMaxDeadline"] = `"46s"`
+	}
+	return observation
+}
+
 // pool 模拟一个池：目录里的一个文件，和一个监视它、过一会儿才重载的网关。它同时是离线加载的
 // 那个网关。时间是假的，只在发布器等待时往前走。
 type pool struct {
@@ -54,30 +63,72 @@ type pool struct {
 	failPut     map[int]error // 第几次 Put（从 1 数）返回什么错误
 	unreadable  func(now time.Time) bool
 	afterReload func()
-	cancel      context.CancelFunc
-	cancelAt    time.Duration
-	started     time.Time
+	// afterObserve 在每次读到之后调用，参数是从开始到现在过了多久。
+	afterObserve func(elapsed time.Duration)
+	cancel       context.CancelFunc
+	cancelAt     time.Duration
+	started      time.Time
+
+	// 记录：这个池上最后一次得到确认的发布。
+	record      *domain.Confirmation
+	recordErr   error         // 读记录时返回的错误
+	confirms    []string      // 记下过的各条（快照的内容）
+	failConfirm map[int]error // 第几次 Confirm（从 1 数）返回什么错误
+
+	// 网关进程。
+	restarts    int
+	failRestart map[int]error   // 第几次 Restart（从 1 数）返回什么错误
+	cannotStart map[string]bool // 重载得了、拿它启动却起不来的内容
+	verifyErr   error
+	down        bool // 网关没有在跑
+	// lingering：第几次重启（从 1 数）的命令返回之后，旧的进程还接着答话多久。
+	// 重启的命令返回了，不等于答话的已经是新的进程。
+	lingering  map[int]time.Duration
+	takeoverAt *time.Time // 新的进程到这一刻才开始答话
+
+	// events 按先后记下对池做过的事。
+	events []string
 }
 
 func newPool(t *testing.T, current string, loads map[string]string) *pool {
 	t.Helper()
 	start := time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
-	p := &pool{t: t, now: start, started: start, reloadIn: 300 * time.Millisecond, loads: loads, onlyOffline: map[string]bool{}, failPut: map[int]error{}}
+	p := &pool{t: t, now: start, started: start, reloadIn: 300 * time.Millisecond, loads: loads, onlyOffline: map[string]bool{}, failPut: map[int]error{},
+		failConfirm: map[int]error{}, failRestart: map[int]error{}, cannotStart: map[string]bool{}, lingering: map[int]time.Duration{}}
 	if current != "" {
 		snapshot := snap(t, current)
 		p.file = &snapshot
-		p.running = loaded(loads[current])
+		p.running = startedWith(current, loads[current])
 	}
 	return p
 }
 
-func (p *pool) publisher() *Publisher {
-	publisher, err := New(p, p, p, Timing{Settle: time.Second, Timeout: 10 * time.Second, Interval: 100 * time.Millisecond})
+// confirmed 让这个池带着一条记录：content 是在这个池上得到确认的，当时网关报告的是它加载出来的样子。
+func (p *pool) confirmed(content string) *pool {
+	p.t.Helper()
+	confirmation, err := domain.ConfirmedBy(snap(p.t, content), startedWith(content, p.loads[content]))
 	if err != nil {
 		p.t.Fatal(err)
 	}
-	publisher.now = func() time.Time { return p.now }
-	publisher.sleep = func(ctx context.Context, d time.Duration) error {
+	p.record = &confirmation
+	return p
+}
+
+// adopted 让这个池带着一条接手来的记录：发布器第一次动它时，放在那里的是 content。
+func (p *pool) adopted(content string) *pool {
+	p.t.Helper()
+	found, err := domain.FoundInPlace(snap(p.t, content), startedWith(content, p.loads[content]))
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	p.record = &found
+	return p
+}
+
+// clock 把假的时间接到等待上。
+func (p *pool) clock(w *watch) {
+	w.now = func() time.Time { return p.now }
+	w.sleep = func(ctx context.Context, d time.Duration) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -87,7 +138,15 @@ func (p *pool) publisher() *Publisher {
 		}
 		return nil
 	}
-	return publisher
+}
+
+func (p *pool) publisher() *Publisher {
+	publisher, err := New(p, p, p, Timing{Settle: time.Second, Timeout: 10 * time.Second, Interval: 100 * time.Millisecond})
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	p.clock(&publisher.watch)
+	return publisher.WithProcess(p)
 }
 
 func (p *pool) elapsed() time.Duration { return p.now.Sub(p.started) }
@@ -105,11 +164,8 @@ func (p *pool) Load(_ context.Context, snapshot domain.Snapshot) (domain.Observa
 	if !ok {
 		return domain.Observation{}, &ports.RejectedError{Reason: "routes[2]: unknown field"}
 	}
-	observation := loaded(digest)
+	observation := startedWith(string(snapshot.Content()), digest)
 	observation.Settings["dns"] = `"elsewhere"` // 离线加载在另一个环境里
-	if strings.Contains(string(snapshot.Content()), "deadline=46") {
-		observation.Settings["terminationMaxDeadline"] = `"46s"`
-	}
 	if strings.Contains(string(snapshot.Content()), "storage=file") {
 		observation.StorageMode = "file"
 	}
@@ -136,7 +192,11 @@ func (p *pool) Put(ctx context.Context, snapshot domain.Snapshot) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if !p.held {
+		p.t.Error("换文件时没有占着这个池")
+	}
 	p.puts = append(p.puts, string(snapshot.Content()))
+	p.events = append(p.events, "put "+string(snapshot.Content()))
 	if err := p.failPut[len(p.puts)]; err != nil {
 		return err
 	}
@@ -146,10 +206,77 @@ func (p *pool) Put(ctx context.Context, snapshot domain.Snapshot) error {
 	return nil
 }
 
+func (p *pool) Confirmed(context.Context) (domain.Confirmation, bool, error) {
+	if !p.held {
+		p.t.Error("读记录时没有占着这个池")
+	}
+	if p.recordErr != nil {
+		return domain.Confirmation{}, false, p.recordErr
+	}
+	if p.record == nil {
+		return domain.Confirmation{}, false, nil
+	}
+	return *p.record, true, nil
+}
+
+func (p *pool) Confirm(ctx context.Context, confirmation domain.Confirmation) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !p.held {
+		p.t.Error("记录时没有占着这个池")
+	}
+	p.confirms = append(p.confirms, string(confirmation.Snapshot.Content()))
+	p.events = append(p.events, "confirm "+string(confirmation.Snapshot.Content()))
+	if err := p.failConfirm[len(p.confirms)]; err != nil {
+		return err
+	}
+	p.record = &confirmation
+	return nil
+}
+
+// Process
+func (p *pool) Verify(context.Context) error {
+	p.events = append(p.events, "verify")
+	return p.verifyErr
+}
+
+// Restart 让网关从目录里的文件重新启动：启动设置跟着文件走；文件加载不了时它起不来。
+func (p *pool) Restart(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	p.restarts++
+	p.events = append(p.events, "restart")
+	if err := p.failRestart[p.restarts]; err != nil {
+		return err
+	}
+	if linger := p.lingering[p.restarts]; linger > 0 {
+		at := p.now.Add(linger)
+		p.takeoverAt = &at // 在那之前，旧的进程照常看着文件、照常答话
+		return nil
+	}
+	p.comeUp()
+	return nil
+}
+
+// comeUp 让一个新的进程从目录里现在的文件起来，接手答话。
+func (p *pool) comeUp() {
+	p.reloadAt, p.takeoverAt = nil, nil
+	content := string(p.file.Content())
+	digest, ok := p.loads[content]
+	if p.down = !ok || p.onlyOffline[content] || p.cannotStart[content]; !p.down {
+		p.running = startedWith(content, digest)
+	}
+}
+
 // ReadBack
 func (p *pool) Observe(ctx context.Context) (domain.Observation, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.Observation{}, err
+	}
+	if p.takeoverAt != nil && !p.now.Before(*p.takeoverAt) {
+		p.comeUp()
 	}
 	if p.reloadAt != nil && !p.now.Before(*p.reloadAt) {
 		p.reloadAt = nil
@@ -163,10 +290,21 @@ func (p *pool) Observe(ctx context.Context) (domain.Observation, error) {
 			p.afterReload()
 		}
 	}
-	if p.unreadable != nil && p.unreadable(p.now) {
+	if p.down || (p.unreadable != nil && p.unreadable(p.now)) {
 		return domain.Observation{}, errors.New("connection refused")
 	}
+	if p.afterObserve != nil {
+		p.afterObserve(p.elapsed())
+	}
 	return p.running, nil
+}
+
+// recorded 是记录里的那份快照的内容；没有记录时为空。
+func (p *pool) recorded() string {
+	if p.record == nil {
+		return ""
+	}
+	return string(p.record.Snapshot.Content())
 }
 
 func publish(t *testing.T, p *pool, content string) Result {
@@ -475,5 +613,214 @@ func TestNewRefusesUnusableArguments(t *testing.T) {
 		if _, err := build(); err == nil {
 			t.Errorf("%s：被接受了", name)
 		}
+	}
+}
+
+// 发布成功才记下来；第一次动一个池之前，先把当时放在那里的记成第一条。
+func TestAConfirmedPublicationIsRecorded(t *testing.T) {
+	p := newPool(t, "one", twoSnapshots)
+	if result := publish(t, p, "two"); result.Outcome != OutcomeActive {
+		t.Fatalf("%+v", result)
+	}
+	if want := []string{"confirm one", "put two", "confirm two"}; !reflect.DeepEqual(p.events, want) {
+		t.Fatalf("做过的事是 %v", p.events)
+	}
+	if p.recorded() != "two" || p.record.Digest != "digest-two" || !p.record.Holds(p.running) || p.record.Adopted || p.record.Startup == nil {
+		t.Fatalf("记录是 %+v", p.record)
+	}
+
+	// 没有生效的不记：记录里仍是上一份。
+	p = newPool(t, "one", twoSnapshots)
+	p.onlyOffline["two"] = true
+	if result := publish(t, p, "two"); result.Outcome != OutcomeRestored {
+		t.Fatalf("%+v", result)
+	}
+	if want := []string{"confirm one", "put two", "put one"}; !reflect.DeepEqual(p.events, want) || p.recorded() != "one" || p.record.Digest != "digest-one" {
+		t.Fatalf("做过的事是 %v，记录是 %+v", p.events, p.record)
+	}
+	// 那一条是接手来的：放在那里的是它，网关在跑它，别的没有核对过。
+	if !p.record.Adopted || p.record.Startup != nil {
+		t.Fatalf("记录是 %+v", p.record)
+	}
+
+	// 已经有记录的池：不再记"上一份"，只在成功之后换成新的。
+	p = newPool(t, "one", twoSnapshots).confirmed("one")
+	if result := publish(t, p, "two"); result.Outcome != OutcomeActive || !reflect.DeepEqual(p.events, []string{"put two", "confirm two"}) {
+		t.Fatalf("%+v，做过的事是 %v", result, p.events)
+	}
+}
+
+// 第一条记录写不下来：还没有动过池，就此停下。
+func TestWithoutAFirstRecordThePoolIsNotTouched(t *testing.T) {
+	p := newPool(t, "one", twoSnapshots)
+	p.failConfirm[1] = errors.New("read-only file system")
+	if _, err := p.publisher().Publish(context.Background(), snap(t, "two")); err == nil || !strings.Contains(err.Error(), "read-only file system") {
+		t.Fatalf("得到 %v", err)
+	}
+	if len(p.puts) != 0 || p.held {
+		t.Fatalf("写了 %v，held=%t", p.puts, p.held)
+	}
+
+	// 记录读不成样子：既不能当它没有，也不能照着它做。
+	p = newPool(t, "one", twoSnapshots)
+	p.recordErr = errors.New("the record is damaged")
+	if _, err := p.publisher().Publish(context.Background(), snap(t, "two")); err == nil || !strings.Contains(err.Error(), "damaged") || len(p.puts) != 0 {
+		t.Fatalf("得到 %v，写了 %v", err, p.puts)
+	}
+}
+
+var offRecordSnapshots = map[string]string{"one": "digest-one", "two": "digest-two", "three": "digest-three", "one deadline=46": "digest-one"}
+
+// 放在那里的不是记录里确认过的那一份：上一次发布没有做完，或者有别人写过。这时不发布别的。
+func TestWhatIsInPlaceMustBeTheConfirmedSnapshot(t *testing.T) {
+	p := newPool(t, "two", offRecordSnapshots).confirmed("one") // 网关加载了 two，也报告成功，但没有人确认过它
+	result := publish(t, p, "three")
+	if result.Outcome != OutcomePoolNotReady || !strings.Contains(result.Reason, "reconcile") || !strings.Contains(result.Reason, snap(t, "one").ShortID()) ||
+		result.Replaced || len(p.events) != 0 || p.recorded() != "one" {
+		t.Fatalf("%+v，做过的事是 %v", result, p.events)
+	}
+	if result.Previous != snap(t, "two").ID() || result.Expected != "digest-three" || result.Observed.Digest != "digest-two" {
+		t.Fatalf("%+v", result)
+	}
+
+	// 文件不见了：连正要发布的也不是。
+	p = newPool(t, "one", offRecordSnapshots).confirmed("one")
+	p.file = nil
+	if result := publish(t, p, "one"); result.Outcome != OutcomePoolNotReady || len(p.events) != 0 {
+		t.Fatalf("%+v，做过的事是 %v", result, p.events)
+	}
+
+	// 放在那里的正是要发布的这一份，但它要重启才到位：这不是一次发布补得完的，先对账。
+	p = newPool(t, "one deadline=46", offRecordSnapshots).confirmed("one")
+	p.running.Settings["terminationMaxDeadline"] = `"45s"` // 网关没有重启过
+	result = publish(t, p, "one deadline=46")
+	if result.Outcome != OutcomePoolNotReady || len(result.Restart) != 0 || len(p.events) != 0 {
+		t.Fatalf("%+v，做过的事是 %v", result, p.events)
+	}
+}
+
+// 放在那里的不是记录的那一份，却正是要发布的这一份：上一次发布它时换上去了，没来得及记。
+// 网关确认它在生效就补记，不用先收回去。
+func TestPublishingWhatWasLeftInPlaceCompletesIt(t *testing.T) {
+	p := newPool(t, "two", offRecordSnapshots).confirmed("one")
+	result := publish(t, p, "two")
+	if result.Outcome != OutcomeActive || result.Replaced || result.Reason != "" || !reflect.DeepEqual(p.events, []string{"confirm two"}) {
+		t.Fatalf("%+v，做过的事是 %v", result, p.events)
+	}
+	if p.recorded() != "two" || p.record.Adopted || !p.record.Holds(p.running) || result.Previous != snap(t, "two").ID() || result.Observed.Digest != "digest-two" {
+		t.Fatalf("%+v，记录是 %+v", result, p.record)
+	}
+	// 那个文件可能刚刚才换上去：和刚换上去时一样，过了观察期读到的才算数。
+	if p.elapsed() != time.Second {
+		t.Fatalf("等了 %s", p.elapsed())
+	}
+
+	// 网关还没有加载它（文件是 0.2 秒前才换上去的）：等它。
+	p = newPool(t, "two", offRecordSnapshots).confirmed("one")
+	p.running = loaded("digest-one")
+	at := p.now.Add(100 * time.Millisecond)
+	p.reloadAt = &at
+	if result := publish(t, p, "two"); result.Outcome != OutcomeActive || len(p.puts) != 0 || p.recorded() != "two" {
+		t.Fatalf("%+v，写了 %v，记录是 %q", result, p.puts, p.recorded())
+	}
+
+	// 网关加载不了它，或者一直没有去加载：不认，也不动它，留给对账。加载失败是网关自己报告的，不用等到时限。
+	for name, c := range map[string]struct {
+		spoil  func(*pool)
+		waited time.Duration
+	}{
+		"加载不了": {func(p *pool) {
+			p.onlyOffline["two"] = true
+			at := p.now.Add(100 * time.Millisecond)
+			p.reloadAt = &at
+		}, time.Second},
+		"一直没有加载": {func(*pool) {}, 10 * time.Second},
+	} {
+		p = newPool(t, "two", offRecordSnapshots).confirmed("one")
+		p.running = loaded("digest-one")
+		c.spoil(p)
+		result := publish(t, p, "two")
+		if result.Outcome != OutcomePoolNotReady || !strings.Contains(result.Reason, "does not report it running") || !strings.Contains(result.Reason, "reconcile") ||
+			len(p.events) != 0 || p.recorded() != "one" || p.elapsed() != c.waited {
+			t.Errorf("%s：%+v，做过的事是 %v，等了 %s", name, result, p.events, p.elapsed())
+		}
+	}
+
+	// 等的时候被叫停：什么都没动，报错。
+	p = newPool(t, "two", offRecordSnapshots).confirmed("one")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p.cancel, p.cancelAt = cancel, 500*time.Millisecond
+	if _, err := p.publisher().Publish(ctx, snap(t, "two")); err == nil || !strings.Contains(err.Error(), "interrupted") || len(p.events) != 0 {
+		t.Fatalf("得到 %v，做过的事是 %v", err, p.events)
+	}
+
+	// 记不下来：什么都没动，报错。
+	p = newPool(t, "two", offRecordSnapshots).confirmed("one")
+	p.failConfirm[1] = errors.New("no space left on device")
+	if _, err := p.publisher().Publish(context.Background(), snap(t, "two")); err == nil || !strings.Contains(err.Error(), "could not be recorded: no space left on device") ||
+		len(p.puts) != 0 || p.recorded() != "one" {
+		t.Fatalf("得到 %v，写了 %v，记录是 %q", err, p.puts, p.recorded())
+	}
+}
+
+// 生效了却记不下来：不算数，收回去。留着的话，下一次对账会把它当成没做完的发布。
+func TestAPublicationThatCannotBeRecordedIsTakenBack(t *testing.T) {
+	p := newPool(t, "one", twoSnapshots).confirmed("one")
+	p.failConfirm[1] = errors.New("no space left on device")
+	result := publish(t, p, "two")
+	if result.Outcome != OutcomeRestored || !strings.Contains(result.Reason, "could not be recorded: no space left on device") {
+		t.Fatalf("%+v", result)
+	}
+	if !reflect.DeepEqual(p.puts, []string{"two", "one"}) || p.recorded() != "one" || result.Observed.Digest != "digest-one" {
+		t.Fatalf("写了 %v，记录是 %q，最后读到 %+v", p.puts, p.recorded(), result.Observed)
+	}
+}
+
+// 已经在生效的那一份再发布一次：配置不再写；记录里没有它时补上，有了就不再动。
+func TestPublishingWhatIsAlreadyActiveRecordsItOnce(t *testing.T) {
+	p := newPool(t, "one", twoSnapshots)
+	if result := publish(t, p, "one"); result.Outcome != OutcomeActive || !reflect.DeepEqual(p.events, []string{"confirm one"}) {
+		t.Fatalf("%+v，做过的事是 %v", result, p.events)
+	}
+	if result := publish(t, p, "one"); result.Outcome != OutcomeActive || len(p.events) != 1 {
+		t.Fatalf("%+v，做过的事是 %v", result, p.events)
+	}
+	// 记录是在网关的另一个构建上做的：摘要没法比，重新记一次。
+	p.record.Revision = "0000000"
+	if result := publish(t, p, "one"); result.Outcome != OutcomeActive || len(p.events) != 2 || p.record.Revision != revision {
+		t.Fatalf("%+v，做过的事是 %v", result, p.events)
+	}
+	// 记录里的启动设置不是网关现在的这一套（确认之后网关带着同样的设置重启过，只是记录旧了）：重新记一次。
+	p.record.Startup["terminationMaxDeadline"] = "another fingerprint"
+	if result := publish(t, p, "one"); result.Outcome != OutcomeActive || len(p.events) != 3 || len(p.record.PendingRestart(p.running)) != 0 {
+		t.Fatalf("%+v，做过的事是 %v", result, p.events)
+	}
+	// 记录是接手来的：这一次核对过了，换成确认过的。
+	p = newPool(t, "one", twoSnapshots).adopted("one")
+	if result := publish(t, p, "one"); result.Outcome != OutcomeActive || !reflect.DeepEqual(p.events, []string{"confirm one"}) || p.record.Adopted || p.record.Startup == nil {
+		t.Fatalf("%+v，做过的事是 %v，记录是 %+v", result, p.events, p.record)
+	}
+	// 补不上：池没有被碰过，报错。
+	p = newPool(t, "one", twoSnapshots)
+	p.failConfirm[1] = errors.New("read-only file system")
+	if _, err := p.publisher().Publish(context.Background(), snap(t, "one")); err == nil || len(p.puts) != 0 {
+		t.Fatalf("得到 %v，写了 %v", err, p.puts)
+	}
+}
+
+// 网关刚确认，发布器就被叫停：已经生效的照样记下来，不因为这一下又收回去。
+func TestCancellationRightAfterTheConfirmationStillRecordsIt(t *testing.T) {
+	p := newPool(t, "one", twoSnapshots).confirmed("one")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p.afterObserve = func(elapsed time.Duration) {
+		if elapsed >= time.Second {
+			cancel()
+		}
+	}
+	result, err := p.publisher().Publish(ctx, snap(t, "two"))
+	if err != nil || result.Outcome != OutcomeActive || p.recorded() != "two" || !reflect.DeepEqual(p.puts, []string{"two"}) {
+		t.Fatalf("%+v（%v），写了 %v，记录是 %q", result, err, p.puts, p.recorded())
 	}
 }

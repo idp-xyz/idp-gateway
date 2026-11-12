@@ -42,6 +42,13 @@ const (
 	// 池里的网关读到它之后，回读口再也不回答。
 	silences = `{"config":{"terminationMaxDeadline":"45s"},"routes":["one","silences-the-read-back"]}`
 
+	// 与 two 只差启动设置；与它启动设置相同、路由不同的另一份；要重启、池里却加载不了的一份。
+	sameSettings      = `{"config":{"terminationMaxDeadline":"90s"},"routes":["one","two","three"]}`
+	restartUnloadable = `{"config":{"terminationMaxDeadline":"120s"},"routes":["one","needs-a-file-the-pool-lacks"]}`
+
+	gatewayContainer = "idp-gateway-test-pool-gateway"
+	recordFile       = "." + configFile + ".confirmed"
+
 	loadError = "routes[1]: unknown field `notAFieldOfARoute` at line 1 column 70"
 )
 
@@ -56,6 +63,30 @@ type fakeGateway struct {
 	failure  string
 	silenced bool
 	peers    map[string]bool
+	// keepsStartup：config 段只在启动时读，之后换文件不跟着变（池里的网关）。
+	// 为假时每次都跟着文件走：临时网关每次都是新起的。
+	keepsStartup bool
+	startup      json.RawMessage // 启动时读到的 config 段
+	down         bool            // 重启时拿到的是一份加载不了的文件：没有起来
+	restarts     int
+}
+
+// restart 让网关从现在的文件重新启动。文件加载不了，它就起不来。
+func (g *fakeGateway) restart() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.restarts++
+	g.startup, g.running, g.failure, g.down = nil, "", "", false
+	content, err := os.ReadFile(g.file())
+	if err != nil {
+		g.down = true
+		return
+	}
+	for _, word := range g.refuses {
+		if strings.Contains(string(content), word) {
+			g.down = true
+		}
+	}
 }
 
 func (g *fakeGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -63,7 +94,7 @@ func (g *fakeGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer g.mu.Unlock()
 	g.peers[workloadtls.PeerIdentity(r.TLS)] = true
 	path := g.file()
-	if path == "" {
+	if path == "" || g.down {
 		http.Error(w, "not running", http.StatusServiceUnavailable)
 		return
 	}
@@ -102,7 +133,30 @@ func (g *fakeGateway) load(content string) {
 			return
 		}
 	}
+	if g.keepsStartup {
+		var document map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(content), &document); err == nil {
+			if g.startup == nil {
+				g.startup = document["config"]
+			}
+			document["config"] = g.startup
+			if rewritten, err := json.Marshal(document); err == nil {
+				content = string(rewritten)
+			}
+		}
+	}
 	g.running, g.failure = content, ""
+}
+
+// setting 是网关报告的启动设置里的那一项。
+func (g *fakeGateway) setting() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	var document struct {
+		Config map[string]string `json:"config"`
+	}
+	_ = json.Unmarshal([]byte(g.running), &document)
+	return document.Config["terminationMaxDeadline"]
 }
 
 func (g *fakeGateway) sawOnly(identity string) bool {
@@ -117,6 +171,11 @@ type fakeDocker struct {
 	candidate string
 	commands  []string
 	runErr    error
+	// 池里的网关容器：它挂着哪个目录，重启它时叫谁。
+	mounted string
+	gateway *fakeGateway
+	// restarted 是最近一条 docker restart 的全部参数。
+	restarted []string
 }
 
 func (d *fakeDocker) run(_ context.Context, _ []string, argv ...string) (string, error) {
@@ -135,7 +194,19 @@ func (d *fakeDocker) run(_ context.Context, _ []string, argv ...string) (string,
 				d.candidate = strings.TrimSuffix(argv[i+1], ":/work/config:ro")
 			}
 		}
+	case "restart":
+		if argv[len(argv)-1] != gatewayContainer {
+			return "Error response from daemon: No such container: " + argv[len(argv)-1] + "\n", errors.New("exit status 1")
+		}
+		d.restarted = append([]string(nil), argv...)
+		d.gateway.restart()
 	case "inspect":
+		if strings.Contains(argv[2], ".Mounts") { // 问的是池里的网关容器
+			if argv[len(argv)-1] != gatewayContainer {
+				return "Error response from daemon: No such object: " + argv[len(argv)-1] + "\n", errors.New("exit status 1")
+			}
+			return `true 60 [{"Type":"bind","Source":"` + d.mounted + `","Destination":"/work/config","RW":false}]` + "\n", nil
+		}
 		content, _ := os.ReadFile(filepath.Join(d.candidate, configFile))
 		if strings.Contains(string(content), "notAFieldOfARoute") {
 			return "false 1\n", nil
@@ -213,8 +284,9 @@ func newHarness(t *testing.T) *harness {
 	h.pool = &fakeGateway{
 		file:    func() string { return filepath.Join(h.poolDir, configFile) },
 		refuses: []string{"notAFieldOfARoute", "needs-a-file-the-pool-lacks"},
-		fragile: true,
+		fragile: true, keepsStartup: true,
 	}
+	h.docker.mounted, h.docker.gateway = h.poolDir, h.pool
 	h.scratch = &fakeGateway{file: h.docker.file}
 	h.poolAddr = serve(t, ca, "pool", h.pool)
 	h.stageAddr = serve(t, ca, "scratch", h.scratch)
@@ -238,7 +310,7 @@ func (h *harness) inPlace() string {
 	return string(content)
 }
 
-// leftovers 列出配置目录里除配置文件和锁文件之外的东西，和放候选配置的目录里的东西。
+// leftovers 列出配置目录里除配置文件、锁文件和记录之外的东西，和放候选配置的目录里的东西。
 func (h *harness) leftovers() []string {
 	h.t.Helper()
 	var names []string
@@ -248,7 +320,7 @@ func (h *harness) leftovers() []string {
 			h.t.Fatal(err)
 		}
 		for _, entry := range entries {
-			if name := entry.Name(); name != configFile && name != "."+configFile+".lock" {
+			if name := entry.Name(); name != configFile && name != "."+configFile+".lock" && name != recordFile {
 				names = append(names, name)
 			}
 		}
@@ -312,6 +384,44 @@ func (h *harness) publish(content string) result {
 	return h.run(h.args(h.snapshot(content)))
 }
 
+// restartArgs 是 restart 的参数：与 publish 的相同，另外指出池里的网关容器。snapshot 为空时不给快照。
+func (h *harness) restartArgs(snapshot string) []string {
+	args := []string{"restart", "--container", gatewayContainer}
+	if snapshot != "" {
+		args = append(args, "--snapshot", snapshot)
+	}
+	return append(args, h.args("-")[3:]...)
+}
+
+func (h *harness) restart(content string) result {
+	h.t.Helper()
+	return h.run(h.restartArgs(h.snapshot(content)))
+}
+
+func (h *harness) reconcileArgs() []string {
+	return []string{"reconcile", "--config-dir", h.poolDir, "--read-back", h.poolAddr, "--read-back-name", readBackName,
+		"--tls-cert", h.publisher.CertFile, "--tls-key", h.publisher.KeyFile, "--tls-ca", h.ca.File(),
+		"--settle", "20ms", "--timeout", h.timeout}
+}
+
+func (h *harness) reconcile() result {
+	h.t.Helper()
+	return h.run(h.reconcileArgs())
+}
+
+// count 数某条 docker 命令被叫过几次。
+func (d *fakeDocker) count(command string) int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	n := 0
+	for _, name := range d.commands {
+		if name == command {
+			n++
+		}
+	}
+	return n
+}
+
 func id(content string) string {
 	sum := sha256.Sum256([]byte(content))
 	return hex.EncodeToString(sum[:])
@@ -345,7 +455,7 @@ func TestPublishesASnapshotAndReportsIt(t *testing.T) {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	if want := []string{"expected_digest", "observed", "outcome", "previous", "reason", "replaced", "restart", "snapshot"}; !reflect.DeepEqual(keys, want) {
+	if want := []string{"expected_digest", "observed", "outcome", "previous", "reason", "replaced", "restart", "restarted", "snapshot"}; !reflect.DeepEqual(keys, want) {
 		t.Fatalf("输出的键是 %v", keys)
 	}
 	if restart, ok := raw["restart"].([]any); !ok || len(restart) != 0 {
@@ -375,7 +485,7 @@ func TestWhatIsNotPublishedLeavesThePoolAlone(t *testing.T) {
 	h := newHarness(t)
 
 	refused := h.publish(unloadable)
-	if refused.code != exitNotPublished || refused.report.Outcome != "REFUSED" || refused.report.Reason != loadError ||
+	if refused.code != exitNotDone || refused.report.Outcome != "REFUSED" || refused.report.Reason != loadError ||
 		refused.report.Replaced || refused.report.Observed != nil || refused.report.ExpectedDigest != "" {
 		t.Fatalf("加载不了的：退出码 %d，%s%s", refused.code, refused.stdout, refused.stderr)
 	}
@@ -386,13 +496,13 @@ func TestWhatIsNotPublishedLeavesThePoolAlone(t *testing.T) {
 	// 带环境变量的：不用起容器就拒绝。
 	commands := len(h.docker.commands)
 	environment := h.publish(`{"config":{"terminationMaxDeadline":"45s"},"routes":["one","tenant-$HOSTNAME"]}`)
-	if environment.code != exitNotPublished || environment.report.Outcome != "REFUSED" || !strings.Contains(environment.report.Reason, "($HOSTNAME)") ||
+	if environment.code != exitNotDone || environment.report.Outcome != "REFUSED" || !strings.Contains(environment.report.Reason, "($HOSTNAME)") ||
 		environment.report.Replaced || len(h.docker.commands) != commands {
 		t.Fatalf("带环境变量的：退出码 %d，%s%s", environment.code, environment.stdout, environment.stderr)
 	}
 
 	restart := h.publish(needsRestart)
-	if restart.code != exitNotPublished || restart.report.Outcome != "RESTART_REQUIRED" || restart.report.Replaced ||
+	if restart.code != exitNotDone || restart.report.Outcome != "RESTART_REQUIRED" || restart.report.Replaced ||
 		!reflect.DeepEqual(restart.report.Restart, []string{"terminationMaxDeadline"}) || restart.report.Observed == nil {
 		t.Fatalf("要重启的：退出码 %d，%s%s", restart.code, restart.stdout, restart.stderr)
 	}
@@ -403,7 +513,7 @@ func TestWhatIsNotPublishedLeavesThePoolAlone(t *testing.T) {
 	// 有人绕过发布器，往目录里放了一个网关加载不了的文件：池不在已知的状态，先不动它。
 	h.place(unloadable)
 	unclean := h.publish(two)
-	if unclean.code != exitNotPublished || unclean.report.Outcome != "POOL_NOT_READY" || unclean.report.Replaced ||
+	if unclean.code != exitNotDone || unclean.report.Outcome != "POOL_NOT_READY" || unclean.report.Replaced ||
 		!strings.Contains(unclean.report.Reason, loadError) || unclean.report.Observed == nil || unclean.report.Observed.Synchronized {
 		t.Fatalf("池不干净：退出码 %d，%s%s", unclean.code, unclean.stdout, unclean.stderr)
 	}
@@ -605,6 +715,9 @@ func TestExitCodesSayWhatStateThePoolIsIn(t *testing.T) {
 		application.OutcomePoolNotReady:    3,
 		application.OutcomeRestored:        4,
 		application.OutcomeUnknown:         5,
+		application.OutcomeInSync:          0,
+		application.OutcomeUnconfirmed:     3,
+		application.OutcomeRestartPending:  6,
 		// 这里不认识的结局不当成成功，也不当成"池没有被碰过"。
 		"SOMETHING_NEW": 5,
 		"":              5,
@@ -613,5 +726,271 @@ func TestExitCodesSayWhatStateThePoolIsIn(t *testing.T) {
 		if got := exitCode(outcome); got != code {
 			t.Errorf("%q 的退出码是 %d，应该是 %d", outcome, got, code)
 		}
+	}
+}
+
+// 对账：池和记录对不上时，把最后一次得到确认的那一份放回去。它不用 docker。
+func TestReconcilePutsTheConfirmedSnapshotBack(t *testing.T) {
+	h := newHarness(t)
+
+	// 这个池上还没有确认过任何发布：没有可对的。
+	none := h.reconcile()
+	if none.code != exitNotDone || none.report.Outcome != "UNCONFIRMED" || none.report.Replaced || none.report.Snapshot != "" ||
+		none.report.Previous != id(one) || none.report.Observed == nil || h.inPlace() != one {
+		t.Fatalf("没有记录：退出码 %d，%s%s", none.code, none.stdout, none.stderr)
+	}
+
+	if r := h.publish(two); r.code != exitActive {
+		t.Fatalf("发布：退出码 %d，%s%s", r.code, r.stdout, r.stderr)
+	}
+	before, err := os.Stat(filepath.Join(h.poolDir, configFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	same := h.reconcile()
+	after, err := os.Stat(filepath.Join(h.poolDir, configFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if same.code != exitActive || same.report.Outcome != "IN_SYNC" || same.report.Replaced || same.report.Reason != "" ||
+		same.report.Snapshot != id(two) || same.report.Previous != id(two) || !os.SameFile(before, after) {
+		t.Fatalf("对得上：退出码 %d，%s%s", same.code, same.stdout, same.stderr)
+	}
+	if same.report.Observed == nil || same.report.ExpectedDigest == "" || same.report.Observed.Digest != same.report.ExpectedDigest {
+		t.Fatalf("%+v / %+v", same.report, same.report.Observed)
+	}
+
+	// 发布器把文件换上去之后死了（这里由测试直接放一份网关加载得了的文件）：放在那里的没有人确认过。
+	h.place(one)
+	blocked := h.publish(sameSettings)
+	if blocked.code != exitNotDone || blocked.report.Outcome != "POOL_NOT_READY" || !strings.Contains(blocked.report.Reason, "reconcile") || h.inPlace() != one {
+		t.Fatalf("没对账就发布：退出码 %d，%s%s", blocked.code, blocked.stdout, blocked.stderr)
+	}
+	commands := len(h.docker.commands)
+	restored := h.reconcile()
+	if restored.code != exitRestored || restored.report.Outcome != "RESTORED" || !restored.report.Replaced || restored.report.Restarted ||
+		restored.report.Snapshot != id(two) || restored.report.Previous != id(one) || !strings.Contains(restored.report.Reason, "was not the snapshot last confirmed") {
+		t.Fatalf("收回去：退出码 %d，%s%s", restored.code, restored.stdout, restored.stderr)
+	}
+	if h.inPlace() != two || len(h.leftovers()) != 0 || len(h.docker.commands) != commands ||
+		restored.report.Observed == nil || restored.report.Observed.Digest != restored.report.ExpectedDigest || !restored.report.Observed.Synchronized {
+		t.Fatalf("配置目录里是 %q，另外留下了 %v，docker 命令 %v", h.inPlace(), h.leftovers(), h.docker.commands[commands:])
+	}
+
+	// 有人放了一份网关加载不了的文件。
+	h.place(unloadable)
+	if r := h.reconcile(); r.code != exitRestored || !strings.Contains(r.report.Reason, loadError) || h.inPlace() != two {
+		t.Fatalf("坏文件：退出码 %d，%s%s", r.code, r.stdout, r.stderr)
+	}
+	// 收拾好之后照常能发布。
+	if r := h.publish(sameSettings); r.code != exitNotDone || r.report.Outcome != "RESTART_REQUIRED" {
+		t.Fatalf("之后的发布：退出码 %d，%s%s", r.code, r.stdout, r.stderr)
+	}
+	if r := h.publish(one); r.code != exitActive || h.inPlace() != one {
+		t.Fatalf("之后的发布：退出码 %d，%s%s", r.code, r.stdout, r.stderr)
+	}
+
+	// 记录读不成样子：报错，什么都不做。
+	record := filepath.Join(h.poolDir, recordFile)
+	intact, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.place(two)
+	if err := os.WriteFile(record, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := h.reconcile(); r.code != exitError || r.stdout != "" || !strings.Contains(r.stderr, "damaged") || h.inPlace() != two {
+		t.Fatalf("记录坏了：退出码 %d，%q %q", r.code, r.stdout, r.stderr)
+	}
+	if r := h.publish(two); r.code != exitError || r.stdout != "" || !strings.Contains(r.stderr, "damaged") || h.inPlace() != two {
+		t.Fatalf("记录坏了时发布：退出码 %d，%q %q", r.code, r.stdout, r.stderr)
+	}
+	if err := os.WriteFile(record, intact, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// 网关读不到：文件照样放回去，但确认不了。
+	h.place(silences)
+	h.timeout = "300ms"
+	if r := h.reconcile(); r.code != exitUnknown || r.report.Outcome != "UNKNOWN" || !r.report.Replaced || h.inPlace() != one ||
+		!strings.Contains(r.report.Reason, "put back but not confirmed") {
+		t.Fatalf("读不到网关：退出码 %d，%s%s", r.code, r.stdout, r.stderr)
+	}
+}
+
+// 发布器换上文件之后死了，没来得及记下来（这里由测试直接放那个文件）。同一份再发布一次就补完了，
+// 不用先收回去。
+func TestPublishingWhatWasLeftInPlaceCompletesIt(t *testing.T) {
+	h := newHarness(t)
+	if r := h.publish(two); r.code != exitActive {
+		t.Fatalf("发布：退出码 %d，%s%s", r.code, r.stdout, r.stderr)
+	}
+	h.place(one)
+
+	// 带重启的发布不认它：先对账。
+	blocked := h.restart(needsRestart)
+	if blocked.code != exitNotDone || blocked.report.Outcome != "POOL_NOT_READY" || !strings.Contains(blocked.report.Reason, "reconcile") ||
+		blocked.report.Replaced || blocked.report.Restarted || h.pool.restarts != 0 || h.inPlace() != one {
+		t.Fatalf("带重启的发布：退出码 %d，%s%s", blocked.code, blocked.stdout, blocked.stderr)
+	}
+
+	before, err := os.Stat(filepath.Join(h.poolDir, configFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := h.publish(one)
+	after, err := os.Stat(filepath.Join(h.poolDir, configFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done.code != exitActive || done.report.Outcome != "ACTIVE" || done.report.Replaced || done.report.Snapshot != id(one) || done.report.Previous != id(one) ||
+		!os.SameFile(before, after) || len(h.leftovers()) != 0 {
+		t.Fatalf("补完：退出码 %d，%s%s", done.code, done.stdout, done.stderr)
+	}
+	// 记录跟上了：对得上，之后照常能发布。
+	if r := h.reconcile(); r.code != exitActive || r.report.Outcome != "IN_SYNC" || r.report.Snapshot != id(one) {
+		t.Fatalf("之后对账：退出码 %d，%s%s", r.code, r.stdout, r.stderr)
+	}
+	if r := h.publish(two); r.code != exitActive || !r.report.Replaced || h.inPlace() != two {
+		t.Fatalf("之后的发布：退出码 %d，%s%s", r.code, r.stdout, r.stderr)
+	}
+}
+
+// 记录文件里有启动设置的名字，没有它们的值。
+func TestTheRecordDoesNotCarryStartupSettingValues(t *testing.T) {
+	h := newHarness(t)
+	const marked = `{"config":{"terminationMaxDeadline":"45s","sessionEncoder":"not-to-be-copied"},"routes":["one"]}`
+	h.place(marked)
+	if r := h.publish(marked); r.code != exitActive || r.report.Replaced {
+		t.Fatalf("发布：退出码 %d，%s%s", r.code, r.stdout, r.stderr)
+	}
+	raw, err := os.ReadFile(filepath.Join(h.poolDir, recordFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"sessionEncoder"`) || !strings.Contains(string(raw), `"terminationMaxDeadline"`) || strings.Contains(string(raw), "not-to-be-copied") {
+		t.Fatalf("记录文件是\n%s", raw)
+	}
+	info, err := os.Stat(filepath.Join(h.poolDir, recordFile))
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("权限 %v（err=%v）", info.Mode().Perm(), err)
+	}
+}
+
+// 带重启的发布：先换文件，网关加载得了再重启。
+func TestRestartPublishesWhatNeedsARestart(t *testing.T) {
+	h := newHarness(t)
+	if r := h.publish(two); r.code != exitActive {
+		t.Fatalf("发布：退出码 %d，%s%s", r.code, r.stdout, r.stderr)
+	}
+
+	done := h.restart(needsRestart)
+	got := done.report
+	if done.code != exitActive || got.Outcome != "ACTIVE" || !got.Replaced || !got.Restarted || !reflect.DeepEqual(got.Restart, []string{"terminationMaxDeadline"}) ||
+		got.Snapshot != id(needsRestart) || got.Previous != id(two) {
+		t.Fatalf("退出码 %d，%s%s", done.code, done.stdout, done.stderr)
+	}
+	if h.inPlace() != needsRestart || len(h.leftovers()) != 0 || h.pool.restarts != 1 || h.pool.setting() != "90s" || h.docker.count("restart") != 1 {
+		t.Fatalf("配置目录里是 %q，另外留下了 %v，重启了 %d 次，设置是 %q", h.inPlace(), h.leftovers(), h.pool.restarts, h.pool.setting())
+	}
+	// 没有给 --stop-timeout：命令里不带 -t，docker 用容器自己设的停止时限。
+	if !reflect.DeepEqual(h.docker.restarted, []string{"restart", gatewayContainer}) {
+		t.Fatalf("docker 命令是 %v", h.docker.restarted)
+	}
+	// 记录跟上了：对得上。
+	if r := h.reconcile(); r.code != exitActive || r.report.Outcome != "IN_SYNC" || r.report.Snapshot != id(needsRestart) {
+		t.Fatalf("重启之后对账：退出码 %d，%s%s", r.code, r.stdout, r.stderr)
+	}
+
+	// 用不着重启的不重启。
+	refused := h.restart(sameSettings)
+	if refused.code != exitNotDone || refused.report.Outcome != "REFUSED" || !strings.Contains(refused.report.Reason, "nothing to restart") ||
+		refused.report.Replaced || refused.report.Restarted || h.pool.restarts != 1 || h.inPlace() != needsRestart {
+		t.Fatalf("用不着重启：退出码 %d，%s%s", refused.code, refused.stdout, refused.stderr)
+	}
+
+	// 池里加载不了的：在重启之前就收回去了。
+	restored := h.restart(restartUnloadable)
+	if restored.code != exitRestored || restored.report.Outcome != "RESTORED" || !restored.report.Replaced || restored.report.Restarted ||
+		!strings.Contains(restored.report.Reason, loadError) || h.pool.restarts != 1 || h.inPlace() != needsRestart {
+		t.Fatalf("池里加载不了：退出码 %d，%s%s", restored.code, restored.stdout, restored.stderr)
+	}
+
+	// 那个容器不是这个池的网关：不动。
+	other := h.run(replaced(h.restartArgs(h.snapshot(two)), "--container", "someone-elses-container"))
+	if other.code != exitError || other.stdout != "" || !strings.Contains(other.stderr, "No such object") || h.pool.restarts != 1 || h.inPlace() != needsRestart {
+		t.Fatalf("别人的容器：退出码 %d，%q %q", other.code, other.stdout, other.stderr)
+	}
+	h.docker.mounted = filepath.Join(h.poolDir, "another-pool")
+	elsewhere := h.restart(two)
+	h.docker.mounted = h.poolDir
+	if elsewhere.code != exitError || !strings.Contains(elsewhere.stderr, "not the configuration directory of this pool") || h.pool.restarts != 1 || h.inPlace() != needsRestart {
+		t.Fatalf("挂着别的目录的容器：退出码 %d，%q %q", elsewhere.code, elsewhere.stdout, elsewhere.stderr)
+	}
+}
+
+// 有人带着另一份文件重启过网关：对账把文件放回去，启动设置还差一次重启；restart 不给快照就是做这件事。
+func TestRestartWithoutASnapshotUsesTheConfirmedOne(t *testing.T) {
+	h := newHarness(t)
+
+	// 这个池上还没有确认过任何发布：不给快照就不知道用哪一份。
+	if r := h.run(h.restartArgs("")); r.code != exitError || r.stdout != "" || !strings.Contains(r.stderr, "no --snapshot was given") || h.pool.restarts != 0 {
+		t.Fatalf("没有记录：退出码 %d，%q %q", r.code, r.stdout, r.stderr)
+	}
+	if r := h.publish(two); r.code != exitActive {
+		t.Fatalf("发布：退出码 %d，%s%s", r.code, r.stdout, r.stderr)
+	}
+	h.place(needsRestart)
+	h.pool.restart()
+
+	pending := h.reconcile()
+	if pending.code != exitRestartPending || pending.report.Outcome != "RESTART_PENDING" || !pending.report.Replaced || pending.report.Restarted ||
+		!reflect.DeepEqual(pending.report.Restart, []string{"terminationMaxDeadline"}) || h.inPlace() != two || h.pool.setting() != "90s" {
+		t.Fatalf("对账：退出码 %d，%s%s（设置 %q）", pending.code, pending.stdout, pending.stderr, h.pool.setting())
+	}
+	done := h.run(h.restartArgs(""))
+	if done.code != exitActive || done.report.Outcome != "ACTIVE" || done.report.Replaced || !done.report.Restarted || done.report.Snapshot != id(two) ||
+		h.inPlace() != two || h.pool.setting() != "45s" || h.pool.restarts != 2 {
+		t.Fatalf("重启：退出码 %d，%s%s（设置 %q）", done.code, done.stdout, done.stderr, h.pool.setting())
+	}
+	if r := h.reconcile(); r.code != exitActive || r.report.Outcome != "IN_SYNC" {
+		t.Fatalf("之后对账：退出码 %d，%s%s", r.code, r.stdout, r.stderr)
+	}
+}
+
+func TestUsageOfRestartAndReconcile(t *testing.T) {
+	h := newHarness(t)
+	restart := h.restartArgs(h.snapshot(needsRestart))
+	cases := []struct {
+		name string
+		args []string
+		says string
+	}{
+		{"reconcile 只有子命令", []string{"reconcile"}, "missing required flags: --config-dir, --read-back, --read-back-name, --tls-ca, --tls-cert, --tls-key\n"},
+		{"reconcile 不要快照", append(h.reconcileArgs(), "--snapshot", h.snapshot(two)), "flag provided but not defined: -snapshot"},
+		{"reconcile 不要容器", append(h.reconcileArgs(), "--container", gatewayContainer), "flag provided but not defined: -container"},
+		{"reconcile 多余的参数", append(h.reconcileArgs(), "now"), `unexpected argument "now"`},
+		{"reconcile 要帮助", []string{"reconcile", "--help"}, "-read-back-name"},
+		{"restart 没有容器", append([]string{"restart"}, restart[3:]...), "missing required flags: --container\n"},
+		{"restart 的停止时限不是整秒", append(append([]string(nil), restart...), "--stop-timeout", "1500ms"), "--stop-timeout must be a whole number of seconds"},
+		{"restart 的停止时限是负的", append(append([]string(nil), restart...), "--stop-timeout", "-5s"), "--stop-timeout must be a whole number of seconds"},
+		{"publish 不要容器", append(h.args(h.snapshot(two)), "--container", gatewayContainer), "flag provided but not defined: -container"},
+		{"restart 要帮助", []string{"restart", "--help"}, "-stop-timeout"},
+	}
+	for _, c := range cases {
+		r := h.run(c.args)
+		if r.code != exitUsage || r.stdout != "" || !strings.Contains(r.stderr, c.says) {
+			t.Errorf("%s：退出码 %d，标准输出 %q，标准错误 %q", c.name, r.code, r.stdout, r.stderr)
+		}
+	}
+	if h.inPlace() != one || len(h.docker.commands) != 0 || len(h.pool.peers) != 0 || h.pool.restarts != 0 {
+		t.Fatalf("用法不对时不该做任何事：目录里是 %q，docker 命令 %v，池见到 %v", h.inPlace(), h.docker.commands, h.pool.peers)
+	}
+
+	// 停止时限带在 docker 的命令里。
+	if r := h.run(append(append([]string(nil), restart...), "--stop-timeout", "45s")); r.code != exitActive || h.pool.restarts != 1 ||
+		!reflect.DeepEqual(h.docker.restarted, []string{"restart", "-t", "45", gatewayContainer}) {
+		t.Fatalf("带停止时限：退出码 %d，docker 命令 %v，%s%s", r.code, h.docker.restarted, r.stdout, r.stderr)
 	}
 }

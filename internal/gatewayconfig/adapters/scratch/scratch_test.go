@@ -24,7 +24,8 @@ type fakeDocker struct {
 	runErr   error
 	states   []string // 依次回答 inspect；用完之后一直答最后一个
 	logs     string
-	sawFile  string // run 的那一刻，挂进去的目录里的配置文件
+	sawFile  string   // run 的那一刻，挂进去的目录里的配置文件
+	sawNames []string // run 的那一刻，挂进去的目录里有哪些东西
 	mounted  string
 	lastLive bool // 最后一次 rm 时 ctx 是否还活着
 	onState  func()
@@ -46,6 +47,10 @@ func (f *fakeDocker) run(ctx context.Context, env []string, argv ...string) (str
 					f.t.Errorf("起容器时候选配置不在挂载的目录里：%v", err)
 				}
 				f.sawFile = string(content)
+				entries, _ := os.ReadDir(f.mounted)
+				for _, entry := range entries {
+					f.sawNames = append(f.sawNames, entry.Name())
+				}
 			}
 		}
 		if f.runErr != nil {
@@ -128,7 +133,8 @@ func TestLoadStartsTheImageOnTheCandidateAndReadsItBack(t *testing.T) {
 	if observed.Digest != "digest-of-the-candidate" || reader.calls != 3 {
 		t.Fatalf("%+v，读了 %d 次", observed, reader.calls)
 	}
-	if fake.sawFile != "routes: []\n" || !strings.HasPrefix(fake.mounted, config.WorkDirectory+string(filepath.Separator)) {
+	// 候选配置在以容器名字命名的目录里。。
+	if fake.sawFile != "routes: []\n" || fake.mounted != filepath.Join(config.WorkDirectory, "candidate-"+config.Name) {
 		t.Fatalf("起容器时的候选配置是 %q，在 %s", fake.sawFile, fake.mounted)
 	}
 	want := []string{"run", "-d", "--name", "idp-gateway-scratch",
@@ -152,6 +158,49 @@ func TestLoadStartsTheImageOnTheCandidateAndReadsItBack(t *testing.T) {
 		t.Fatal("会话密钥出现在了命令行参数里")
 	}
 	leftBehind(t, fake, config)
+}
+
+// 上一次的发布器在离线加载时被强行杀掉，留下了容器和候选配置的目录：这一次先清掉，用完也不留。
+// 别的容器名字的目录不动。
+func TestLoadClearsWhatAKilledPublisherLeftBehind(t *testing.T) {
+	fake := &fakeDocker{states: []string{"true 0"}}
+	s, config := staging(t, &readBack{}, fake)
+	stale := filepath.Join(config.WorkDirectory, "candidate-"+config.Name)
+	neighbour := filepath.Join(config.WorkDirectory, "candidate-"+config.Name+"-of-another-pool")
+	for _, dir := range []string{stale, neighbour} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{ConfigFile, "left-behind"} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte("from the run that was killed"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	var mode os.FileMode
+	fake.onState = func() {
+		if info, err := os.Stat(stale); err == nil {
+			mode = info.Mode().Perm()
+		}
+	}
+
+	if _, err := s.Load(context.Background(), snapshot(t)); err != nil {
+		t.Fatal(err)
+	}
+	// 容器先删，目录后清：第一条命令是删容器，起容器时目录里只有这一次的配置。
+	if !reflect.DeepEqual(fake.calls[0], []string{"rm", "-f", config.Name}) || fake.sawFile != "routes: []\n" || !reflect.DeepEqual(fake.sawNames, []string{ConfigFile}) {
+		t.Fatalf("第一条命令是 %v；起容器时目录里有 %v，配置是 %q", fake.calls[0], fake.sawNames, fake.sawFile)
+	}
+	if mode != 0o700 {
+		t.Fatalf("候选配置的目录的权限是 %v", mode)
+	}
+	entries, err := os.ReadDir(config.WorkDirectory)
+	if err != nil || len(entries) != 1 || entries[0].Name() != filepath.Base(neighbour) {
+		t.Fatalf("放候选配置的地方留下了 %v（err=%v）", entries, err)
+	}
+	if left, err := os.ReadDir(neighbour); err != nil || len(left) != 2 {
+		t.Fatalf("别的容器名字的目录被动过：%v（err=%v）", left, err)
+	}
 }
 
 func TestAGatewayThatExitsOnTheCandidateIsARejection(t *testing.T) {

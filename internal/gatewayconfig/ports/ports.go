@@ -1,7 +1,7 @@
 // Package ports 是配置发布对外部的要求：发布之前在哪里试着加载一份快照，快照怎么送到一个池的
-// 网关那里，网关在跑什么从哪里读。
+// 网关那里，网关在跑什么从哪里读，网关进程怎么重启。
 //
-// 这三样都是对着一个池说的。平台不同，实现不同；第一期是单机上的 docker compose
+// 这几样都是对着一个池说的。平台不同，实现不同；第一期是单机上的 docker compose
 // （docs/adr/ADR-0010.md 第 10 条）。
 package ports
 
@@ -41,10 +41,25 @@ type Delivery interface {
 	// Put 把那里的内容整份换成这份快照。网关读到的要么是换之前的整份，要么是这一份，
 	// 不会是写了一半的。返回错误时不保证是哪一份。
 	Put(ctx context.Context, snapshot domain.Snapshot) error
+	// Confirmed 返回这个池上最后一次得到确认的发布；还没有过时 ok 为假。
+	// 记录读得到却不成样子时返回错误：这时既不能当它没有，也不能照着它做。
+	Confirmed(ctx context.Context) (confirmation domain.Confirmation, ok bool, err error)
+	// Confirm 记下这份快照已经在这个池上得到确认，盖掉上一条。记录和配置放在一起：
+	// 发布器中途死了，下一个占到这个池的从它知道该放回哪一份。
+	Confirm(ctx context.Context, confirmation domain.Confirmation) error
 }
 
 // ReadBack 读一个池里的网关此刻在跑什么。
 type ReadBack interface {
 	// Observe 返回错误表示这一次没有读到：网关够不着，或答的不是预期的东西。
 	Observe(ctx context.Context) (domain.Observation, error)
+}
+
+// Process 是一个池里的网关进程。
+type Process interface {
+	// Verify 报告它管的是不是读这个池的配置的那个网关；不是时返回错误。它不改变任何东西。
+	Verify(ctx context.Context) error
+	// Restart 让网关停下再起来。返回时新的进程已经被启动，但不保证它起得来：那要经回读口看。
+	// 停下之前在途的请求有多久做完，由池的部署决定。开始之后不随 ctx 取消。
+	Restart(ctx context.Context) error
 }

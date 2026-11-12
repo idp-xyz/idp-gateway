@@ -42,7 +42,8 @@ type Config struct {
 	Name string
 	// TLSDirectory 是本机上的一个目录，只读挂到容器的 /work/tls：回读口的证书，以及配置引用的别的文件。
 	TLSDirectory string
-	// WorkDirectory 是本机上放候选配置的地方，每次加载在它下面建一个临时目录。docker 要能挂载它。
+	// WorkDirectory 是本机上放候选配置的地方，每次加载在它下面建一个以容器名字命名的目录，用完删掉。
+	// docker 要能挂载它。
 	WorkDirectory string
 	// Publish 是回读口映射到本机的地址，host:port。只能是回环地址。
 	Publish string
@@ -123,22 +124,27 @@ func (s *Staging) Load(ctx context.Context, snapshot domain.Snapshot) (domain.Ob
 	if snapshot.IsZero() {
 		return none, errors.New("scratch: nothing to load")
 	}
-	candidate, err := os.MkdirTemp(s.config.WorkDirectory, "candidate-")
-	if err != nil {
-		return none, fmt.Errorf("scratch: %w", err)
-	}
-	defer os.RemoveAll(candidate)
-	// 目录建出来只有属主能进。容器里的用户默认就是属主；不是时由调用方保证它读得了。
-	if err := os.WriteFile(filepath.Join(candidate, ConfigFile), snapshot.Content(), 0o644); err != nil {
-		return none, fmt.Errorf("scratch: %w", err)
-	}
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
 		return none, fmt.Errorf("scratch: %w", err)
 	}
 
+	// 候选配置放在以容器名字命名的目录里。同名的容器同时只能有一个，这个目录也就只有一个用它的人。
+	// 上一次没收拾干净的容器和目录（发布器被强行杀掉时来不及收拾）先清掉，先容器后目录。
 	name := s.config.Name
-	_, _ = s.docker(ctx, nil, "rm", "-f", name) // 上一次没收拾干净的
+	candidate := filepath.Join(s.config.WorkDirectory, "candidate-"+name)
+	_, _ = s.docker(ctx, nil, "rm", "-f", name)
+	if err := os.RemoveAll(candidate); err != nil {
+		return none, fmt.Errorf("scratch: %w", err)
+	}
+	// 目录只有属主能进。容器里的用户默认就是属主；不是时由调用方保证它读得了。
+	if err := os.Mkdir(candidate, 0o700); err != nil {
+		return none, fmt.Errorf("scratch: %w", err)
+	}
+	defer os.RemoveAll(candidate)
+	if err := os.WriteFile(filepath.Join(candidate, ConfigFile), snapshot.Content(), 0o644); err != nil {
+		return none, fmt.Errorf("scratch: %w", err)
+	}
 	defer func() {
 		// 删容器不随 ctx 取消：留下它，下一次加载会撞上它占着的端口。
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)

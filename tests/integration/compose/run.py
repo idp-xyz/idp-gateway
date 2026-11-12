@@ -2,10 +2,10 @@
 """在本机用 docker compose 验证单机上的发布方式：网关跑在容器里，配置目录挂载进去；发布就是把目录里的
 配置文件整份换掉（写临时文件，再改名盖上去），网关不重启；之后经回读口确认它在跑的是哪一份。
 
-    .venv/bin/python tests/integration/compose/run.py        # 两分钟左右；自己起，跑完自己拆（需要 docker 和 go）
+    .venv/bin/python tests/integration/compose/run.py        # 三分半到四分钟；自己起，跑完自己拆（需要 docker 和 go）
 
 真的部分：docker compose、锁定的上游 agentgateway 镜像（按摘要引用）、网关前面的那层 nginx（与黑盒套件
-同一个镜像、同一份配置，只换了端口）、网关自己的回读口（双向 TLS），以及最后一条用例里的发布器
+同一个镜像、同一份配置，只换了端口）、网关自己的回读口（双向 TLS），以及最后三条用例里的发布器
 （cmd/gateway-control，现场用 Go 构建）。配置是一份只有几条路由的小文件，路由的后端是同一个 compose
 网络里一个会回话的小服务；没有 JWT、ExtAuthZ 和凭证，那些由黑盒套件覆盖。
 
@@ -16,12 +16,13 @@
                   只转发 /config_dump 和 /api/runtime 两个 GET。配置目录以只读方式挂进容器。
     echo          路由的后端。
 SH-01 到 SH-08 由本脚本扮演发布器：往挂载的目录里写文件，从本机经回读口读网关在跑什么。这几条看的是
-网关和这种发布方式本身。SH-09 换成真的发布器，本脚本只在旁边看。
+网关和这种发布方式本身。SH-09 到 SH-11 换成真的发布器的三条命令（publish、reconcile、restart），本脚本
+在旁边看，并且替它制造麻烦：把它强行杀掉，绕过它往目录里写文件、删文件，带着坏文件重启网关。
 
 占用本机回环上的 27618 到 27620，与黑盒套件、Gatekeeper 联调和 Kubernetes 套件的端口重叠，不能同时跑。
 """
 from __future__ import annotations
-import collections, hashlib, http.client, json, os, secrets, shutil, signal, socket, subprocess, sys, threading, time
+import base64, collections, hashlib, http.client, json, os, secrets, shutil, signal, socket, stat, subprocess, sys, threading, time
 from pathlib import Path
 
 import yaml
@@ -38,11 +39,12 @@ import probe  # noqa: E402  Kubernetes 套件的那个：这里用它发"两个 
 RUN = HERE / '.run'
 POOL = RUN / 'pool'   # 挂进网关容器的两个目录：config 由发布器写，tls 是网关自己的证书
 PKI = RUN / 'pki'     # 本次运行的全套证书。发布器的证书只在这里，不进网关容器
-# 真的发布器（SH-09）用的东西：现场构建的二进制；它做离线加载用的另一套证书（另一个 CA）、挂进临时容器的
+# 真的发布器（SH-09 到 SH-11）用的东西：现场构建的二进制；它做离线加载用的另一套证书（另一个 CA）、挂进临时容器的
 # 证书目录、放候选配置的目录；要发布的快照文件。
 CONTROL = RUN / 'control'
 CONTROL_BINARY = CONTROL / 'bin' / 'gateway-control'
 ONLY_IN_STAGING = 'only-in-staging.crt'   # 只有离线加载那边才有的一个文件
+RECORD = '.config.yaml.confirmed'         # 发布器留在配置目录里的记录
 STALE = (POOL, PKI, CONTROL, RUN / 'front', RUN / 'staging', RUN / 'single', RUN / 'expansion')   # 每次运行前后都清掉
 LOCK = pin.lock()
 GATEWAY_IMAGE = pin.image_reference(LOCK)   # 上游镜像，按多平台索引的摘要引用
@@ -86,10 +88,11 @@ def compose(*argv: str, timeout: float = 300) -> subprocess.CompletedProcess:
 
 # ---- 一份快照：发布器要下发的那个文件 ---------------------------------------------------------------
 def gateway_config(routes: list[str], unloadable: str | None = None, deadline: int = 45,
-                   root: str = 'tls/ca.crt', names: dict | None = None) -> str:
+                   root: str = 'tls/ca.crt', names: dict | None = None, stats: int | None = None) -> str:
     """网关的配置文件。unloadable 指的那条路由带一个不存在的字段：整份文件网关加载不了。
     deadline 是 config 段里的一项设置（收到终止信号后，在途的请求最多再做多少秒）。
-    root 是那条形状与真实的池相同的路由验证 PDP 用的 CA 文件；names 给个别路由另起名字（默认是 route-<路由>）。"""
+    root 是那条形状与真实的池相同的路由验证 PDP 用的 CA 文件；names 给个别路由另起名字（默认是 route-<路由>）。
+    stats 另指指标端口（也在 config 段里，也只绑回环）。"""
     def route(name: str) -> dict:
         r = {'name': (names or {}).get(name, f'route-{name}'), 'gateways': ['callers'], 'hostnames': [f'{name}.test'],
              'policies': {'timeout': {'requestTimeout': '30s'}},
@@ -110,7 +113,7 @@ def gateway_config(routes: list[str], unloadable: str | None = None, deadline: i
 
     document = {
         'config': {
-            'adminAddr': f"127.0.0.1:{PORT['admin']}", 'statsAddr': f"127.0.0.1:{PORT['stats']}",
+            'adminAddr': f"127.0.0.1:{PORT['admin']}", 'statsAddr': f"127.0.0.1:{stats or PORT['stats']}",
             'readinessAddr': f"127.0.0.1:{PORT['readiness']}",
             'storage': {'mode': 'readOnly'},
             # 只设"在途的请求最多再做多久"。Kubernetes 上还设了"收到终止信号后再照常接多久"，那是在等
@@ -269,17 +272,40 @@ def build_control():
     (CONTROL / 'snapshots').mkdir()
 
 
-def control_command(snapshot: Snapshot) -> list[str]:
-    path = CONTROL / 'snapshots' / f'{snapshot.id}.yaml'
-    path.write_text(snapshot.text, encoding='utf-8')
-    return [str(CONTROL_BINARY), 'publish', '--snapshot', str(path), '--config-dir', str(POOL / 'config'), '--image', GATEWAY_IMAGE,
-            '--read-back', f"127.0.0.1:{HOST['readback']}", '--read-back-name', pki.READBACK_NAME,
-            '--tls-cert', str(PKI / 'publisher.crt'), '--tls-key', str(PKI / 'publisher.key'), '--tls-ca', str(PKI / 'ca.crt'),
-            '--staging-name', SCRATCH, '--staging-publish', f"127.0.0.1:{HOST['scratch']}",
+def pool_flags() -> list[str]:
+    """三条命令都要的：池的配置目录，回读口和读它用的证书。"""
+    return ['--config-dir', str(POOL / 'config'), '--read-back', f"127.0.0.1:{HOST['readback']}", '--read-back-name', pki.READBACK_NAME,
+            '--tls-cert', str(PKI / 'publisher.crt'), '--tls-key', str(PKI / 'publisher.key'), '--tls-ca', str(PKI / 'ca.crt')]
+
+
+def staging_flags() -> list[str]:
+    """publish 和 restart 另外要的：离线加载用的镜像、临时容器和读它用的证书。"""
+    return ['--image', GATEWAY_IMAGE, '--staging-name', SCRATCH, '--staging-publish', f"127.0.0.1:{HOST['scratch']}",
             '--staging-container-port', str(PORT['readback']),
             '--staging-tls-dir', str(CONTROL / 'tls'), '--staging-work-dir', str(CONTROL / 'work'),
             '--staging-tls-cert', str(CONTROL / 'pki' / 'publisher.crt'), '--staging-tls-key', str(CONTROL / 'pki' / 'publisher.key'),
             '--staging-tls-ca', str(CONTROL / 'pki' / 'ca.crt')]
+
+
+def snapshot_file(snapshot: Snapshot) -> str:
+    path = CONTROL / 'snapshots' / f'{snapshot.id}.yaml'
+    path.write_text(snapshot.text, encoding='utf-8')
+    return str(path)
+
+
+def control_command(snapshot: Snapshot) -> list[str]:
+    return [str(CONTROL_BINARY), 'publish', '--snapshot', snapshot_file(snapshot), *pool_flags(), *staging_flags()]
+
+
+def restart_command(snapshot: Snapshot | None, target: str, *extra: str) -> list[str]:
+    """gateway-control restart 的命令行。target 是要重启的容器；snapshot 为 None 时不给快照，
+    用的是这个池上最后一次得到确认的那一份。"""
+    chosen = ['--snapshot', snapshot_file(snapshot)] if snapshot else []
+    return [str(CONTROL_BINARY), 'restart', '--container', target, *chosen, *pool_flags(), *staging_flags(), *extra]
+
+
+def reconcile_command(*extra: str) -> list[str]:
+    return [str(CONTROL_BINARY), 'reconcile', *pool_flags(), *extra]
 
 
 def control_result(code: int, stdout: str, stderr: str, started: float) -> dict:
@@ -290,11 +316,26 @@ def control_result(code: int, stdout: str, stderr: str, started: float) -> dict:
     return {'exit': code, 'report': report, 'stderr': stderr.strip()[-300:], 'seconds': round(time.monotonic() - started, 2)}
 
 
-def control(snapshot: Snapshot) -> dict:
-    """让真的发布器发布这份快照。-> 它的退出码、写到标准输出的那份 JSON、标准错误的末尾、用了多少秒。"""
+def run_control(command: list[str]) -> dict:
+    """跑一次真的发布器。-> 它的退出码、写到标准输出的那份 JSON、标准错误的末尾、用了多少秒。"""
     started = time.monotonic()
-    done = subprocess.run(control_command(snapshot), capture_output=True, text=True, timeout=180)
+    done = subprocess.run(command, capture_output=True, text=True, timeout=180)
     return control_result(done.returncode, done.stdout, done.stderr, started)
+
+
+def control(snapshot: Snapshot) -> dict:
+    """让真的发布器发布这份快照。"""
+    return run_control(control_command(snapshot))
+
+
+def control_reconcile(*extra: str) -> dict:
+    """让真的发布器对一次账。"""
+    return run_control(reconcile_command(*extra))
+
+
+def control_restart(snapshot: Snapshot | None, target: str, *extra: str) -> dict:
+    """让真的发布器做一次带重启的发布。"""
+    return run_control(restart_command(snapshot, target, *extra))
 
 
 def control_together(first: Snapshot, second: Snapshot) -> tuple[dict, dict]:
@@ -321,14 +362,127 @@ def control_interrupted(snapshot: Snapshot) -> dict:
     return {**control_result(running.returncode, stdout, stderr, started), 'signalled': signalled}
 
 
+def control_killed(snapshot: Snapshot, during: str = 'swap') -> dict:
+    """让真的发布器发布这份快照，中途把它强行杀掉（SIGKILL）：它来不及收拾。
+    during 是 'swap'：它刚把文件换上去；是 'staging'：它做离线加载用的临时容器刚出现。
+    killed 为假表示没等到那一刻。"""
+    if during == 'swap':
+        def reached() -> bool:
+            return on_disk() == snapshot.text
+    else:
+        def reached() -> bool:
+            return bool(scratch_containers())
+    running = subprocess.Popen(control_command(snapshot), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    seen = wait_for(lambda: reached() or running.poll() is not None, 60, every=0.01)
+    killed = seen is not None and running.poll() is None
+    running.kill()
+    running.wait(30)
+    return {'killed': killed, 'exit': running.returncode}
+
+
+def restart_killed(snapshot: Snapshot, target: str) -> dict:
+    """让真的发布器做一次带重启的发布；docker 刚把网关容器重新起来（发布器还在等它报告），就把发布器强行杀掉。
+    killed 为假表示没等到那一刻。"""
+    def started() -> str:
+        return docker('inspect', '-f', '{{.State.StartedAt}}', target).stdout.strip()
+    before = started()
+    running = subprocess.Popen(restart_command(snapshot, target), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    seen = wait_for(lambda: started() not in ('', before) or running.poll() is not None, 90, every=0.01)
+    killed = seen is not None and running.poll() is None
+    running.kill()
+    running.wait(30)
+    return {'killed': killed, 'exit': running.returncode}
+
+
+def restart_interrupted(snapshot: Snapshot, target: str, after: float, on_swap=None) -> dict:
+    """让真的发布器做一次带重启的发布；它把文件换上去 after 秒之后，像在终端里按 Ctrl-C 那样，给它所在的
+    整个前台进程组发 SIGINT。on_swap 在文件刚换上去时被调用。signalled 为假表示没等到它换文件。
+    group 是发信号那一刻那个进程组里的进程；elsewhere 是发布器当时不在那个进程组里的子进程。"""
+    started = time.monotonic()
+    running = subprocess.Popen(restart_command(snapshot, target), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                               start_new_session=True)
+    replaced = wait_for(lambda: on_disk() == snapshot.text or running.poll() is not None, 60, every=0.01)
+    signalled = replaced is not None and running.poll() is None
+    group, elsewhere = [], []
+    if signalled:
+        if on_swap:
+            on_swap()
+        time.sleep(after)
+        for line in subprocess.run(['ps', '-eo', 'pid=,ppid=,pgid=,args='], capture_output=True, text=True).stdout.splitlines():
+            fields = line.split(None, 3)
+            if len(fields) < 4:
+                continue
+            _, parent, pgid, args = fields
+            if int(pgid) == running.pid:
+                group.append(args.split()[0].rsplit('/', 1)[-1])
+            elif int(parent) == running.pid:
+                elsewhere.append(' '.join(args.split()[:2]))
+        signalled = running.poll() is None
+        if signalled:
+            os.killpg(running.pid, signal.SIGINT)
+    else:
+        running.kill()
+    stdout, stderr = running.communicate(timeout=180)
+    return {**control_result(running.returncode, stdout, stderr, started), 'signalled': signalled, 'group': group, 'elsewhere': elsewhere}
+
+
 def outcome(done: dict) -> tuple:
     """发布器一次运行的退出码和结局。"""
     return done['exit'], done['report'].get('outcome')
 
 
-def on_disk() -> str:
-    """池的配置目录里现在放着的配置文件。"""
-    return (POOL / 'config' / 'config.yaml').read_text(encoding='utf-8')
+def on_disk() -> str | None:
+    """池的配置目录里现在放着的配置文件；没有这个文件时是 None。"""
+    try:
+        return (POOL / 'config' / 'config.yaml').read_text(encoding='utf-8')
+    except FileNotFoundError:
+        return None
+
+
+def scratch_containers() -> list[str]:
+    """离线加载用的那个临时容器（在不在跑都算）；没有时是空的。"""
+    return docker('ps', '-a', '-q', '--filter', f'name=^/{SCRATCH}$').stdout.split()
+
+
+def record() -> dict:
+    """发布器留在配置目录里的记录：这个池上最后一次得到确认的那一份。读不出来时是空的。"""
+    try:
+        return json.loads((POOL / 'config' / RECORD).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {}
+
+
+def leftovers() -> dict:
+    """发布器用过之后留在本机上的东西。"""
+    return {'离线加载用的容器': scratch_containers(),
+            '放候选配置的目录': sorted(p.name for p in (CONTROL / 'work').iterdir()),
+            '配置目录': sorted(p.name for p in (POOL / 'config').iterdir())}
+
+
+# 发布器用过之后该是这样：临时容器不在了，放候选配置的目录是空的，配置目录里只有配置文件、它的锁文件和记录。
+CLEAN = {'离线加载用的容器': [], '放候选配置的目录': [], '配置目录': [RECORD, '.config.yaml.lock', 'config.yaml']}
+
+
+def docker_events(name: str, since: float) -> list[str]:
+    """docker 自 since（Unix 时间）以来对这个容器做过的事，按先后；kill 后面带着发的是哪个信号。"""
+    done = docker('events', '--since', f'{since:.3f}', '--until', str(int(time.time()) + 1), '--filter', f'container={name}',
+                  '--format', '{{.Action}} {{index .Actor.Attributes "signal"}}')
+    return [' '.join(line.split()) for line in done.stdout.splitlines() if line.strip()]
+
+
+def gateway_said(name: str, since: float) -> list[str]:
+    """网关容器自 since（Unix 时间）以来写到标准错误上的、说它为什么退出的那几行。"""
+    lines = docker('logs', '--since', f'{since:.3f}', name).stderr.splitlines()
+    return [' '.join(line.split()) for line in lines if line.startswith('Error') or 'os error' in line]
+
+
+def long_request(front: str, route: str, seconds: float) -> dict:
+    """从 front 的容器里直接向网关收业务请求的监听发一个耗时的请求。不经 nginx：它等后端最多 10 秒。"""
+    started = time.monotonic()
+    done = docker('exec', front, 'wget', '-q', '-S', '-T', '90', '-O', '/dev/null', '--header', f'Host: {route}.test',
+                  f"http://127.0.0.1:{PORT['callers']}/sleep/{seconds}", timeout=120)
+    status = next((line.split()[1] for line in done.stderr.splitlines() if line.strip().startswith('HTTP/')), None)
+    return {'status': status, 'seconds': round(time.monotonic() - started, 2), 'exit': done.returncode}
 
 
 def strings_in(node, found: set | None = None) -> set:
@@ -354,7 +508,8 @@ def container(service: str) -> dict:
     if not inspected:
         return {}
     c = inspected[0]
-    return {'id': c['Id'], 'running': c['State']['Running'], 'started': c['State']['StartedAt'], 'pid': c['State']['Pid'],
+    return {'id': c['Id'], 'name': c['Name'].lstrip('/'), 'running': c['State']['Running'], 'started': c['State']['StartedAt'],
+            'pid': c['State']['Pid'],
             'restarts': c['RestartCount'], 'image': c['Config']['Image'], 'network': c['HostConfig']['NetworkMode'],
             'published': {port: sorted(f"{b['HostIp']}:{b['HostPort']}" for b in bindings)
                           for port, bindings in (c['NetworkSettings'].get('Ports') or {}).items() if bindings},
@@ -484,6 +639,8 @@ class Results:
         return bool(ok)
 
     def note(self, key: str, value):
+        if key in self.current['notes']:   # 同名的两条，后一条会悄悄盖掉前一条
+            raise AssertionError(f"{self.current['id']} 里有两条记录都叫 {key!r}")
         self.current['notes'][key] = value
 
     def failed(self) -> list:
@@ -528,6 +685,29 @@ def note_restart(r: Results, what: str, seen: dict):
     r.note(f'{what}：重启命令从开始到返回（相对于流量开始的秒数）', f"{seen['began']} 到 {seen['ended']}")
     r.note(f'{what}：当时在途的慢请求各自做完的时刻', [q['done'] for q in seen['in_flight']])
     r.note(f'{what}：没有得到 200 的快请求', f"{len(refused)} 个，发出的时刻从 {refused[0]['at']} 到 {refused[-1]['at']}" if refused else '没有')
+    r.note(f'{what}：没有得到 200 的请求得到的是什么', seen['answers'])
+    r.note(f'{what}：快请求 / 慢请求的结果', f"{result['quick']} / {result['slow']}，历时 {result['seconds']} 秒")
+
+
+def outage(traffic: Load) -> dict:
+    """一段流量里的一次重启（在 traffic.finish() 之后调用）。重启开始的时刻取第一个没有得到 200 的快请求发出的时刻。
+    spanning 是在那之前发出、在那之后才做完并得到 200 的慢请求；cut 是做了半秒以上却没有得到 200 的慢请求
+    （被拒绝的请求立刻就回来，做了一阵才失败的是被切断的）。"""
+    quick = [q for q in traffic.log if q['kind'] == 'quick']
+    slow = [q for q in traffic.log if q['kind'] == 'slow']
+    refused = [q for q in quick if q['outcome'] != '200']
+    began = refused[0]['at'] if refused else None
+    return {'refused': refused, 'began': began, 'last': quick[-20:],
+            'spanning': [q for q in slow if began is not None and q['outcome'] == '200' and q['at'] < began < q['done']],
+            'cut': [q for q in slow if q['outcome'] != '200' and q['done'] - q['at'] >= 0.5],
+            'answers': sorted({f"{q['outcome']}：{q['detail']}" for q in traffic.log if q['outcome'] != '200'})}
+
+
+def note_outage(r: Results, what: str, seen: dict, result: dict):
+    """发布器重启网关的那一次，量到的记下来，不设期望。"""
+    refused = seen['refused']
+    r.note(f'{what}：没有得到 200 的快请求', f"{len(refused)} 个，发出的时刻从 {refused[0]['at']} 到 {refused[-1]['at']}" if refused else '没有')
+    r.note(f'{what}：跨过重启开始那一刻的慢请求各自做完的时刻', [q['done'] for q in seen['spanning']])
     r.note(f'{what}：没有得到 200 的请求得到的是什么', seen['answers'])
     r.note(f'{what}：快请求 / 慢请求的结果', f"{result['quick']} / {result['slow']}，历时 {result['seconds']} 秒")
 
@@ -875,12 +1055,223 @@ def run() -> int:
             cleaned is not None and outcome(first) == (0, 'ACTIVE') and late['exit'] == 1 and not late['report']
             and 'another publication' in late['stderr'] and on_disk() == four.text
             and routes_seen(['f', 'g']) == {'f': 200, 'g': 404})
-    left = {'离线加载用的容器': docker('ps', '-a', '-q', '--filter', f'name=^/{SCRATCH}$').stdout.split(),
-            '放候选配置的目录': sorted(p.name for p in (CONTROL / 'work').iterdir()),
-            '配置目录': sorted(p.name for p in (POOL / 'config').iterdir())}
+    left = leftovers()
     r.note('发布器用过之后', left)
-    r.check('发布器没有留下东西：离线加载用的容器不在了，放候选配置的目录是空的，配置目录里只有配置文件和它的锁文件',
-            left == {'离线加载用的容器': [], '放候选配置的目录': [], '配置目录': ['.config.yaml.lock', 'config.yaml']})
+    r.check('发布器没有留下别的东西：离线加载用的容器不在了，放候选配置的目录是空的，配置目录里只有配置文件、它的锁文件和发布器的记录',
+            left == CLEAN)
+
+    r.case('SH-10', '对账（gateway-control reconcile）：池和记录对不上时，把最后一次得到确认的那一份放回去')
+    gateway, kept, inode = container('agentgateway'), record(), config_file.stat().st_ino
+    same = control_reconcile()
+    r.note('池就是记录的样子时对账用了多少秒', same['seconds'])
+    r.check('池就是记录的样子：退出码 0，结局 IN_SYNC，什么都没有写',
+            outcome(same) == (0, 'IN_SYNC') and same['report'].get('replaced') is False and same['report'].get('snapshot') == four.sha256
+            and config_file.stat().st_ino == inode and same_process(gateway, container('agentgateway')))
+    r.note('记录里有哪些项', sorted(kept))
+    r.check('记录是配置目录里的一个文件，只有属主能读写；记的是上一次成功发布的那份快照（内容整份带着）和网关当时报告的摘要、构建',
+            stat.S_IMODE((POOL / 'config' / RECORD).stat().st_mode) == 0o600 and kept.get('format') == 1 and kept.get('adopted') is False
+            and kept.get('snapshot') == four.sha256 and base64.b64decode(kept.get('content') or '').decode() == four.text
+            and kept.get('digest') == first['report'].get('expected_digest')
+            and (kept.get('version'), kept.get('revision')) == (LOCK['version'], LOCK['git_revision']))
+    startup, running = kept.get('startup') or {}, observe()['config']
+    r.note('会话密钥在不在网关报告的 config 段里', COMPOSE_ENV['SESSION_KEY'] in json.dumps(running))
+    r.check('记录里的启动设置每一项只有指纹（64 个十六进制字符）：项目就是网关 config 段里除了随环境变的两项之外的那些，会话密钥不在记录里',
+            len(startup) > 20 and set(startup) == set(running) - {'dns', 'numWorkerThreads'}
+            and all(isinstance(v, str) and len(v) == 64 and not v.strip('0123456789abcdef') for v in startup.values())
+            and COMPOSE_ENV['SESSION_KEY'] not in json.dumps(kept))
+
+    six, seven = Snapshot(['a', 'b', 'd', 'j'], deadline=46), Snapshot(['a', 'b', 'd', 'k'], deadline=46)
+    killed = control_killed(six)
+    loaded = wait_for(lambda: routes_seen(['j']) == {'j': 200}, 10)
+    r.check('发布器刚把一份没有毛病的快照换上去就被强行杀掉（SIGKILL）：文件留在了那里，网关加载了它，记录里仍是上一份',
+            killed['killed'] and killed['exit'] == -signal.SIGKILL and on_disk() == six.text and loaded is not None
+            and record().get('snapshot') == four.sha256)
+    blocked = control(seven)
+    r.note('没对账就发布另一份：发布器给出的原因', blocked['report'].get('reason'))
+    r.check('这时发布另一份快照：退出码 3，结局 POOL_NOT_READY，说要先对账；目录里的文件它没有动',
+            outcome(blocked) == (3, 'POOL_NOT_READY') and 'reconcile' in str(blocked['report'].get('reason'))
+            and blocked['report'].get('replaced') is False and on_disk() == six.text)
+    before, traffic = container('agentgateway'), Load()
+    done = control_reconcile()
+    time.sleep(3)
+    result, seen, report = traffic.finish(), observe(), done['report']
+    r.note('对账：发布器的输出', report)
+    r.note('对账：用了多少秒', done['seconds'])
+    r.check('对账：退出码 4，结局 RESTORED；记录的那一份回到了目录里，网关报告加载成功、在跑的是它，没有人确认过的那条路由没有了',
+            outcome(done) == (4, 'RESTORED') and report.get('replaced') is True and report.get('restarted') is False
+            and report.get('snapshot') == four.sha256 and report.get('previous') == six.sha256
+            and on_disk() == four.text and seen['reload'] == LOADED and seen['digest'] == report.get('expected_digest') == kept.get('digest')
+            and routes_seen(['f', 'j']) == {'f': 200, 'j': 404})
+    r.check('对账没有重启网关；再对一次是 IN_SYNC', same_process(before, container('agentgateway')) and outcome(control_reconcile()) == (0, 'IN_SYNC'))
+    no_failures(r, result, '对账期间')
+
+    killed = control_killed(six)
+    inode = config_file.stat().st_ino
+    completed = control(six)
+    r.check('同样被杀掉之后，把同一份快照再发布一次：网关确认它在生效，补记下来就算完成，退出码 0，结局 ACTIVE，文件没有再写',
+            killed['killed'] and outcome(completed) == (0, 'ACTIVE') and completed['report'].get('replaced') is False
+            and config_file.stat().st_ino == inode and on_disk() == six.text and record().get('snapshot') == six.sha256
+            and outcome(control_reconcile()) == (0, 'IN_SYNC') and routes_seen(['j']) == {'j': 200})
+
+    publish(broken)   # 绕过发布器，放一份网关加载不了的文件
+    spoiled = wait_for(lambda: (observe()['reload'] or {}).get('synchronized') is False, 10)
+    mended = control_reconcile()
+    seen = observe()
+    r.note('有人放了一份坏文件之后对账：发布器给出的原因', mended['report'].get('reason'))
+    r.check('有人绕过发布器放了一份网关加载不了的文件：对账把记录的那一份放回去，退出码 4，RESTORED，原因里有网关自己说的话',
+            spoiled is not None and outcome(mended) == (4, 'RESTORED') and 'notAFieldOfARoute' in str(mended['report'].get('reason'))
+            and on_disk() == six.text and seen['reload'] == LOADED and seen['digest'] == mended['report'].get('expected_digest'))
+    config_file.unlink()   # 有人把配置文件删了
+    missing = wait_for(lambda: (observe()['reload'] or {}).get('synchronized') is False, 10)
+    r.note('配置文件被删掉之后网关报告的', (observe()['reload'] or {}).get('lastError'))
+    found = control_reconcile()
+    seen = observe()
+    r.check('配置文件被删掉：网关报告读不到文件，继续跑原来那份；对账把记录的那一份放回去，RESTORED；网关一直没有重启',
+            missing is not None and outcome(found) == (4, 'RESTORED') and 'no configuration file' in str(found['report'].get('reason'))
+            and found['report'].get('previous') == '' and on_disk() == six.text and seen['reload'] == LOADED
+            and seen['digest'] == found['report'].get('expected_digest') and same_process(gateway, container('agentgateway')))
+
+    eight = Snapshot(['a', 'b', 'd', 'l'], deadline=46)
+    killed = control_killed(eight, during='staging')
+    left = leftovers()
+    r.note('发布器在离线加载时被强行杀掉之后留下的', left)
+    r.check('发布器在离线加载时被强行杀掉：留下了临时容器和候选配置的目录；池没有被碰过，对账是 IN_SYNC',
+            killed['killed'] and len(left['离线加载用的容器']) == 1 and left['放候选配置的目录'] == [f'candidate-{SCRATCH}']
+            and on_disk() == six.text and outcome(control_reconcile()) == (0, 'IN_SYNC'))
+    after = control(eight)
+    r.check('下一次发布照常成功，留下的容器和目录被它清掉了；配置文件被删过又放回去之后，网关仍然看得到文件变了',
+            outcome(after) == (0, 'ACTIVE') and after['report'].get('replaced') is True and routes_seen(['l']) == {'l': 200}
+            and leftovers() == CLEAN)
+
+    publish(broken)
+    spoiled = wait_for(lambda: (observe()['reload'] or {}).get('synchronized') is False, 10)
+    compose('restart', '--timeout', '60', 'agentgateway')   # 带着那份坏文件重启
+    down = wait_for(lambda: container('agentgateway').get('running') is False, 20)
+    r.check('有人放了一份坏文件，之后网关重启了：它起不来', spoiled is not None and down is not None and observe()['digest'] is None)
+    unknown = control_reconcile('--timeout', '3s')
+    r.note('网关没有在跑时对账：发布器给出的原因', unknown['report'].get('reason'))
+    r.check('这时对账：记录的那一份放回去了，但读不到网关，确认不了，退出码 5，结局 UNKNOWN；对账不替人把网关起起来',
+            outcome(unknown) == (5, 'UNKNOWN') and unknown['report'].get('replaced') is True and on_disk() == eight.text
+            and container('agentgateway').get('running') is False)
+    inode = config_file.stat().st_ino
+    waited = control_reconcile('--timeout', '3s')
+    r.note('文件已经是对的、只是读不到网关时对账：发布器给出的原因', waited['report'].get('reason'))
+    r.check('再对一次：文件已经是对的，它不再写，只等网关到时限；仍是 UNKNOWN',
+            outcome(waited) == (5, 'UNKNOWN') and waited['report'].get('replaced') is False and config_file.stat().st_ino == inode
+            and 2.5 <= waited['seconds'] <= 10)
+    compose('start', 'agentgateway')   # 由脚本把网关起起来
+    up = wait_for(lambda: observe()['digest'] is not None, 30)
+    r.check('把网关起起来之后：它读到的是放回去的那一份，对账是 IN_SYNC，请求照常',
+            up is not None and outcome(control_reconcile()) == (0, 'IN_SYNC') and observe()['reload'] == LOADED
+            and routes_seen(['a', 'l']) == {'a': 200, 'l': 200})
+
+    r.case('SH-11', '带重启的发布（gateway-control restart）：先换文件，网关加载得了再重启；没有到位就放回上一份再重启一次')
+    key = 'terminationMaxDeadline'
+    name, front_name, echo_name = (container(service).get('name') for service in ('agentgateway', 'front', 'echo'))
+    nine = Snapshot(['a', 'b', 'd', 'm'], deadline=47)
+    staged = stage(nine)   # 本脚本自己离线加载一遍，拿它的 config 段和摘要来对
+    before, front_before, traffic = container('agentgateway'), container('front'), Load()
+    done = control_restart(nine, name)
+    time.sleep(3)
+    result, seen, report, after = traffic.finish(), observe(), done['report'], container('agentgateway')
+    cut = outage(traffic)
+    r.note('带重启的发布：发布器的输出', report)
+    r.note('带重启的发布：发布器用了多少秒（离线加载，换文件之后等 1 秒，重启，重启之后再等 1 秒）', done['seconds'])
+    r.check('一份 config 段与网关启动时不同的快照：退出码 0，结局 ACTIVE；换了文件，也重启了网关，指出了要改的那一项',
+            outcome(done) == (0, 'ACTIVE') and report.get('replaced') is True and report.get('restarted') is True
+            and report.get('restart') == [key] and report.get('snapshot') == nine.sha256 and report.get('previous') == eight.sha256)
+    r.check('网关换了一个进程，还是那个容器；front 没有动',
+            bool(after.get('running')) and after.get('id') == before.get('id') and after.get('pid') != before.get('pid')
+            and same_process(front_before, container('front')))
+    r.check('重启之后 config 段是这份快照的值，摘要等于期望值，新路由生效；记录跟上了，对账是 IN_SYNC',
+            seen['config'].get(key) == (staged.get('config') or {}).get(key) == '47s' and seen['reload'] == LOADED
+            and seen['digest'] == report.get('expected_digest') == staged.get('digest') and on_disk() == nine.text
+            and routes_seen(['a', 'm']) == {'a': 200, 'm': 200}
+            and record().get('snapshot') == nine.sha256 and outcome(control_reconcile()) == (0, 'IN_SYNC'))
+    r.check('重启时在途的慢请求做完了，没有一个被切断；重启之后请求照常',
+            cut['began'] is not None and len(cut['spanning']) >= 1 and not cut['cut']
+            and len(cut['last']) == 20 and all(q['outcome'] == '200' for q in cut['last']))
+    note_outage(r, '带重启的发布', cut, result)
+
+    # 重启途中在终端里按 Ctrl-C；这时有一个请求还要 13 秒左右才做完。
+    ten, held = Snapshot(['a', 'b', 'd', 'n'], deadline=48), {}
+    pending = threading.Thread(target=lambda: held.update(long_request(front_name, 'a', 14)), daemon=True)
+    before, since = container('agentgateway'), time.time()
+    stopped = restart_interrupted(ten, name, 4, pending.start)
+    pending.join(90)
+    seen, report, after, events = observe(), stopped['report'], container('agentgateway'), docker_events(name, since)
+    r.note('重启途中按 Ctrl-C：发布器的退出码、结局、从开始到退出用了多少秒', [stopped['exit'], report.get('outcome'), stopped['seconds']])
+    r.note('发信号那一刻，发布器所在的进程组里有谁 / 它不在这个进程组里的子进程', [stopped['group'], stopped['elsewhere']])
+    r.note('重启途中按 Ctrl-C：这期间 docker 对网关容器做过的事', events)
+    r.note('重启时在途的那个 14 秒的请求', held)
+    r.check('docker 的重启命令不在发布器的进程组里：在终端里按 Ctrl-C，信号到不了它',
+            stopped['signalled'] and stopped['group'] == ['gateway-control'] and stopped['elsewhere'] == ['docker restart'])
+    r.check('重启已经开始之后收到 SIGINT：发布器做完才退出，退出码 0，结局 ACTIVE；网关只重启了一次',
+            outcome(stopped) == (0, 'ACTIVE') and report.get('restarted') is True and events.count('restart') == 1
+            and seen['config'].get(key) == '48s' and after.get('pid') != before.get('pid') and on_disk() == ten.text
+            and record().get('snapshot') == ten.sha256)
+    r.check('重启时还要 13 秒左右才做完的那个请求做完了：docker 等的是容器自己设的停止时限（60 秒），不是它默认的 10 秒，没有去强杀',
+            held.get('status') == '200' and held.get('seconds', 0) >= 14 and stopped['seconds'] >= 14 and 'kill 9' not in events)
+
+    before = container('agentgateway')
+    needless = control_restart(Snapshot(['a', 'b', 'd', 'o'], deadline=48), name)
+    r.note('用不着重启的快照：发布器给出的原因', needless['report'].get('reason'))
+    r.check('config 段与网关启动时相同的快照：退出码 3，结局 REFUSED，让改用 publish；池没有被碰过',
+            outcome(needless) == (3, 'REFUSED') and 'publish it instead' in str(needless['report'].get('reason'))
+            and needless['report'].get('replaced') is False and needless['report'].get('restarted') is False and on_disk() == ten.text)
+    lacking = control_restart(Snapshot(['a', 'b', 'd', 'p'], deadline=49, root=f'tls/{ONLY_IN_STAGING}'), name)
+    seen = observe()
+    r.check('要重启、池里的网关却加载不了的快照：重启之前就发现了，上一份放回去，退出码 4，结局 RESTORED',
+            outcome(lacking) == (4, 'RESTORED') and lacking['report'].get('replaced') is True and lacking['report'].get('restarted') is False
+            and ONLY_IN_STAGING in str(lacking['report'].get('reason')) and on_disk() == ten.text and seen['reload'] == LOADED
+            and seen['digest'] == (lacking['report'].get('observed') or {}).get('digest'))
+    echo_before = container('echo')
+    wrong = control_restart(Snapshot(['a', 'b', 'd', 'q'], deadline=49), echo_name)
+    r.note('让它重启别的容器：它说了什么', wrong['stderr'])
+    r.check('--container 指的不是这个池的网关（这里指的是 echo）：退出码 1，什么都没做',
+            wrong['exit'] == 1 and not wrong['report'] and 'not the gateway of this pool' in wrong['stderr'] and on_disk() == ten.text
+            and same_process(echo_before, container('echo')))
+    r.check('上面三次网关都没有重启', same_process(before, container('agentgateway')))
+
+    thirteen = Snapshot(['a', 'b', 'd', 'r'], deadline=49)
+    killed = restart_killed(thirteen, name)
+    settled = wait_for(lambda: observe()['config'].get(key) == '49s', 20)
+    r.check('docker 刚把网关重新起来，发布器就被强行杀掉：文件是新的，网关已经带着新设置起来，记录里仍是上一份',
+            killed['killed'] and settled is not None and on_disk() == thirteen.text and record().get('snapshot') == ten.sha256)
+    half = control_reconcile()
+    seen = observe()
+    r.note('带重启的发布做到一半之后对账：发布器的输出', half['report'])
+    r.check('对账：记录的那一份放回去了，路由回到了那一份；启动设置还差一次重启，退出码 6，结局 RESTART_PENDING，指出了那一项',
+            outcome(half) == (6, 'RESTART_PENDING') and half['report'].get('replaced') is True and half['report'].get('restarted') is False
+            and half['report'].get('restart') == [key] and on_disk() == ten.text and seen['digest'] == half['report'].get('expected_digest')
+            and seen['config'].get(key) == '49s' and routes_seen(['n', 'r']) == {'n': 200, 'r': 404})
+    again = control_restart(None, name)
+    seen = observe()
+    r.check('restart 不给快照：用记录里的那一份重启，文件不用再换；退出码 0，结局 ACTIVE，启动设置回来了，之后对账是 IN_SYNC',
+            outcome(again) == (0, 'ACTIVE') and again['report'].get('replaced') is False and again['report'].get('restarted') is True
+            and again['report'].get('snapshot') == ten.sha256 and seen['config'].get(key) == '48s' and on_disk() == ten.text
+            and outcome(control_reconcile()) == (0, 'IN_SYNC'))
+
+    # 指标端口撞上 front 的端口：离线加载的那个容器里没有 front，加载得了；池里的网关拿它启动却起不来。
+    clash = Snapshot(['a', 'b', 'd', 's'], deadline=48, stats=PORT['front'])
+    before, stats, since = container('agentgateway'), observe()['config'].get('statsAddr'), time.time()
+    rolled = control_restart(clash, name, '--timeout', '5s')
+    seen, after, events = observe(), container('agentgateway'), docker_events(name, since)
+    r.note('重启之后网关起不来：发布器的输出', rolled['report'])
+    r.note('重启之后网关起不来：发布器用了多少秒（等网关的时限设成了 5 秒）', rolled['seconds'])
+    r.note('重启之后网关起不来：网关自己说的', gateway_said(name, since))
+    r.note('重启之后网关起不来：这期间 docker 对网关容器做过的事', events)
+    r.check('一份离线加载得了、池里的网关拿它却起不来的快照：重启之后读不到网关，发布器把上一份放回去再重启一次，退出码 4，结局 RESTORED',
+            outcome(rolled) == (4, 'RESTORED') and rolled['report'].get('replaced') is True and rolled['report'].get('restarted') is True
+            and rolled['report'].get('restart') == ['statsAddr'] and events.count('restart') == 2)
+    r.check('网关回来了：在跑的是上一份，启动设置也是上一份的；对账是 IN_SYNC，请求照常',
+            bool(after.get('running')) and after.get('pid') != before.get('pid') and on_disk() == ten.text and seen['reload'] == LOADED
+            and seen['digest'] == (rolled['report'].get('observed') or {}).get('digest') and seen['config'].get(key) == '48s'
+            and stats is not None and seen['config'].get('statsAddr') == stats
+            and routes_seen(['n', 's']) == {'n': 200, 's': 404} and outcome(control_reconcile()) == (0, 'IN_SYNC'))
+    left = leftovers()
+    r.note('三条命令都用过之后', left)
+    r.check('三条命令都用过之后没有留下别的东西', left == CLEAN)
 
     print(f"\ndocker {versions['docker']}，compose {versions['compose']}，agentgateway {LOCK['version']}（{GATEWAY_IMAGE}）")
     r.report()
