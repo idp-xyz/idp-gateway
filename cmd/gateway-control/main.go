@@ -49,6 +49,10 @@
 // 不给时是当前目录里的 .env）里只能有 名字=值 这样的行，环境里同名的变量要与文件里的相同：不然这一次
 // docker compose 拿到的设置会与启动这个池时的不同。不合要求时 keep 不启动，退出码也是 2。
 //
+// keep 有事才写一行，安稳的时候不出声。给了 --metrics-listen 时，它另在那个地址的 /metrics 上给出指标
+// （Prometheus 的文本格式），每看完一眼更新一次：池现在的样子、对账的结局、上一眼是什么时候看完的。
+// 告警靠的是这些数（deploy/compose 里有一份规则）。那个地址占不了时它不启动，退出码 1。
+//
 // 它不在请求路径上。RouteIntent 到网关配置的编译、发布的状态和审批都还没有。
 package main
 
@@ -59,6 +63,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -69,6 +76,7 @@ import (
 	"go.idp.xyz/idp-gateway/internal/gatewayconfig/adapters/directory"
 	"go.idp.xyz/idp-gateway/internal/gatewayconfig/adapters/readback"
 	"go.idp.xyz/idp-gateway/internal/gatewayconfig/adapters/scratch"
+	"go.idp.xyz/idp-gateway/internal/gatewayconfig/adapters/telemetry"
 	"go.idp.xyz/idp-gateway/internal/gatewayconfig/application"
 	"go.idp.xyz/idp-gateway/internal/gatewayconfig/domain"
 	"go.idp.xyz/idp-gateway/internal/gatewayconfig/ports"
@@ -179,6 +187,8 @@ type options struct {
 	composeFiles    list
 	composeEnvFiles list
 	composeTimeout  time.Duration
+	// 看守在哪个地址上给出指标；空表示不给
+	metricsListen string
 }
 
 // endpoint 是一个回读口和读它用的证书。
@@ -228,6 +238,7 @@ func parse(command string, args []string, output io.Writer) (options, error) {
 		flags.Var(&o.composeFiles, "compose-file", "compose 文件，可以给多次；不给时 docker compose 用当前目录里的 compose.yml")
 		flags.Var(&o.composeEnvFiles, "compose-env-file", "给 docker compose 的变量文件，可以给多次；不给时它用当前目录里的 .env。文件里只能有 名字=值 这样的行")
 		flags.DurationVar(&o.composeTimeout, "compose-timeout", 3*time.Minute, "启动命令、停止命令各自最多跑多久")
+		flags.StringVar(&o.metricsListen, "metrics-listen", "", "在这个地址的 "+telemetry.Path+" 上给出指标（Prometheus 的文本格式），host:port；不给就不开")
 	}
 	staged := command == commandPublish || command == commandRestart
 	if staged {
@@ -277,6 +288,15 @@ func parse(command string, args []string, output io.Writer) (options, error) {
 			return o, errors.New("--max-backoff must not be shorter than --interval")
 		case o.composeTimeout <= 0:
 			return o, errors.New("--compose-timeout must be positive")
+		}
+		// 给了这个参数却是空的，多半是变量文件里漏了那一项：当成"不开"的话，告警就悄悄没有了。
+		// 地址要写全：只写端口是在所有网卡上听，这些数没有设防。
+		given := false
+		flags.Visit(func(f *flag.Flag) { given = given || f.Name == "metrics-listen" })
+		if given {
+			if host, port, err := net.SplitHostPort(o.metricsListen); err != nil || host == "" || port == "" {
+				return o, fmt.Errorf("--metrics-listen must be host:port, with the host written out; got %q", o.metricsListen)
+			}
 		}
 	}
 	if !staged {
@@ -440,6 +460,21 @@ func keep(ctx context.Context, o options, stdout, stderr io.Writer, docker docke
 		release()
 	case !errors.Is(err, ports.ErrBusy):
 		return fail(err)
+	}
+	if o.metricsListen != "" {
+		// 占不了这个地址就不启动：不然看守在跑，监控却读不到它，分不清是哪一种。
+		listener, err := net.Listen("tcp", o.metricsListen)
+		if err != nil {
+			return fail(fmt.Errorf("metrics: %w", err))
+		}
+		metrics := telemetry.New(o.composeProject, o.pace, time.Now())
+		server := &http.Server{
+			Handler: metrics.Handler(), ReadHeaderTimeout: 5 * time.Second,
+			ErrorLog: log.New(stderr, "gateway-control: metrics: ", 0),
+		}
+		go func() { _ = server.Serve(listener) }()
+		defer server.Close()
+		keeper.Watch(func(tending application.Tending) { metrics.Observe(tending, time.Now()) })
 	}
 	encoder := json.NewEncoder(stdout)
 	keeper.Run(ctx, func(tending application.Tending) {

@@ -1,0 +1,244 @@
+# promtool test rules 用的：deploy/compose/idp-gateway-pool.rules.yml 的各条规则在什么时候响、什么时候不响。
+# 数是造的，每 15 秒一个；看的是规则的写法和时长。指标的名字和取值是不是看守真的给出来的那些，
+# 由 tests/contracts 对着 Go 测试的那份输出核对；规则对着真的看守响不响，在 run.py 的 SH-21 里。
+#
+# 由 run.py 在锁定的 Prometheus 镜像里跑（SH-21）。单独跑：
+#   docker run --rm -v "$PWD":/repo:ro --entrypoint promtool <镜像> test rules /repo/tests/integration/compose/rules.test.yml
+rule_files:
+  - ../../../deploy/compose/idp-gateway-pool.rules.yml
+evaluation_interval: 15s
+
+tests:
+  # 一个安稳的池，看守启动很久了：20 分钟里一条都不响。
+  - name: a quiet pool raises nothing
+    interval: 15s
+    input_series:
+      - series: 'up{job="idp-gateway-keeper", instance="pool:9617"}'
+        values: '1x80'
+      - series: 'idp_gateway_keeper_start_time_seconds{job="idp-gateway-keeper", instance="pool:9617"}'
+        values: '-86400x80'
+      - series: 'idp_gateway_keeper_last_look_timestamp_seconds{job="idp-gateway-keeper", instance="pool:9617"}'
+        values: '0+15x80'
+      - series: 'idp_gateway_keeper_last_look_failed{job="idp-gateway-keeper", instance="pool:9617"}'
+        values: '0x80'
+      - series: 'idp_gateway_pool_condition{job="idp-gateway-keeper", instance="pool:9617", condition="whole"}'
+        values: '1x80'
+      - series: 'idp_gateway_pool_condition{job="idp-gateway-keeper", instance="pool:9617", condition="down"}'
+        values: '0x80'
+      - series: 'idp_gateway_pool_reconcile_outcome{job="idp-gateway-keeper", instance="pool:9617", outcome="IN_SYNC"}'
+        values: '1x80'
+      - series: 'idp_gateway_pool_reconcile_outcome{job="idp-gateway-keeper", instance="pool:9617", outcome="UNKNOWN"}'
+        values: '0x80'
+      - series: 'idp_gateway_pool_reconcile_outcome{job="idp-gateway-keeper", instance="pool:9617", outcome="UNCONFIRMED"}'
+        values: '0x80'
+      - series: 'idp_gateway_pool_reconcile_outcome{job="idp-gateway-keeper", instance="pool:9617", outcome="RESTART_PENDING"}'
+        values: '0x80'
+      - series: 'idp_gateway_pool_starts_total{job="idp-gateway-keeper", instance="pool:9617"}'
+        values: '3x80'
+      - series: 'idp_gateway_pool_snapshots_put_back_total{job="idp-gateway-keeper", instance="pool:9617"}'
+        values: '2x80'
+    promql_expr_test:
+      - expr: count(ALERTS) or vector(0)
+        eval_time: 1m
+        exp_samples: [{labels: '{}', value: 0}]
+      - expr: count(ALERTS) or vector(0)
+        eval_time: 10m
+        exp_samples: [{labels: '{}', value: 0}]
+      - expr: count(ALERTS) or vector(0)
+        eval_time: 20m
+        exp_samples: [{labels: '{}', value: 0}]
+
+  # 读不到看守：从第 75 秒起抓取失败。先是 pending，满 1 分钟才响；抓取恢复就停。
+  - name: the keeper cannot be scraped
+    interval: 15s
+    input_series:
+      - series: 'up{job="idp-gateway-keeper", instance="pool:9617"}'
+        values: '1x4 0x12 1x20'
+    promql_expr_test:
+      - expr: ALERTS{alertname="GatewayKeeperDown"}
+        eval_time: 1m
+        exp_samples: []
+      - expr: ALERTS{alertname="GatewayKeeperDown"}
+        eval_time: 2m
+        exp_samples:
+          - labels: 'ALERTS{alertname="GatewayKeeperDown", alertstate="pending", severity="critical", job="idp-gateway-keeper", instance="pool:9617"}'
+            value: 1
+      - expr: ALERTS{alertname="GatewayKeeperDown"}
+        eval_time: 2m30s
+        exp_samples:
+          - labels: 'ALERTS{alertname="GatewayKeeperDown", alertstate="firing", severity="critical", job="idp-gateway-keeper", instance="pool:9617"}'
+            value: 1
+      - expr: ALERTS{alertname="GatewayKeeperDown"}
+        eval_time: 5m
+        exp_samples: []
+
+  # 根本没有这个抓取任务（看守的单元没有装，或者 Prometheus 没有配它）：同一条照样响。
+  - name: no keeper is scraped at all
+    interval: 15s
+    input_series:
+      - series: 'up{job="something-else", instance="other:9100"}'
+        values: '1x20'
+    promql_expr_test:
+      - expr: ALERTS{alertname="GatewayKeeperDown"}
+        eval_time: 45s
+        exp_samples:
+          - labels: 'ALERTS{alertname="GatewayKeeperDown", alertstate="pending", severity="critical", job="idp-gateway-keeper"}'
+            value: 1
+      - expr: ALERTS{alertname="GatewayKeeperDown"}
+        eval_time: 1m30s
+        exp_samples:
+          - labels: 'ALERTS{alertname="GatewayKeeperDown", alertstate="firing", severity="critical", job="idp-gateway-keeper"}'
+            value: 1
+
+  # 看守在跑、读得到，但"上一眼"的时刻停在第 60 秒不动了：过了 10 分钟才响，不用再等。
+  - name: the keeper stopped looking
+    interval: 15s
+    input_series:
+      - series: 'up{job="idp-gateway-keeper", instance="pool:9617"}'
+        values: '1x60'
+      - series: 'idp_gateway_keeper_last_look_timestamp_seconds{job="idp-gateway-keeper", instance="pool:9617"}'
+        values: '0+15x4 60x56'
+    promql_expr_test:
+      - expr: ALERTS{alertname="GatewayKeeperStalled"}
+        eval_time: 11m
+        exp_samples: []
+      - expr: ALERTS{alertname="GatewayKeeperStalled"}
+        eval_time: 11m15s
+        exp_samples:
+          - labels: 'ALERTS{alertname="GatewayKeeperStalled", alertstate="firing", severity="critical", job="idp-gateway-keeper", instance="pool:9617"}'
+            value: 1
+
+  # 一眼没看成不算；连着 2 分钟没看成才响。
+  - name: looks keep failing
+    interval: 15s
+    input_series:
+      - series: 'idp_gateway_keeper_last_look_failed{job="idp-gateway-keeper", instance="pool:9617", scenario="once"}'
+        values: '0x3 1 0x30'
+      - series: 'idp_gateway_keeper_last_look_failed{job="idp-gateway-keeper", instance="pool:9617", scenario="kept"}'
+        values: '0x3 1x30'
+    promql_expr_test:
+      - expr: ALERTS{alertname="GatewayKeeperLookFailing", alertstate="firing"}
+        eval_time: 2m45s
+        exp_samples: []
+      - expr: ALERTS{alertname="GatewayKeeperLookFailing", alertstate="firing"}
+        eval_time: 3m
+        exp_samples:
+          - labels: 'ALERTS{alertname="GatewayKeeperLookFailing", alertstate="firing", severity="warning", job="idp-gateway-keeper", instance="pool:9617", scenario="kept"}'
+            value: 1
+
+  # 池不完整。网关死了、看守 5 秒之后把它起回来的那一种（这里是 30 秒）不响；一直起不来的，2 分钟之后响。
+  - name: the pool is not whole
+    interval: 15s
+    input_series:
+      - series: 'idp_gateway_pool_condition{job="idp-gateway-keeper", instance="pool:9617", condition="whole", scenario="brought back"}'
+        values: '1x3 0x1 1x30'
+      - series: 'idp_gateway_pool_condition{job="idp-gateway-keeper", instance="pool:9617", condition="whole", scenario="stays down"}'
+        values: '1x3 0x30'
+      # 别的取值是 0 不说明什么：只看 whole 的那一个。
+      - series: 'idp_gateway_pool_condition{job="idp-gateway-keeper", instance="pool:9617", condition="orphaned", scenario="brought back"}'
+        values: '0x34'
+    promql_expr_test:
+      - expr: ALERTS{alertname="GatewayPoolNotWhole"}
+        eval_time: 1m15s
+        exp_samples:
+          - labels: 'ALERTS{alertname="GatewayPoolNotWhole", alertstate="pending", severity="critical", job="idp-gateway-keeper", instance="pool:9617", condition="whole", scenario="brought back"}'
+            value: 1
+          - labels: 'ALERTS{alertname="GatewayPoolNotWhole", alertstate="pending", severity="critical", job="idp-gateway-keeper", instance="pool:9617", condition="whole", scenario="stays down"}'
+            value: 1
+      - expr: ALERTS{alertname="GatewayPoolNotWhole"}
+        eval_time: 2m45s
+        exp_samples:
+          - labels: 'ALERTS{alertname="GatewayPoolNotWhole", alertstate="pending", severity="critical", job="idp-gateway-keeper", instance="pool:9617", condition="whole", scenario="stays down"}'
+            value: 1
+      - expr: ALERTS{alertname="GatewayPoolNotWhole"}
+        eval_time: 3m
+        exp_samples:
+          - labels: 'ALERTS{alertname="GatewayPoolNotWhole", alertstate="firing", severity="critical", job="idp-gateway-keeper", instance="pool:9617", condition="whole", scenario="stays down"}'
+            value: 1
+
+  # 对账的结局。UNKNOWN 和 UNCONFIRMED 是一条，RESTART_PENDING 是另一条；都要连着 5 分钟。
+  # 一次发布之后短暂的 RESTORED 哪一条都不是。
+  - name: the account does not agree
+    interval: 15s
+    input_series:
+      - series: 'up{job="idp-gateway-keeper", instance="pool:9617"}'
+        values: '1x33'
+      - series: 'idp_gateway_pool_reconcile_outcome{job="idp-gateway-keeper", instance="pool:9617", outcome="UNKNOWN"}'
+        values: '0x3 1x30'
+      - series: 'idp_gateway_pool_reconcile_outcome{job="idp-gateway-keeper", instance="pool:9617", outcome="UNCONFIRMED"}'
+        values: '0x3 1x4 0x26'
+      - series: 'idp_gateway_pool_reconcile_outcome{job="idp-gateway-keeper", instance="pool:9617", outcome="RESTART_PENDING"}'
+        values: '0x3 1x30'
+      - series: 'idp_gateway_pool_reconcile_outcome{job="idp-gateway-keeper", instance="pool:9617", outcome="RESTORED"}'
+        values: '1x33'
+      - series: 'idp_gateway_pool_reconcile_outcome{job="idp-gateway-keeper", instance="pool:9617", outcome="IN_SYNC"}'
+        values: '0x33'
+    promql_expr_test:
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 5m45s
+        exp_samples: []
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 6m
+        exp_samples:
+          - labels: 'ALERTS{alertname="GatewayPoolNotConfirmed", alertstate="firing", severity="critical", job="idp-gateway-keeper", instance="pool:9617", outcome="UNKNOWN"}'
+            value: 1
+          - labels: 'ALERTS{alertname="GatewayPoolRestartPending", alertstate="firing", severity="warning", job="idp-gateway-keeper", instance="pool:9617", outcome="RESTART_PENDING"}'
+            value: 1
+
+  # 看守跑过启动命令、往回放过文件：数一长就响，不等；长过之后 15 分钟自己停。看守是很久以前启动的。
+  - name: the keeper acted
+    interval: 15s
+    input_series:
+      - series: 'up{job="idp-gateway-keeper", instance="pool:9617"}'
+        values: '1x100'
+      - series: 'idp_gateway_keeper_start_time_seconds{job="idp-gateway-keeper", instance="pool:9617"}'
+        values: '-86400x100'
+      - series: 'idp_gateway_pool_starts_total{job="idp-gateway-keeper", instance="pool:9617"}'
+        values: '4x7 5x92'
+      - series: 'idp_gateway_pool_snapshots_put_back_total{job="idp-gateway-keeper", instance="pool:9617"}'
+        values: '0x7 1x92'
+    promql_expr_test:
+      - expr: ALERTS
+        eval_time: 1m45s
+        exp_samples: []
+      - expr: ALERTS
+        eval_time: 2m
+        exp_samples:
+          - labels: 'ALERTS{alertname="GatewayPoolBroughtBack", alertstate="firing", severity="warning", job="idp-gateway-keeper", instance="pool:9617"}'
+            value: 1
+          - labels: 'ALERTS{alertname="GatewayPoolSnapshotPutBack", alertstate="firing", severity="warning", job="idp-gateway-keeper", instance="pool:9617"}'
+            value: 1
+      - expr: count(ALERTS)
+        eval_time: 16m30s
+        exp_samples: [{labels: '{}', value: 2}]
+      - expr: ALERTS
+        eval_time: 17m15s
+        exp_samples: []
+
+  # 看守刚启动就动了手：Prometheus 第一次读到时数已经是 1，从没见过它是 0。照样响，响到它启动满 15 分钟。
+  - name: the keeper acted before it was first scraped
+    interval: 15s
+    input_series:
+      - series: 'up{job="idp-gateway-keeper", instance="pool:9617"}'
+        values: '1x70'
+      - series: 'idp_gateway_keeper_start_time_seconds{job="idp-gateway-keeper", instance="pool:9617"}'
+        values: '0x70'
+      - series: 'idp_gateway_pool_starts_total{job="idp-gateway-keeper", instance="pool:9617"}'
+        values: '1x70'
+      - series: 'idp_gateway_pool_snapshots_put_back_total{job="idp-gateway-keeper", instance="pool:9617"}'
+        values: '1x70'
+    promql_expr_test:
+      - expr: increase(idp_gateway_pool_starts_total[15m])
+        eval_time: 5m
+        exp_samples:
+          - labels: '{job="idp-gateway-keeper", instance="pool:9617"}'
+            value: 0
+      - expr: count(ALERTS{alertstate="firing"})
+        eval_time: 15s
+        exp_samples: [{labels: '{}', value: 2}]
+      - expr: count(ALERTS{alertstate="firing"})
+        eval_time: 14m45s
+        exp_samples: [{labels: '{}', value: 2}]
+      - expr: ALERTS
+        eval_time: 15m
+        exp_samples: []

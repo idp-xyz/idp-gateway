@@ -788,6 +788,63 @@ func TestBeingToldToStopWhileIdleIsNotReportedAsTrouble(t *testing.T) {
 	}
 }
 
+// 报告只在有事时才有；Watch 每一眼都有。一个安稳的池上，从报告里看不出看守还在不在看。
+func TestEveryLookIsWatchedNotOnlyTheOnesWorthReporting(t *testing.T) {
+	f := newFleet(t, "one", true)
+	keeper := f.keeper()
+	var watched []Tending
+	keeper.Watch(func(tending Tending) { watched = append(watched, tending) })
+
+	reported := f.keep(keeper, 10*time.Minute)
+	// 5 秒看一眼，十分钟 120 眼；报告只有开头的那一次。
+	if len(reported) != 1 || len(watched) != 120 || f.looks != 120 {
+		t.Fatalf("报告了 %d 次，交给 Watch %d 次，看了 %d 眼", len(reported), len(watched), f.looks)
+	}
+	accounts := 0
+	for _, tending := range watched {
+		if tending.Condition != domain.ConditionWhole || tending.Acted() || tending.Busy || tending.Err != nil || tending.Failures != 0 {
+			t.Fatalf("%+v", tending)
+		}
+		if tending.Reconciled != nil {
+			accounts++
+		}
+	}
+	if accounts != 10 {
+		t.Fatalf("交给 Watch 的里面有 %d 次对账，要的是 10 次", accounts)
+	}
+}
+
+// 交给 Watch 的每一眼带着"接连几次没修好"：等着下一次动手的那些眼里它留着，修好了才从头算。
+func TestWatchedLooksCarryHowManyRepairsFailedInARow(t *testing.T) {
+	f := newFleet(t, "one", true)
+	f.kill("gateway")
+	f.broken = "gateway"
+	f.onLook = func(int) {
+		if f.elapsed() == 35*time.Second { // 有人把毛病修好了：下一次启动命令成得了
+			f.broken = ""
+		}
+	}
+	keeper := f.keeper()
+	var failures []int
+	var acted []bool
+	keeper.Watch(func(tending Tending) {
+		failures = append(failures, tending.Failures)
+		acted = append(acted, tending.Acted())
+	})
+
+	f.keep(keeper, 80*time.Second)
+	// 启动命令在第 0、10、30 秒没成，第 70 秒成了；每 5 秒一眼，到第 75 秒共 16 眼。
+	if want := []int{0, 10, 30, 70}; !reflect.DeepEqual(seconds(f.startedAt), want) {
+		t.Fatalf("启动命令在第 %v 秒，要的是 %v", seconds(f.startedAt), want)
+	}
+	if want := []int{1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0}; !reflect.DeepEqual(failures, want) {
+		t.Fatalf("各眼带着的次数是 %v，要的是 %v", failures, want)
+	}
+	if want := []bool{true, false, true, false, false, false, true, false, false, false, false, false, false, false, true, false}; !reflect.DeepEqual(acted, want) {
+		t.Fatalf("各眼有没有动手：%v", acted)
+	}
+}
+
 func TestNewKeeperRefusesUnusableArguments(t *testing.T) {
 	f := newFleet(t, "one", true)
 	timing := DefaultTiming()

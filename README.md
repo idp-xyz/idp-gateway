@@ -11,17 +11,17 @@
 |---|---|
 | `cmd/gateway-authz` | 请求路径上的服务：agentgateway 的 HTTP ExtAuthZ 端点，判定后按请求发放 Provider 凭证 |
 | `internal/egressauthz` | 上面这个服务的判定规则、协议适配与端口 |
-| `cmd/gateway-control` | 控制面的命令行，不在请求路径上。现在有五条命令，管的是单机上的一个池（ADR-0010 第 10 条）：`publish` 把一份网关配置发布上去，没生效就把上一份放回去；`restart` 发布要重启网关才生效的配置；`reconcile` 对账，池和记录对不上时把最后一次得到确认的那一份放回去；`place` 在网关启动之前把那一份放到位，由部署文件在启动时跑；`keep` 是常驻的看守，池里的容器死了它跑启动命令把它们起回来，平时定时对账。RouteIntent 的编译、发布的状态和审批都还没有 |
+| `cmd/gateway-control` | 控制面的命令行，不在请求路径上。现在有五条命令，管的是单机上的一个池（ADR-0010 第 10 条）：`publish` 把一份网关配置发布上去，没生效就把上一份放回去；`restart` 发布要重启网关才生效的配置；`reconcile` 对账，池和记录对不上时把最后一次得到确认的那一份放回去；`place` 在网关启动之前把那一份放到位，由部署文件在启动时跑；`keep` 是常驻的看守，池里的容器死了它跑启动命令把它们起回来，平时定时对账，并在一个地址上给出指标供告警。RouteIntent 的编译、发布的状态和审批都还没有 |
 | `internal/gatewayconfig` | 上面这个命令的规则、端口与适配：快照、运行配置的摘要、单机上的下发和记录、回读、发布前的离线加载、重启网关容器、看一个池的容器在不在跑并跑它的启动命令 |
 | `internal/platform` | 与上下文无关的技术件 |
 | `internal/architecture` | 包依赖方向的测试 |
 | `contracts/` | OpenAPI 与 JSON Schema |
 | `deploy/agentgateway/` | 数据面的版本锁定（`agentgateway.lock.json`：上游 1.7.0 的容器镜像，按摘要）与原生配置（目前只有一份示意样例） |
-| `deploy/compose/` | 单机上一个池的部署文件（docker compose）：网关、它前面的 nginx，和启动的先后；另有两个 systemd 单元，一个在开机时启动这个池，一个是看守。两个单元没有装到哪台机器上跑过，真的重启一台机器也没有验证过，见该目录 README |
+| `deploy/compose/` | 单机上一个池的部署文件（docker compose）：网关、它前面的 nginx，和启动的先后；另有两个 systemd 单元，一个在开机时启动这个池，一个是看守；另有一份 Prometheus 告警规则，看的是看守给出的指标。两个单元没有装到哪台机器上跑过，告警送到谁那里也没有做，真的重启一台机器也没有验证过，见该目录 README |
 | `tests/acceptance/` | 正式验收矩阵；`blackbox/` 是对着真实 agentgateway 跑的黑盒用例 |
 | `tests/integration/gatekeeper/` | 与本机起的一套真实 Gatekeeper 的联调 |
 | `tests/integration/kubernetes/` | 在本机的一个 kind 集群里验证 ADR-0010 在 Kubernetes 上的发布方式：不可变的快照，滚动替换，逐个副本回读 |
-| `tests/integration/compose/` | 在本机用 docker compose 验证 ADR-0010 在单机上的做法，跑的就是 `deploy/compose` 的部署文件。发布：换掉挂载目录里的配置文件，网关不重启，经回读口确认。启动：先把确认过的那一份放到位，回读对上了才收请求。容器死了：看守把它们起回来。`cmd/gateway-control` 的五条命令都在这里对着真的网关跑；两个 systemd 单元之间的关系另由 `units.py` 在用户级的 systemd 里用替身命令跑 |
+| `tests/integration/compose/` | 在本机用 docker compose 验证 ADR-0010 在单机上的做法，跑的就是 `deploy/compose` 的部署文件。发布：换掉挂载目录里的配置文件，网关不重启，经回读口确认。启动：先把确认过的那一份放到位，回读对上了才收请求。容器死了：看守把它们起回来。`cmd/gateway-control` 的五条命令都在这里对着真的网关跑，看守的指标和一个真的 Prometheus 也在这里；两个 systemd 单元之间的关系另由 `units.py` 在用户级的 systemd 里用替身命令跑 |
 | `tests/contracts`、`tests/security`、`scripts/` | 针对契约的离线检查与尚未移植的 Python 参考实现 |
 | `docs/` | G01–G06 设计文档、[ADR](docs/adr/README.md)、治理记录、运行手册 |
 

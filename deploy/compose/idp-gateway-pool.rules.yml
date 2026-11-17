@@ -1,0 +1,84 @@
+# 告警规则（Prometheus）。看的是看守（gateway-control keep）给出的指标：怎么让 Prometheus 来读、
+# 各条是什么意思、响了之后看哪里，见同目录的 README.md 的"告警"。
+#
+# 抓取任务要叫 idp-gateway-keeper：头一条靠这个名字知道"该有一个看守，现在读不到它"。
+# 各条的时长是执笔时取的，没有对着真实的要求调过。
+#
+# 这里只管什么时候该叫人。叫到谁、怎么叫（Alertmanager 的路由和接收人）不在这个仓库里。
+groups:
+  - name: idp-gateway-pool
+    rules:
+      - alert: GatewayKeeperDown
+        expr: up{job="idp-gateway-keeper"} == 0 or absent(up{job="idp-gateway-keeper"})
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "读不到看守的指标：它没有在跑，或者够不着"
+          description: "这期间池里的容器死了没有谁起回来，也没有谁对账。看 systemctl status idp-gateway-pool-keep.service：停在 failed 多半是命令行或 .env 写得不对（退出码 2）。"
+
+      - alert: GatewayKeeperStalled
+        expr: time() - idp_gateway_keeper_last_look_timestamp_seconds > 600
+        labels:
+          severity: critical
+        annotations:
+          summary: "看守在跑，但超过 10 分钟没有看完一眼"
+          description: "它平时每隔 idp_gateway_keeper_look_interval_seconds 秒看一眼；一条 docker compose 命令最多跑 3 分钟。多半是 docker 没有回应。"
+
+      - alert: GatewayKeeperLookFailing
+        expr: idp_gateway_keeper_last_look_failed == 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "看守连着 2 分钟没看成：问不到 docker、占不了池，或者记录读不成样子"
+          description: "原因在它写的那些行的 error 里：journalctl -u idp-gateway-pool-keep.service。记录读不成样子时它不动文件，等人来看。"
+
+      - alert: GatewayPoolNotWhole
+        expr: idp_gateway_pool_condition{condition="whole"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "池里常驻的三个容器不是都在跑，已经 2 分钟"
+          description: "前置代理没开时请求进不来，网关没在跑时请求得到 502。看守跑了启动命令却没有修好时，卡在哪一步写在它那些行的 start_error 里；idp_gateway_pool_busy 是 1 表示一次发布一直占着这个池。"
+
+      - alert: GatewayPoolNotConfirmed
+        expr: idp_gateway_pool_reconcile_outcome{outcome=~"UNKNOWN|UNCONFIRMED"} == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "没能确认网关在跑的是记录的那一份配置"
+          description: "UNKNOWN：读不到网关，或者记录的那一份放回去之后没有生效。UNCONFIRMED：这个池还没有确认过任何发布，或者记录是在网关的另一个构建上做的，要再发布一次。"
+
+      - alert: GatewayPoolRestartPending
+        expr: idp_gateway_pool_reconcile_outcome{outcome="RESTART_PENDING"} == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "网关的启动设置不是确认那份配置时的那一套，要重启网关才对得上"
+          description: "看守不重启在跑着的网关：重启会让这个池中断，什么时候做由人定。做法是不给快照的 gateway-control restart。"
+
+      # 两条"发生过"的：数在 15 分钟里长过就响，过了 15 分钟自己停。看守刚启动就动了手的那一次，
+      # Prometheus 第一次读到时数已经是 1，看不出它长过，所以另算上"看守启动不到 15 分钟而数不是 0"。
+      - alert: GatewayPoolBroughtBack
+        expr: >-
+          increase(idp_gateway_pool_starts_total[15m]) > 0
+          or (idp_gateway_pool_starts_total > 0 and time() - idp_gateway_keeper_start_time_seconds < 900)
+        labels:
+          severity: warning
+        annotations:
+          summary: "看守跑过启动命令：池里有容器死过，或者开机时池没有起来"
+          description: "哪个容器、退出码是多少，在它那一行的 why 里。池现在好没好看 GatewayPoolNotWhole。"
+
+      - alert: GatewayPoolSnapshotPutBack
+        expr: >-
+          increase(idp_gateway_pool_snapshots_put_back_total[15m]) > 0
+          or (idp_gateway_pool_snapshots_put_back_total > 0 and time() - idp_gateway_keeper_start_time_seconds < 900)
+        labels:
+          severity: warning
+        annotations:
+          summary: "看守把记录的那一份配置放回去过：目录里放过一份没人确认过的文件"
+          description: "发布器死在半路留下的，或者有人绕过发布器写的。原来放着的是哪一份，在它那一行 reconcile 的 previous 和 reason 里。要那一份生效，就再发布一次。"

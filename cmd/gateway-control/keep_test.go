@@ -7,9 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -640,6 +643,176 @@ func TestKeepDoesNotStartWhenItCannotHoldThePool(t *testing.T) {
 	}
 }
 
+// freeAddress 是本机回环上一个此刻没有人用的地址。
+func freeAddress(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	return listener.Addr().String()
+}
+
+// scrape 读一次看守的指标，读成 名字{标签} -> 值。
+func scrape(t *testing.T, address string) map[string]string {
+	t.Helper()
+	response, err := http.Get("http://" + address + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("%d %v", response.StatusCode, err)
+	}
+	found := map[string]string{}
+	for _, line := range strings.Split(string(body), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		at := strings.LastIndex(line, " ")
+		found[line[:at]] = line[at+1:]
+	}
+	return found
+}
+
+// number 是读到的一个数。
+func number(t *testing.T, found map[string]string, series string) float64 {
+	t.Helper()
+	value, err := strconv.ParseFloat(found[series], 64)
+	if err != nil {
+		t.Fatalf("%s 是 %q", series, found[series])
+	}
+	return value
+}
+
+// until 一遍一遍读看守的指标，直到 want 说是；读到的最后一份交回去。
+func until(t *testing.T, address, what string, want func(map[string]string) bool) map[string]string {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		found := scrape(t, address)
+		if want(found) {
+			return found
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("没有等到%s。最后读到的：%v", what, found)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestKeepGivesItsMetricsWhileItRuns(t *testing.T) {
+	h := newHarness(t)
+	if r := h.publish(two); r.code != exitActive {
+		t.Fatalf("发布：退出码 %d，%s%s", r.code, r.stdout, r.stderr)
+	}
+	project := h.compose()
+	address := freeAddress(t)
+	k := h.keep("--metrics-listen", address)
+	k.next("开头的那一行", func(tended) bool { return true })
+
+	// 一个安稳的池：它只写了开头那一行，之后不出声。指标照样在走：看过的眼数在长，上一眼的时刻跟着走。
+	quiet := until(t, address, "它看过十眼", func(found map[string]string) bool { return number(t, found, "idp_gateway_keeper_looks_total") >= 10 })
+	for series, want := range map[string]string{
+		`idp_gateway_keeper_info{project="` + testProject + `"}`: "1",
+		"idp_gateway_keeper_look_interval_seconds":               "0.02",
+		"idp_gateway_keeper_reconcile_interval_seconds":          "0.1",
+		"idp_gateway_keeper_last_look_failed":                    "0",
+		`idp_gateway_pool_condition{condition="whole"}`:          "1",
+		`idp_gateway_pool_condition{condition="down"}`:           "0",
+		`idp_gateway_pool_condition{condition="unknown"}`:        "0",
+		"idp_gateway_pool_busy":                                  "0",
+		"idp_gateway_pool_unrepaired_attempts":                   "0",
+		"idp_gateway_pool_starts_total":                          "0",
+		`idp_gateway_pool_reconcile_outcome{outcome="IN_SYNC"}`:  "1",
+		`idp_gateway_pool_reconcile_outcome{outcome="RESTORED"}`: "0",
+		"idp_gateway_pool_snapshots_put_back_total":              "0",
+	} {
+		if quiet[series] != want {
+			t.Errorf("%s 是 %q，要的是 %q", series, quiet[series], want)
+		}
+	}
+	if len(k.lines()) != 1 {
+		t.Fatalf("安稳的池上它写了 %d 行", len(k.lines()))
+	}
+	started := number(t, quiet, "idp_gateway_keeper_start_time_seconds")
+	if number(t, quiet, "idp_gateway_keeper_last_look_timestamp_seconds") <= started ||
+		number(t, quiet, "idp_gateway_pool_last_reconcile_timestamp_seconds") <= started || time.Since(time.UnixMilli(int64(started*1000))) > time.Minute {
+		t.Fatalf("上一眼和上一次对账都该在它启动之后，它是刚启动的：%v", quiet)
+	}
+	// 再读一次：眼数又长了，上一眼的时刻往前走了。它这期间一行都没有再写。
+	later := until(t, address, "它又看了几眼", func(found map[string]string) bool {
+		return number(t, found, "idp_gateway_keeper_looks_total") >= number(t, quiet, "idp_gateway_keeper_looks_total")+5
+	})
+	if number(t, later, "idp_gateway_keeper_last_look_timestamp_seconds") <= number(t, quiet, "idp_gateway_keeper_last_look_timestamp_seconds") || len(k.lines()) != 1 {
+		t.Fatalf("先读到 %v，后读到 %v；它写了 %d 行", quiet, later, len(k.lines()))
+	}
+
+	// 一次发布占着池的时候网关死了：它不动手，指标说池不是完整的、被占着。
+	release := h.hold()
+	project.kill("agentgateway")
+	held := until(t, address, "它看到网关死了", func(found map[string]string) bool {
+		return found[`idp_gateway_pool_condition{condition="down"}`] == "1"
+	})
+	if held["idp_gateway_pool_busy"] != "1" || held[`idp_gateway_pool_condition{condition="whole"}`] != "0" || held["idp_gateway_pool_starts_total"] != "0" {
+		t.Fatalf("%v", held)
+	}
+	release()
+
+	// 锁放开，它跑启动命令把网关起回来：数了一次，池又是完整的。
+	back := until(t, address, "它把网关起回来", func(found map[string]string) bool {
+		return found["idp_gateway_pool_starts_total"] == "1" && found[`idp_gateway_pool_condition{condition="whole"}`] == "1"
+	})
+	if back["idp_gateway_pool_busy"] != "0" || back["idp_gateway_pool_unrepaired_attempts"] != "0" || back[`idp_gateway_pool_condition{condition="down"}`] != "0" {
+		t.Fatalf("%v", back)
+	}
+
+	// 有人绕过发布器写了这个文件：下一次对账收回去，数了一次。
+	h.place(one)
+	restored := until(t, address, "它把文件收回去", func(found map[string]string) bool {
+		return found["idp_gateway_pool_snapshots_put_back_total"] == "1"
+	})
+	if restored["idp_gateway_pool_starts_total"] != "1" || h.inPlace() != two {
+		t.Fatalf("%v，目录里是 %q", restored, h.inPlace())
+	}
+	// 收回去的那一次是 RESTORED，再下一次又是 IN_SYNC。
+	until(t, address, "下一次对账", func(found map[string]string) bool {
+		return found[`idp_gateway_pool_reconcile_outcome{outcome="IN_SYNC"}`] == "1" && found[`idp_gateway_pool_reconcile_outcome{outcome="RESTORED"}`] == "0"
+	})
+
+	// 被叫停之后那个地址上没有人了。
+	if code := k.stop(); code != exitActive || k.stderr.String() != "" {
+		t.Fatalf("退出码 %d，标准错误 %q", code, k.stderr.String())
+	}
+	if connection, err := net.DialTimeout("tcp", address, time.Second); err == nil {
+		connection.Close()
+		t.Fatal("看守退出之后，指标的地址上还有人在听")
+	}
+}
+
+func TestKeepDoesNotStartWhenItCannotListen(t *testing.T) {
+	h := newHarness(t)
+	project := h.compose()
+	project.kill("agentgateway")
+	// 那个地址已经有人占着了。
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer taken.Close()
+
+	k := h.keep("--metrics-listen", taken.Addr().String())
+	if code := k.end(); code != exitError || k.stdout.String() != "" || !strings.Contains(k.stderr.String(), "gateway-control: metrics: listen tcp "+taken.Addr().String()) {
+		t.Fatalf("退出码 %d，标准输出 %q，标准错误 %q", code, k.stdout.String(), k.stderr.String())
+	}
+	// 它什么都没做：死了的网关没有被起回来。
+	if len(project.composed()) != 0 || project.running("agentgateway") {
+		t.Fatalf("docker compose 命令 %v", project.composed())
+	}
+}
+
 func TestUsageOfKeep(t *testing.T) {
 	h := newHarness(t)
 	h.compose().kill("agentgateway")
@@ -659,6 +832,11 @@ func TestUsageOfKeep(t *testing.T) {
 		{"keep 最长的等待比间隔还短", with("--max-backoff", "1ms"), "--max-backoff must not be shorter than --interval"},
 		{"keep 的命令时限为零", with("--compose-timeout", "0s"), "--compose-timeout must be positive"},
 		{"keep 的间隔不是时长", with("--interval", "often"), "invalid value"},
+		// 给了却是空的：多半是变量文件里漏了那一项。当成"不开"的话告警就悄悄没有了。
+		{"keep 的指标地址是空的", with("--metrics-listen", ""), `--metrics-listen must be host:port, with the host written out; got ""`},
+		{"keep 的指标地址只有端口", with("--metrics-listen", ":9617"), `--metrics-listen must be host:port, with the host written out; got ":9617"`},
+		{"keep 的指标地址没有端口", with("--metrics-listen", "127.0.0.1"), "--metrics-listen must be host:port"},
+		{"keep 的指标地址的端口是空的", with("--metrics-listen", "127.0.0.1:"), "--metrics-listen must be host:port"},
 		{"keep 要帮助", []string{"keep", "--help"}, "-compose-file"},
 	} {
 		r := h.run(c.args)
@@ -696,5 +874,12 @@ func TestUsageOfKeep(t *testing.T) {
 	}
 	if o.composeProject != "idp-gateway-pool" || len(o.composeFiles) != 0 || len(o.composeEnvFiles) != 0 || o.composeTimeout != 3*time.Minute {
 		t.Fatalf("%+v", o)
+	}
+	// 不给 --metrics-listen 就不听任何地址。别的命令没有这个参数。
+	if o.metricsListen != "" {
+		t.Fatalf("%+v", o)
+	}
+	if r := h.run(append(h.reconcileArgs(), "--metrics-listen", "127.0.0.1:9617")); r.code != exitUsage || !strings.Contains(r.stderr, "flag provided but not defined: -metrics-listen") {
+		t.Fatalf("reconcile 接受了 --metrics-listen：退出码 %d，%q", r.code, r.stderr)
 	}
 }

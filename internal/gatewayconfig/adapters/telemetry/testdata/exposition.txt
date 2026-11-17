@@ -1,0 +1,49 @@
+# HELP idp_gateway_keeper_info The docker compose project this keeper watches.
+# TYPE idp_gateway_keeper_info gauge
+idp_gateway_keeper_info{project="idp-gateway-pool"} 1
+# HELP idp_gateway_keeper_start_time_seconds When this keeper started, in seconds since the epoch.
+# TYPE idp_gateway_keeper_start_time_seconds gauge
+idp_gateway_keeper_start_time_seconds 1794441600.000
+# HELP idp_gateway_keeper_look_interval_seconds How often the keeper looks at the pool's long-running containers.
+# TYPE idp_gateway_keeper_look_interval_seconds gauge
+idp_gateway_keeper_look_interval_seconds 5
+# HELP idp_gateway_keeper_reconcile_interval_seconds How often the keeper reconciles the pool while its gateway runs.
+# TYPE idp_gateway_keeper_reconcile_interval_seconds gauge
+idp_gateway_keeper_reconcile_interval_seconds 60
+# HELP idp_gateway_keeper_looks_total Looks at the pool that the keeper has finished.
+# TYPE idp_gateway_keeper_looks_total counter
+idp_gateway_keeper_looks_total 4
+# HELP idp_gateway_keeper_last_look_timestamp_seconds When the keeper finished its last look at the pool; its start time until the first look is finished.
+# TYPE idp_gateway_keeper_last_look_timestamp_seconds gauge
+idp_gateway_keeper_last_look_timestamp_seconds 1794441670.000
+# HELP idp_gateway_keeper_last_look_failed 1 when the keeper could not see the pool at its last look or a step of that look failed, 0 otherwise. The reason is in the keeper's output.
+# TYPE idp_gateway_keeper_last_look_failed gauge
+idp_gateway_keeper_last_look_failed 0
+# HELP idp_gateway_pool_condition What the pool's three long-running containers looked like when the last look ended: 1 for the condition that holds. whole: all three run. down: one is not running. orphaned: the gateway or the front proxy is attached to a network namespace that is gone. unknown: the keeper could not see them.
+# TYPE idp_gateway_pool_condition gauge
+idp_gateway_pool_condition{condition="whole"} 1
+idp_gateway_pool_condition{condition="down"} 0
+idp_gateway_pool_condition{condition="orphaned"} 0
+idp_gateway_pool_condition{condition="unknown"} 0
+# HELP idp_gateway_pool_busy 1 when a publication held the pool at the last look, so that the keeper did not do what was due, 0 otherwise.
+# TYPE idp_gateway_pool_busy gauge
+idp_gateway_pool_busy 0
+# HELP idp_gateway_pool_unrepaired_attempts How many times in a row the keeper has acted on the pool without making it whole.
+# TYPE idp_gateway_pool_unrepaired_attempts gauge
+idp_gateway_pool_unrepaired_attempts 0
+# HELP idp_gateway_pool_starts_total Times the keeper ran the command that starts the pool.
+# TYPE idp_gateway_pool_starts_total counter
+idp_gateway_pool_starts_total 1
+# HELP idp_gateway_pool_reconcile_outcome The outcome of the keeper's last reconcile: 1 for that outcome. All 0 until it has reconciled once.
+# TYPE idp_gateway_pool_reconcile_outcome gauge
+idp_gateway_pool_reconcile_outcome{outcome="IN_SYNC"} 0
+idp_gateway_pool_reconcile_outcome{outcome="RESTORED"} 1
+idp_gateway_pool_reconcile_outcome{outcome="RESTART_PENDING"} 0
+idp_gateway_pool_reconcile_outcome{outcome="UNKNOWN"} 0
+idp_gateway_pool_reconcile_outcome{outcome="UNCONFIRMED"} 0
+# HELP idp_gateway_pool_last_reconcile_timestamp_seconds When the keeper last finished a reconcile, in seconds since the epoch; 0 until it has reconciled once.
+# TYPE idp_gateway_pool_last_reconcile_timestamp_seconds gauge
+idp_gateway_pool_last_reconcile_timestamp_seconds 1794441665.000
+# HELP idp_gateway_pool_snapshots_put_back_total Times a reconcile by the keeper wrote the recorded snapshot back into the configuration directory.
+# TYPE idp_gateway_pool_snapshots_put_back_total counter
+idp_gateway_pool_snapshots_put_back_total 1

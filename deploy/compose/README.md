@@ -14,6 +14,7 @@
 | `.env.example` | 要填的变量，每一项的意思写在里面。复制成 `.env` 再填 |
 | `idp-gateway-pool.service` | systemd 单元：开机时启动这个池，关机时停下它 |
 | `idp-gateway-pool-keep.service` | systemd 单元：看守。池里的容器死了把它们起回来，平时每分钟对一次账（见"看守"） |
+| `idp-gateway-pool.rules.yml` | 告警规则（Prometheus）：看的是看守给出的指标（见"告警"） |
 
 发布器是 [`cmd/gateway-control`](../../cmd/gateway-control/main.go)，在本机上运行；`compose.yml` 里有两步跑的也是它，看守也是它的一条命令。
 
@@ -157,7 +158,7 @@ STAGING="--image <compose.yml 里网关用的那个镜像，按摘要>
 | `pool`、`after` | 动手之前、之后三个容器各自的状态 |
 | `error` | 这一眼没看成（比如问不到 docker），或者有一步没做成 |
 
-**这些行没有人看，它说的事就没有人知道**：修不好，`RESTART_PENDING`，`UNKNOWN`。告警没有做。
+**这些行没有人看，它说的事就没有人知道**：修不好，`RESTART_PENDING`，`UNKNOWN`。它安稳的时候不出声，所以它不出声也说明不了它还在跑。要有人知道，靠的是下面的"告警"。
 
 **两个单元。** 怎么装写在两个文件的开头。看守的单元里要改的是 `User=`、`Group=`（`CONTROL_USER` 的那个账号，要用得了 docker）和两处目录。它跟着池的单元走：
 
@@ -177,6 +178,68 @@ STAGING="--image <compose.yml 里网关用的那个镜像，按摘要>
 
 **验证到哪一步。** 真的看守对着真的网关和这份部署文件跑过，由测试脚本直接起，不经 systemd（`SH-16` 到 `SH-18`）。两个单元里写的命令原样跑过，也不经 systemd：在一个放着 `compose.yml` 和 `.env` 的目录里，不另给 docker compose 项目名和文件（`SH-19`）。两个单元之间的关系，也就是上面这张表，在用户级的 systemd 里用替身命令跑过（[`units.py`](../../tests/integration/compose/units.py)）。两个单元没有装到哪台机器上跑过，见"没有验证的"。
 
+## 告警
+
+看守在 `.env` 里 `KEEPER_METRICS_LISTEN` 的那个地址上给出指标（`http://地址/metrics`，Prometheus 的文本格式），每看完一眼更新一次。Prometheus 隔一阵来读，照 [`idp-gateway-pool.rules.yml`](idp-gateway-pool.rules.yml) 里的规则决定什么时候该叫人。
+
+> **做到哪一步。** 规则说的是什么时候该叫人。叫到谁、怎么叫（Alertmanager 的路由和接收人）不在这个仓库里，没有做。Prometheus 自己停了由谁发现，也不在这里。
+
+**接上 Prometheus。** 抓取任务要叫 `idp-gateway-keeper`：头一条规则靠这个名字知道该有一个看守、现在读不到它。
+
+```yaml
+rule_files:
+  - /etc/prometheus/idp-gateway-pool.rules.yml   # 本目录里的那一份
+scrape_configs:
+  - job_name: idp-gateway-keeper
+    static_configs:
+      - targets: ["127.0.0.1:9617"]              # .env 里 KEEPER_METRICS_LISTEN 的那个地址
+```
+
+- Prometheus 要够得着那个地址。它跑在容器里时够不着本机的回环，这时把 `KEEPER_METRICS_LISTEN` 写成它够得着的那个本机地址。
+- 这些数没有设防，够得着这个地址的都读得到。里面没有配置的内容，也没有凭证。那个地址上只有 `/metrics`，只读。
+- `KEEPER_METRICS_LISTEN` 写成 地址:端口，地址不能省。`.env` 里漏了这一项时看守不启动（退出码 2，单元停在 `failed`）：不然告警就悄悄没有了。那个地址被别的进程占着时它也不启动（退出码 1，systemd 每 5 秒再起它一次）。
+
+**它给出的数。** 看守重新启动之后，各个次数从 0 算起。
+
+| 名字 | 意思 |
+|---|---|
+| `idp_gateway_keeper_info{project=…}` | 总是 1；标签是它守着的 compose 项目 |
+| `idp_gateway_keeper_start_time_seconds` | 它启动的时刻 |
+| `idp_gateway_keeper_look_interval_seconds`、`idp_gateway_keeper_reconcile_interval_seconds` | 它多久看一眼、多久对一次账 |
+| `idp_gateway_keeper_looks_total` | 看完了多少眼 |
+| `idp_gateway_keeper_last_look_timestamp_seconds` | 上一眼是什么时候看完的；头一眼还没有看完时是它启动的时刻 |
+| `idp_gateway_keeper_last_look_failed` | 上一眼没看成，或者有一步没做成，是 1。原因在它写的那一行的 `error` 里 |
+| `idp_gateway_pool_condition{condition=…}` | 上一眼看完时三个常驻容器合起来的样子，成立的那个是 1：`whole`、`down`、`orphaned`，或者 `unknown`（没看成）。动过手的，是动手之后的样子 |
+| `idp_gateway_pool_busy` | 上一眼时一次发布正占着这个池，该做的没有做，是 1 |
+| `idp_gateway_pool_unrepaired_attempts` | 接连几次跑了启动命令却没修好；修好了回到 0 |
+| `idp_gateway_pool_starts_total` | 跑过多少次启动命令 |
+| `idp_gateway_pool_reconcile_outcome{outcome=…}` | 上一次对账的结局，是哪个哪个是 1；还没有对过账时都是 0。网关没在跑时不对账，这里留着的是之前的那一次 |
+| `idp_gateway_pool_last_reconcile_timestamp_seconds` | 上一次对账是什么时候做完的；还没有对过时是 0 |
+| `idp_gateway_pool_snapshots_put_back_total` | 对账时把记录的那一份放回去过多少次。启动命令里 `place` 放回去的不算在这里 |
+
+**规则。** 各条的时长是执笔时取的，没有对着真实的要求调过。
+
+| 规则 | 什么时候响 | 严重程度 |
+|---|---|---|
+| `GatewayKeeperDown` | 连着 1 分钟读不到看守：它没有在跑（没有装单元，单元停在 `failed`，被停了），或者够不着。别的规则读的都是看守自己给的数，它没了它们就都不响，所以这一条是底 | critical |
+| `GatewayKeeperStalled` | 看守读得到，但超过 10 分钟没有看完一眼 | critical |
+| `GatewayKeeperLookFailing` | 连着 2 分钟每一眼都没看成：问不到 docker，占不了池，记录读不成样子 | warning |
+| `GatewayPoolNotWhole` | 三个常驻容器不是都在跑，连着 2 分钟。网关崩了、看守几秒之后把它起回来的那一种不响 | critical |
+| `GatewayPoolNotConfirmed` | 对账的结局连着 5 分钟是 `UNKNOWN` 或 `UNCONFIRMED` | critical |
+| `GatewayPoolRestartPending` | 对账的结局连着 5 分钟是 `RESTART_PENDING` | warning |
+| `GatewayPoolBroughtBack` | 看守在过去 15 分钟里跑过启动命令：池里有容器死过。不等时长，过了 15 分钟自己停 | warning |
+| `GatewayPoolSnapshotPutBack` | 看守在过去 15 分钟里把记录的那一份放回去过：目录里放过一份没人确认过的文件 | warning |
+
+开机时池没有起来（启动命令以非零码结束，池的单元是 `failed`）没有单独的规则。看守照样启动，接着去试：`GatewayPoolBroughtBack` 响；一直起不来，2 分钟之后 `GatewayPoolNotWhole` 响。看守也没有装时是 `GatewayKeeperDown`。
+
+**验证到哪一步。**
+
+- 真的看守给出的数，在池出各种事时读过（`SH-20`）：安稳的时候，一次发布占着池而网关死了的时候，网关起不来的时候，有人绕过发布器写了文件的时候。
+- 一个真的 Prometheus 读真的看守，装着这份规则（`SH-21`）。往回放文件、把网关起回来，各自的那一条响了。看守停掉，`GatewayKeeperDown` 真的等满 1 分钟之后响了。`GatewayPoolNotWhole` 看到的是它在等时长，网关回来之后撤掉，没有响。
+- 各条的时长，是 `promtool` 对着造的数查的（[`rules.test.yml`](../../tests/integration/compose/rules.test.yml)）。
+- 没有对着真的看守让规则响过的：`RESTART_PENDING`、`UNKNOWN`、`UNCONFIRMED`，看守没看成，看守不再看。
+- 告警送出去（Alertmanager）没有跑过。测试里的 Prometheus 每秒读一次，平时是 15 秒：两次读之间发生又过去的事它看不到，除了那两条数次数的。
+
 ## 停
 
 看守在跑时先停它，不然停下的容器会被它起回来。装了两个单元时：`systemctl stop idp-gateway-pool.service`，它先停看守，再跑 `docker compose stop`。
@@ -194,8 +257,8 @@ STAGING="--image <compose.yml 里网关用的那个镜像，按摘要>
 - **容器死了，把它们起回来的是看守，不是 docker。** 容器没有重启策略（原因见"一个池"）。看守没有在跑时（没有装它的单元，或者它的单元是 `failed`），死了的容器不会自己起来：要跑 `docker compose up -d`，它经过 `place` 和 `confirm`。
 - **`netns` 这个容器单独死了，池就断了，只跑 `up -d` 修不好。** 网关和 `front` 还在跑，却连不到了；`up -d` 把 `netns` 重新起来，那两个仍接在原来的命名空间里，`confirm` 读不到网关，`front` 的端口上没有人应答。看守遇到这种情况会先把那两个停下再启动（`SH-16`）；没有看守时要先 `docker compose stop` 再 `docker compose up -d`。
 - **发布器死在半路留下的文件，最长要过一分钟才被收回去。** 那份没有人确认过的文件，网关加载得了的话已经在跑它，直到看守下一次对账。没有看守时没有谁会自动去对账：启动这个池时会对一次，平时要有人跑 `gateway-control reconcile` 或 `docker compose up -d`。
-- **看守只管把容器起回来和对账，别的它只写出来。** 启动设置还差一次重启（`RESTART_PENDING`），读不到网关（`UNKNOWN`），怎么试都起不来：它写在自己的输出里，不通知谁。告警没有做。
-- **看守自己停了，池照常跑，只是没有人守着了。** 它被杀掉由 systemd 重新起来；它的单元是 `failed` 时（`.env` 或命令行写得不对）不会。这也没有谁来通知。
+- **看守只管把容器起回来和对账，别的它不做。** 启动设置还差一次重启（`RESTART_PENDING`），读不到网关（`UNKNOWN`），怎么试都起不来：它写在自己的输出里，也在它给出的指标里。有没有人知道，看 Prometheus 接没接上、告警送不送得出去（见"告警"）；送出去的那一半不在这个仓库里。
+- **看守自己停了，池照常跑，只是没有人守着了。** 它被杀掉由 systemd 重新起来；它的单元是 `failed` 时（`.env` 或命令行写得不对）不会。Prometheus 接上了的话，1 分钟之后 `GatewayKeeperDown` 响；没有接上，就没有谁知道。
 - **后端的名字，要在网关第一次用到它之前就解析得了。** 网关是在第一个请求用到一个后端的名字时才去解析它的。那一次解析不了（名字还不存在），这条路由就一直答 `503 dns resolution failed`，名字解析得了之后也不恢复：测试里等了 20 秒，另一次单独的实验里等了 240 秒，都没有恢复；重启网关之后立刻就好。多久会自己恢复没有量到。解析器够不着（而不是名字不存在）时是不是也这样，没有测。
 - **映射出来的端口不经过本机防火墙的 INPUT 规则。** 这是 docker 的做法，这里没有测。`CALLERS_LISTEN` 写成 `0.0.0.0:端口` 就是对所有网卡开放；要限制来源，把地址写成具体的网卡地址，或者在 docker 自己的规则链里限制。
 - **`place` 和 `confirm` 每次启动各留一份 JSON 在自己容器的日志里**（`docker compose logs place confirm`）。日志写到哪里、留多久、容器的资源上限，都没有定：用的是 docker 的默认值。

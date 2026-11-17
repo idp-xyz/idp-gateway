@@ -19,7 +19,9 @@
 # 每一行只写 名字=值，值不加引号、后面不跟注释、里面没有空白、$、# 和反斜杠：别的写法 systemd 和
 # docker compose 读出来不一样。看守启动时会核对，不合要求就以退出码 2 结束，是哪一行写在日志里。
 #
-# 它写的每一行 JSON 在 journalctl -u idp-gateway-pool-keep.service 里。
+# 它写的每一行 JSON 在 journalctl -u idp-gateway-pool-keep.service 里。它有事才写；告警靠的是另一样：
+# 它在 .env 里 KEEPER_METRICS_LISTEN 的那个地址上给出指标，由 Prometheus 来读，规则在同目录的
+# idp-gateway-pool.rules.yml 里。.env 里没有这一项时它不启动（退出码 2）：不然告警就悄悄没有了。
 #
 # 这个单元没有在真机上跑过，见 README.md 的"没有验证的"。
 
@@ -40,7 +42,8 @@ EnvironmentFile=/opt/idp-gateway/deploy/compose/.env
 ExecStart=/usr/bin/env ${GATEWAY_CONTROL} keep \
     --config-dir ${POOL_DIR}/config \
     --read-back 127.0.0.1:${READBACK_PORT} --read-back-name ${READBACK_NAME} \
-    --tls-cert ${PUBLISHER_CERT} --tls-key ${PUBLISHER_KEY} --tls-ca ${READBACK_CA}
+    --tls-cert ${PUBLISHER_CERT} --tls-key ${PUBLISHER_KEY} --tls-ca ${READBACK_CA} \
+    --metrics-listen ${KEEPER_METRICS_LISTEN}
 Restart=always
 RestartSec=5
 # 命令行或者 .env 写得不对（退出码 2）时再起一次也一样：不重新起，单元的状态是 failed。

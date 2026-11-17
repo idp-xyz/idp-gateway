@@ -47,7 +47,12 @@ type Keeper struct {
 	pace       Pace
 	now        func() time.Time
 	sleep      func(context.Context, time.Duration) error
+	watch      func(Tending)
 }
+
+// Watch 让 f 在每看完一眼之后被叫一次，不管这一眼有没有事。Run 的 report 只在有事时才叫：一个安稳的池上
+// 它一直不出声，从它那里看不出看守还在不在看。要在 Run 之前设。
+func (k *Keeper) Watch(f func(Tending)) { k.watch = f }
 
 // NewKeeper 构造一个池的看守。对账用的是 Reconciler 的那一套，时限由 timing 给。
 func NewKeeper(pool ports.Pool, delivery ports.Delivery, readBack ports.ReadBack, timing Timing, pace Pace) (*Keeper, error) {
@@ -74,6 +79,8 @@ type Tending struct {
 	Busy bool
 	// RetryIn：动了手却没修好，离下一次动手还有这么久。
 	RetryIn time.Duration
+	// Failures：到这一眼为止，接连几次动了手却没修好。修好了，或者看到三个都在跑，从头算。由 Run 填。
+	Failures int
 	// Stopped：停过接在旧命名空间里的容器。Started：跑过启动命令；StartErr 是它没有成功时说的。
 	Stopped, Started bool
 	StartErr         string
@@ -157,11 +164,15 @@ func (k *Keeper) Run(ctx context.Context, report func(Tending)) {
 			// 多半已经不在，下一眼就再试，不等到时候。这一次还不成的话接着原来的等：failures 不清零。
 			notBefore, tending.RetryIn = time.Time{}, 0
 		}
+		tending.Failures = failures
 		switch {
 		case tending.Reconciled != nil:
 			agreed = tending.Reconciled.agrees()
 		case tending.Acted():
 			agreed = false // 动过手之后没有对成账：网关没在跑，或者池被占着
+		}
+		if k.watch != nil {
+			k.watch(tending)
 		}
 		worth := tending.Acted() || tending.seen() != seen
 		if tending.Reconciled != nil {

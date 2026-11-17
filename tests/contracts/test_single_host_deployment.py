@@ -25,6 +25,11 @@ STEPS = ('place', 'confirm')   # run to completion, then exit
 # What gateway-control keep accepts in the env file: comments, blank lines and NAME=value with a value that
 # systemd and docker compose read alike (container.CheckEnvFiles).
 PLAIN = re.compile(r"""[A-Za-z_][A-Za-z0-9_]*=[^\s"'$#\\`]*""")
+# Filled in by the operator like the rest of .env, but read by the keeper unit only: where the keeper gives out its
+# metrics. docker compose has no use for it.
+KEEPER_ONLY = {'KEEPER_METRICS_LISTEN'}
+RULES_FILE = 'deploy/compose/idp-gateway-pool.rules.yml'
+EXPOSITION_FILE = 'internal/gatewayconfig/adapters/telemetry/testdata/exposition.txt'
 
 
 def directives(path: str) -> list:
@@ -176,7 +181,10 @@ class Variables(unittest.TestCase):
     def test_the_example_lists_the_required_variables_empty(self):
         required = {name for name, kind, _ in self.REFERENCES if kind == ':?'}
         listed = [line.split('=', 1) for line in self.EXAMPLE if re.match(r'[A-Z][A-Z0-9_]*=', line)]
-        self.assertEqual(sorted(name for name, _ in listed), sorted(required))
+        # ...and the one the keeper unit alone reads. Nothing else may be listed: the suites refuse a variable
+        # the example does not have.
+        self.assertFalse(KEEPER_ONLY & {name for name, _, _ in self.REFERENCES}, 'docker compose does not read these')
+        self.assertEqual(sorted(name for name, _ in listed), sorted(required | KEEPER_ONLY))
         self.assertEqual([value for _, value in listed if value], [], 'the example must not carry values of one host')
 
     def test_the_example_shows_the_optional_variables_with_their_defaults(self):
@@ -310,7 +318,8 @@ class KeeperUnit(unittest.TestCase):
         self.assertEqual(self.COMMAND, [
             '/usr/bin/env', '${GATEWAY_CONTROL}', 'keep', '--config-dir', '${POOL_DIR}/config',
             '--read-back', '127.0.0.1:${READBACK_PORT}', '--read-back-name', '${READBACK_NAME}',
-            '--tls-cert', '${PUBLISHER_CERT}', '--tls-key', '${PUBLISHER_KEY}', '--tls-ca', '${READBACK_CA}'])
+            '--tls-cert', '${PUBLISHER_CERT}', '--tls-key', '${PUBLISHER_KEY}', '--tls-ca', '${READBACK_CA}',
+            '--metrics-listen', '${KEEPER_METRICS_LISTEN}'])
         self.assertRegex(CONTROL, r'commandKeep\s*=\s*"keep"')
         for flag in flags(self.COMMAND):
             with self.subTest(flag=flag):
@@ -319,7 +328,8 @@ class KeeperUnit(unittest.TestCase):
     def test_every_variable_of_the_command_is_one_the_operator_must_fill_in(self):
         used = re.findall(r'\$\{([^}]*)\}', ' '.join(self.COMMAND))
         self.assertEqual(len(used), ' '.join(self.COMMAND).count('$'), 'systemd expands ${NAME} inside a word, $NAME only as a word')
-        self.assertLessEqual(set(used), self.REQUIRED)
+        self.assertLessEqual(set(used), self.REQUIRED | KEEPER_ONLY)
+        self.assertLessEqual(KEEPER_ONLY, set(used))
 
     def test_the_command_points_at_what_the_compose_file_gives_the_pool(self):
         """The same binary as place and confirm, the directory they write, and the port the read-back is published on."""
@@ -352,6 +362,124 @@ class KeeperUnit(unittest.TestCase):
         self.assertIn("POOL, KEEP = 'idp-gateway-pool.service', 'idp-gateway-pool-keep.service'", script)
         self.assertIn("for line in (DEPLOY / name).read_text(encoding='utf-8').splitlines():", script)
         self.assertIn(f"RESTART_SECONDS = {setting(self.UNIT, 'RestartSec')} ", script)
+
+
+class Alerting(unittest.TestCase):
+    """The alert rules are written against the numbers the keeper gives out. The Go test of the telemetry adapter
+    pins those numbers to a file; here the rules are held to that file, and the unit to the flag that opens them."""
+    RULES = yaml.safe_load(text(RULES_FILE))
+    ALERTS = [rule for group in RULES['groups'] for rule in group['rules']]
+    EXPOSITION = text(EXPOSITION_FILE)
+    TYPES = dict(re.findall(r'^# TYPE (\S+) (\S+)$', EXPOSITION, re.M))
+    SERIES = {line.rsplit(' ', 1)[0] for line in EXPOSITION.splitlines() if line and not line.startswith('#')}
+    README = text('deploy/compose/README.md')
+    JOB = 'idp-gateway-keeper'
+
+    def test_the_file_is_one_group_of_alerts(self):
+        self.assertEqual(list(self.RULES), ['groups'])
+        self.assertEqual([group['name'] for group in self.RULES['groups']], ['idp-gateway-pool'])
+        names = [rule.get('alert') for rule in self.ALERTS]
+        self.assertTrue(all(names), 'recording rules are not expected here')
+        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual(len(names), 8)
+
+    def test_every_alert_says_how_bad_it_is_and_what_it_means(self):
+        for rule in self.ALERTS:
+            with self.subTest(alert=rule['alert']):
+                self.assertLessEqual(set(rule), {'alert', 'expr', 'for', 'labels', 'annotations'})
+                self.assertEqual(list(rule['labels']), ['severity'])
+                self.assertIn(rule['labels']['severity'], ('critical', 'warning'))
+                self.assertEqual(sorted(rule['annotations']), ['description', 'summary'])
+                self.assertTrue(all(len(words.strip()) > 10 for words in rule['annotations'].values()))
+                if 'for' in rule:
+                    self.assertRegex(rule['for'], r'^[1-9]\d*m$')
+
+    def test_the_go_test_pins_the_numbers_to_the_file_read_here(self):
+        self.assertIn('golden := filepath.Join("testdata", "exposition.txt")',
+                      text('internal/gatewayconfig/adapters/telemetry/telemetry_test.go'))
+        self.assertTrue(self.TYPES and self.SERIES)
+        self.assertLessEqual(set(self.TYPES.values()), {'gauge', 'counter'})
+
+    def test_the_rules_only_read_series_the_keeper_gives_out(self):
+        used = set()
+        for rule in self.ALERTS:
+            with self.subTest(alert=rule['alert']):
+                names = set(re.findall(r'\bidp_gateway_[a-z_]+', rule['expr']))
+                self.assertLessEqual(names, set(self.TYPES))
+                self.assertTrue(names or 'up{' in rule['expr'], 'every rule reads the keeper, or whether it can be read')
+                used |= names
+                # A label matcher must be able to match: each value it names is one the keeper gives out.
+                for name, label, operator, value in re.findall(r'(idp_gateway_[a-z_]+)\{(\w+)(=~|=)"([^"]*)"\}', rule['expr']):
+                    for one in (value.split('|') if operator == '=~' else [value]):
+                        self.assertIn(f'{name}{{{label}="{one}"}}', self.SERIES)
+                self.assertEqual(rule['expr'].count('{'), len(re.findall(r'(idp_gateway_[a-z_]+|\bup)\{\w+(=~|=)"[^"]*"\}', rule['expr'])),
+                                 'a selector this test does not understand')
+        # What an alert is expected to hang on, by name.
+        self.assertGreaterEqual(used, {
+            'idp_gateway_keeper_last_look_timestamp_seconds', 'idp_gateway_keeper_last_look_failed', 'idp_gateway_keeper_start_time_seconds',
+            'idp_gateway_pool_condition', 'idp_gateway_pool_reconcile_outcome', 'idp_gateway_pool_starts_total',
+            'idp_gateway_pool_snapshots_put_back_total'})
+
+    def test_counters_are_read_as_what_they_grew_by(self):
+        counters = {name for name, kind in self.TYPES.items() if kind == 'counter'}
+        self.assertEqual({name for name in self.TYPES if name.endswith('_total')}, counters)
+        for rule in self.ALERTS:
+            for name in counters & set(re.findall(r'\bidp_gateway_[a-z_]+', rule['expr'])):
+                with self.subTest(alert=rule['alert'], counter=name):
+                    self.assertIn(f'increase({name}[', rule['expr'])
+                    # ...and the growth Prometheus cannot see: the keeper acted before it was first read.
+                    self.assertIn(f'{name} > 0 and time() - idp_gateway_keeper_start_time_seconds <', rule['expr'])
+
+    def test_the_states_that_need_a_person_each_have_an_alert(self):
+        by_name = {rule['alert']: rule for rule in self.ALERTS}
+        self.assertEqual(by_name['GatewayPoolNotWhole']['expr'], 'idp_gateway_pool_condition{condition="whole"} == 0')
+        # Every outcome of a reconcile that is not "the pool is as recorded" is either alerted on as a state...
+        states = {'UNKNOWN', 'UNCONFIRMED', 'RESTART_PENDING'}
+        named = set()
+        for rule in self.ALERTS:
+            for _, value in re.findall(r'idp_gateway_pool_reconcile_outcome\{outcome(=~|=)"([^"]*)"\}', rule['expr']):
+                named |= set(value.split('|'))
+        outcomes = {series.split('"')[1] for series in self.SERIES if series.startswith('idp_gateway_pool_reconcile_outcome{')}
+        self.assertEqual(named, states)
+        # ...or, for RESTORED, as something that happened (the count of snapshots put back).
+        self.assertEqual(outcomes - states, {'IN_SYNC', 'RESTORED'})
+        self.assertIn('idp_gateway_pool_snapshots_put_back_total', by_name['GatewayPoolSnapshotPutBack']['expr'])
+
+    def test_a_keeper_that_cannot_be_read_is_the_first_alert(self):
+        """Every other rule reads the keeper's own numbers; when it is gone they have nothing to read and stay silent."""
+        first = self.ALERTS[0]
+        self.assertEqual(first['alert'], 'GatewayKeeperDown')
+        self.assertEqual(first['expr'], f'up{{job="{self.JOB}"}} == 0 or absent(up{{job="{self.JOB}"}})')
+        self.assertEqual(first['labels']['severity'], 'critical')
+        # The job name is part of the contract: the README gives the scrape configuration that carries it.
+        self.assertIn(f'job_name: {self.JOB}', self.README)
+        self.assertIn('idp-gateway-pool.rules.yml', self.README)
+        self.assertIn('KEEPER_METRICS_LISTEN', self.README)
+
+    def test_the_keeper_unit_opens_the_metrics_where_the_env_file_says(self):
+        command = KeeperUnit.COMMAND
+        self.assertEqual(command[command.index('--metrics-listen') + 1], '${KEEPER_METRICS_LISTEN}')
+        self.assertIn('flags.StringVar(&o.metricsListen, "metrics-listen", "",', CONTROL)
+        self.assertIn('KEEPER_METRICS_LISTEN=', text('deploy/compose/.env.example').splitlines())
+        self.assertNotIn('KEEPER_METRICS_LISTEN', COMPOSE_TEXT)
+
+    def test_a_missing_address_stops_the_keeper_instead_of_switching_alerting_off(self):
+        """systemd puts an empty word where ${NAME} is not set. The keeper must not read that as "no metrics"."""
+        self.assertIn('flags.Visit(func(f *flag.Flag) { given = given || f.Name == "metrics-listen" })', CONTROL)
+        self.assertIn('if host, port, err := net.SplitHostPort(o.metricsListen); err != nil || host == "" || port == "" {', CONTROL)
+        self.assertEqual(setting(KeeperUnit.UNIT, 'RestartPreventExitStatus'), '2')
+
+    def test_the_rules_are_exercised_as_they_are_shipped(self):
+        tests = yaml.safe_load(text('tests/integration/compose/rules.test.yml'))
+        self.assertEqual(tests['rule_files'], ['../../../' + RULES_FILE])
+        exercised = json.dumps(tests)
+        for rule in self.ALERTS:
+            with self.subTest(alert=rule['alert']):
+                self.assertIn(f'alertname=\\"{rule["alert"]}\\"', exercised)
+        runner = text('tests/integration/compose/run.py')
+        self.assertIn("RULES = DEPLOY / 'idp-gateway-pool.rules.yml'", runner)
+        self.assertIn("RULE_TESTS = HERE / 'rules.test.yml'", runner)
+        self.assertIn(f"JOB = '{self.JOB}'", runner)
 
 
 class ComposeSuite(unittest.TestCase):

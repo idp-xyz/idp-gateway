@@ -32,8 +32,12 @@ SH-16 到 SH-18 看看守（gateway-control keep）：真的看守在本机上�
 SH-19 把两个单元文件里写的命令原样跑一遍，仍然不经 systemd：在一个放着 compose.yml 和 .env 的目录里跑，docker compose
 的项目和文件都不另给，由它自己在那个目录里找。这一条里的池用的是部署文件自己的项目名，不带这套用例的前缀；这台机器上
 已经有叫这个名字的项目时，这一条不动它，也就不通过。
+SH-20 和 SH-21 看告警：看守在一个地址上给出指标（--metrics-listen），SH-20 由本脚本直接去读，看池出了各种事时这些数
+是不是跟着变；SH-21 起一个真的 Prometheus（按摘要引用的镜像，主机网络，只听回环）来读同一个看守，装着部署目录里的
+那份规则，看各条规则对着真的看守响不响，并在同一个镜像里跑 promtool（规则的写法，和 rules.test.yml 里造的数）。
+告警送到谁那里（Alertmanager）不在这里。
 
-占用本机回环上的 27618 到 27620，与黑盒套件、Gatekeeper 联调和 Kubernetes 套件的端口重叠，不能同时跑。
+占用本机回环上的 27618 到 27622，与黑盒套件、Gatekeeper 联调和 Kubernetes 套件的端口重叠，不能同时跑。
 """
 from __future__ import annotations
 import base64, calendar, collections, fcntl, hashlib, http.client, json, os, re, secrets, shutil, signal, socket, stat, subprocess, sys, threading, time, traceback
@@ -64,7 +68,8 @@ RECORD = '.config.yaml.confirmed'         # 发布器留在配置目录里的记
 # SH-19 的安装目录：compose.yml、front.nginx.conf 和 .env 放在一起，像一台真的机器上那样。两个单元里的命令在这里面跑。
 HOSTED = RUN / 'deployed'
 HOSTED_MARK = RUN / 'deployed.started'   # SH-19 起过那个池的记号：拆的时候凭它删那个项目的网络
-STALE = (POOL, PKI, CONTROL, HOSTED, RUN / 'staging', RUN / 'single', RUN / 'expansion')   # 每次运行前后都清掉
+MONITOR = RUN / 'prometheus'   # SH-21 给 Prometheus 的配置
+STALE = (POOL, PKI, CONTROL, HOSTED, MONITOR, RUN / 'staging', RUN / 'single', RUN / 'expansion')   # 每次运行前后都清掉
 LOCK = pin.lock()
 # 两个镜像都不由本脚本交给 compose：部署文件自己按摘要写着。这里的两个值是拿来核对的（SH-01）。
 GATEWAY_IMAGE = pin.image_reference(LOCK)   # 上游镜像，按多平台索引的摘要引用
@@ -79,7 +84,15 @@ PROJECT = 'idp-gateway-compose'
 # 部署文件自己写的项目名。SH-19 之外的用例都另给项目名（PROJECT）；SH-19 不给，用的就是这个。
 DEPLOYED_PROJECT = yaml.safe_load((DEPLOY / 'compose.yml').read_text(encoding='utf-8'))['name']
 SCRATCH = f'{PROJECT}-scratch'   # 另起的那个网关容器：发布前的离线加载用它，"只挂单个文件"的对照也用它
-HOST = {'front': 27620, 'readback': 27619, 'scratch': 27618}   # 本机回环上的端口
+HOST = {'front': 27620, 'readback': 27619, 'scratch': 27618, 'metrics': 27621, 'prometheus': 27622}   # 本机回环上的端口
+# 告警（SH-20、SH-21）。看守在 METRICS 上给出指标；规则是部署目录里的那一份；JOB 是规则里写的抓取任务名。
+METRICS = f"127.0.0.1:{HOST['metrics']}"
+RULES = DEPLOY / 'idp-gateway-pool.rules.yml'
+RULE_TESTS = HERE / 'rules.test.yml'
+JOB = 'idp-gateway-keeper'
+# 这台机器上平台自己的监控跑的就是这个镜像（3.14.0）；promtool 也在里面。
+PROMETHEUS_IMAGE = 'prom/prometheus@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0'
+PROMETHEUS = f'{PROJECT}-prometheus'
 # netns 占着的那个网络命名空间里的端口：front 和网关都接在里面。
 PORT = {'front': 8080, 'callers': 8081, 'readback': 8443, 'admin': 15000, 'stats': 15020, 'readiness': 15021}
 ECHO_PORT = 8000
@@ -100,6 +113,8 @@ def pool_settings() -> dict:
         'POOL_DIR': str(POOL), 'GATEWAY_USER': RUN_AS, 'CONTROL_USER': RUN_AS, 'GATEWAY_ENV_FILE': str(POOL / 'gateway.env'),
         'GATEWAY_CONTROL': str(CONTROL_BINARY),
         'PUBLISHER_CERT': str(PKI / 'publisher.crt'), 'PUBLISHER_KEY': str(PKI / 'publisher.key'), 'READBACK_CA': str(PKI / 'ca.crt'),
+        # 只有看守的单元才读的一项：它在哪个地址上给出指标。
+        'KEEPER_METRICS_LISTEN': METRICS,
         # 可以不设的一项，默认 60 秒。这里设短：有几步是故意让 confirm 读不到网关的，每一步都要等满它。
         'CONFIRM_TIMEOUT': f'{CONFIRM_SECONDS}s',
     }
@@ -891,6 +906,96 @@ def patient(command, tries: int = 5) -> dict:
     return done
 
 
+# ---- 告警：看守的指标，和读它的 Prometheus -------------------------------------------------------------
+def scrape(address: str = METRICS, path: str = '/metrics', method: str = 'GET') -> dict:
+    """读一次看守的指标。-> status；content_type；allow；series（名字{标签} -> 值）；types（名字 -> gauge 或 counter）。
+    那个地址上没有人时 status 是 None。"""
+    host, port = address.rsplit(':', 1)
+    connection = http.client.HTTPConnection(host, int(port), timeout=3)
+    try:
+        connection.request(method, path)
+        response = connection.getresponse()
+        body = response.read().decode('utf-8', 'replace')
+    except (OSError, http.client.HTTPException) as error:
+        return {'status': None, 'error': f'{type(error).__name__}: {error}', 'series': {}, 'types': {}}
+    finally:
+        connection.close()
+    series, types = {}, {}
+    for line in body.splitlines() if response.status == 200 else []:
+        if line.startswith('# TYPE '):
+            name, kind = line.split()[2:4]
+            types[name] = kind
+        elif line and not line.startswith('#'):
+            name, _, value = line.rpartition(' ')
+            series[name] = float(value)
+    return {'status': response.status, 'content_type': response.getheader('Content-Type'), 'allow': response.getheader('Allow'),
+            'series': series, 'types': types}
+
+
+def standing(series: dict, name: str) -> list[str]:
+    """一组取值里此刻是 1 的那几个：idp_gateway_pool_condition 的，或者 idp_gateway_pool_reconcile_outcome 的。"""
+    return sorted(key.split('"')[1] for key, value in series.items() if key.startswith(name + '{') and value == 1)
+
+
+def pool_is(condition: str) -> bool:
+    return standing(scrape()['series'], 'idp_gateway_pool_condition') == [condition]
+
+
+def account_is(outcome_name: str) -> bool:
+    return standing(scrape()['series'], 'idp_gateway_pool_reconcile_outcome') == [outcome_name]
+
+
+def promtool(*argv: str) -> subprocess.CompletedProcess:
+    """在 Prometheus 的镜像里跑 promtool。它只拿到两个文件：部署目录里的规则，和 rules.test.yml；不接网络。"""
+    inside = {path: f'/repo/{path.relative_to(ROOT)}' for path in (RULES, RULE_TESTS)}
+    mounts = [word for path, target in inside.items() for word in ('-v', f'{path}:{target}:ro')]
+    return docker('run', '--rm', '--network', 'none', '--read-only', '--tmpfs', '/tmp', '--cap-drop', 'ALL',
+                  '--security-opt', 'no-new-privileges', '--user', '65534:65534', *mounts,
+                  '--entrypoint', 'promtool', PROMETHEUS_IMAGE, *(inside.get(word, word) for word in argv))
+
+
+def prometheus_up() -> subprocess.CompletedProcess:
+    """起一个真的 Prometheus：主机网络，只听回环。它每秒读一次看守、每秒算一次规则（平时是 15 秒，这里为了不等）；
+    规则就是部署目录里的那一份，抓取任务的名字是规则里写的那个。"""
+    MONITOR.mkdir(exist_ok=True)
+    (MONITOR / 'prometheus.yml').write_text(yaml.safe_dump({
+        'global': {'scrape_interval': '1s', 'evaluation_interval': '1s'},
+        'rule_files': ['/etc/prometheus/rules.yml'],
+        'scrape_configs': [{'job_name': JOB, 'static_configs': [{'targets': [METRICS]}]}]}), encoding='utf-8')
+    docker('rm', '-f', PROMETHEUS)
+    # tmpfs 默认属主是 root：--user 换成了本机用户之后，Prometheus 在 /prometheus 里建不了文件，立刻以 1 退出
+    # （queries.active: permission denied）。把 uid/gid 写上，它才写得进去。
+    return docker('run', '-d', '--name', PROMETHEUS, '--network', 'host', '--read-only', '--cap-drop', 'ALL',
+                  '--security-opt', 'no-new-privileges', '--user', RUN_AS,
+                  '--tmpfs', f'/prometheus:uid={os.getuid()},gid={os.getgid()},mode=0755',
+                  '-v', f"{MONITOR / 'prometheus.yml'}:/etc/prometheus/prometheus.yml:ro", '-v', f'{RULES}:/etc/prometheus/rules.yml:ro',
+                  PROMETHEUS_IMAGE, '--config.file=/etc/prometheus/prometheus.yml', '--storage.tsdb.path=/prometheus',
+                  f"--web.listen-address=127.0.0.1:{HOST['prometheus']}")
+
+
+def prometheus(path: str) -> dict:
+    """问那个 Prometheus 的 HTTP 接口。-> 它答的 data；问不到、或者答的不是 success 时是空的。"""
+    connection = http.client.HTTPConnection('127.0.0.1', HOST['prometheus'], timeout=5)
+    try:
+        connection.request('GET', path)
+        answer = json.loads(connection.getresponse().read())
+    except (OSError, http.client.HTTPException, ValueError):
+        return {}
+    finally:
+        connection.close()
+    return (answer.get('data') or {}) if answer.get('status') == 'success' else {}
+
+
+def alerts() -> dict:
+    """Prometheus 此刻的告警：名字 -> pending（条件成立了，还没到时长）或 firing（响了）。一条都没有时是空的。"""
+    found = {}
+    for alert in prometheus('/api/v1/alerts').get('alerts') or []:
+        name = alert['labels']['alertname']
+        if found.get(name) != 'firing':
+            found[name] = alert['state']
+    return found
+
+
 def strays() -> list[int]:
     """本脚本上一次被强行杀掉时可能留在本机上的进程：本次运行目录里的那个 gateway-control（看守），
     和对着这套用例的项目、或者在 SH-19 的安装目录里跑着的 docker compose。"""
@@ -1162,6 +1267,7 @@ def teardown():
     for network in docker('network', 'ls', '-q', '--filter', mine).stdout.split():
         docker('network', 'rm', network)
     docker('rm', '-f', SCRATCH)
+    docker('rm', '-f', PROMETHEUS)
     for stale in STALE:
         shutil.rmtree(stale, ignore_errors=True)
     POOL_ENV.unlink(missing_ok=True)
@@ -2467,6 +2573,7 @@ def keeper_cases(r: Results, confirmed: Snapshot):
     r.check('叫停看守，以 0 退出。五条命令都用过之后没有留下别的东西', stopped['exit'] == 0 and not stopped['stderr'] and left == CLEAN)
 
     unit_command_case(r, opening)
+    alerting_cases(r, opening)
 
 
 def unit_command_case(r: Results, confirmed: Snapshot):
@@ -2526,6 +2633,13 @@ def unit_command_case(r: Results, confirmed: Snapshot):
             argv[:3] == ['/usr/bin/env', str(CONTROL_BINARY), 'keep'] and not any(word.startswith('--compose') for word in argv)
             and whole(began) and began.get('action') == '' and reconciled(began).get('outcome') == 'IN_SYNC'
             and reconciled(began).get('snapshot') == confirmed.sha256 and len(keeper.lines) == 1 and not keeper.said)
+    numbers = scrape(settings['KEEPER_METRICS_LISTEN'])
+    r.check('单元的命令行以 --metrics-listen ${KEEPER_METRICS_LISTEN} 结尾：.env 里写的那个地址上读得到这个看守的指标，'
+            '它说自己守着的是部署文件里写的那个项目，池是完整的',
+            argv[-2:] == ['--metrics-listen', settings['KEEPER_METRICS_LISTEN']] and numbers['status'] == 200
+            and numbers['series'].get(f'idp_gateway_keeper_info{{project="{DEPLOYED_PROJECT}"}}') == 1
+            and standing(numbers['series'], 'idp_gateway_pool_condition') == ['whole']
+            and standing(numbers['series'], 'idp_gateway_pool_reconcile_outcome') == ['IN_SYNC'])
 
     ran = []
 
@@ -2568,6 +2682,214 @@ def unit_command_case(r: Results, confirmed: Snapshot):
     left = sorted(c['name'] for c in hosted().values()) + hosted_networks()
     r.note('拆掉之后这台机器上这个项目还剩什么', left)
     r.check('在那个目录里 docker compose down 之后，这台机器上没有留下这个项目的容器和网络', down.returncode == 0 and not left)
+
+
+def alerting_cases(r: Results, confirmed: Snapshot):
+    """告警（SH-20、SH-21）。开始时两个池都拆掉了，池的目录里放着 confirmed，记录是它。先用启动命令把这套用例的池
+    起起来，再起看守：这一回给了它 --metrics-listen。"""
+    lock_file, readback_key = POOL / 'config' / '.config.yaml.lock', POOL / 'tls' / 'gateway-readback.key'
+    quiet_zeros = ('idp_gateway_pool_busy', 'idp_gateway_pool_unrepaired_attempts', 'idp_gateway_pool_starts_total',
+                   'idp_gateway_pool_snapshots_put_back_total', 'idp_gateway_keeper_last_look_failed')
+
+    def answering() -> bool:
+        return get('a.test', '/quick')['status'] == 200
+
+    def running() -> dict:
+        return {service: container(service) for service in LONG_RUNNING}
+
+    r.case('SH-20', '看守的指标（--metrics-listen）：它不出声的时候这些数照样在走；池出了事、它动了手、它往回放了文件，数跟着变；它停了就读不到')
+    up = compose('up', '-d')
+    opened = wait_for(answering, 30)
+    nobody = scrape()
+    r.check('先用启动命令把这套用例的池起起来：退出码 0，请求照常。看守还没有启动：那个地址上没有人，读不到',
+            up.returncode == 0 and opened is not None and nobody['status'] is None)
+
+    keeper = Keeper('--interval', '1s', '--reconcile-interval', '3s', '--metrics-listen', METRICS)
+    first = keeper.next(lambda line: True, 15)
+    time.sleep(4)
+    one = scrape()
+    time.sleep(4)
+    two, now = scrape(), time.time()
+    seen, earlier = two['series'], one['series']
+    r.note('一个安稳的池上读到的', seen)
+    r.check('读得到：200，Prometheus 的文本格式；每个数都先说了自己是 gauge 还是 counter，以 _total 结尾的是 counter，别的是 gauge',
+            two['status'] == 200 and two['content_type'] == 'text/plain; version=0.0.4; charset=utf-8' and len(seen) >= 20
+            and all(name.split('{')[0] in two['types'] for name in seen)
+            and all((kind == 'counter') == name.endswith('_total') and kind in ('gauge', 'counter') for name, kind in two['types'].items()))
+    r.check('一个安稳的池：三个常驻容器都在跑（whole），账对得上（IN_SYNC），没有被占着，没有动过手，没有往回放过文件；'
+            '它守着的项目、看一眼和对账的间隔是给它的那些',
+            standing(seen, 'idp_gateway_pool_condition') == ['whole'] and standing(seen, 'idp_gateway_pool_reconcile_outcome') == ['IN_SYNC']
+            and all(seen.get(name) == 0 for name in quiet_zeros) and seen.get(f'idp_gateway_keeper_info{{project="{PROJECT}"}}') == 1
+            and seen.get('idp_gateway_keeper_look_interval_seconds') == 1 and seen.get('idp_gateway_keeper_reconcile_interval_seconds') == 3)
+    looks = seen.get('idp_gateway_keeper_looks_total', 0) - earlier.get('idp_gateway_keeper_looks_total', 0)
+    ages = [round(now - seen.get(name, 0), 2) for name in ('idp_gateway_keeper_last_look_timestamp_seconds', 'idp_gateway_pool_last_reconcile_timestamp_seconds')]
+    r.note('隔 4 秒读了两次：看过的眼数多了几；第二次读到时，上一眼和上一次对账各是几秒之前', [looks, ages])
+    r.check('这 8 秒里看守只写了开头那一行，之后没有出声。指标照样在走：隔 4 秒再读，看过的眼数多了 3 到 5，上一眼和上一次对账的时刻'
+            '都往前走了；上一眼是 2 秒之内的事，上一次对账是 4.5 秒之内的事（它 1 秒看一眼，3 秒对一次账）',
+            len(keeper.lines) == 1 and whole(first) and not keeper.said and 3 <= looks <= 5
+            and all(seen.get(name, 0) > earlier.get(name, 0) > seen.get('idp_gateway_keeper_start_time_seconds', now)
+                    for name in ('idp_gateway_keeper_last_look_timestamp_seconds', 'idp_gateway_pool_last_reconcile_timestamp_seconds'))
+            and 0 <= ages[0] < 2 and 0 <= ages[1] < 4.5)
+    elsewhere = {path: scrape(path=path)['status'] for path in ('/', '/metrics/', '/config_dump', '/debug/pprof/')}
+    written = {method: scrape(method=method) for method in ('POST', 'PUT', 'DELETE')}
+    listening = subprocess.run(['ss', '-ltnH', f"sport = :{HOST['metrics']}"], capture_output=True, text=True).stdout.split()
+    r.note('别的路径、别的方法得到的；这个端口在哪个地址上听', [elsewhere, {method: answer['status'] for method, answer in written.items()},
+                                                [word for word in listening if word.endswith(f":{HOST['metrics']}")]])
+    r.check('那个地址上只有 /metrics，而且只读：别的路径都是 404，POST、PUT、DELETE 是 405。它只在给它的那个回环地址上听',
+            set(elsewhere.values()) == {404} and all(answer['status'] == 405 and answer['allow'] == 'GET, HEAD' for answer in written.values())
+            and [word for word in listening if word.endswith(f":{HOST['metrics']}")] == [METRICS])
+
+    before = running()
+    with open(lock_file, 'r+b') as held_lock:
+        fcntl.flock(held_lock, fcntl.LOCK_EX)   # 一次发布正占着这个池
+        docker('kill', before['agentgateway'].get('name', '-'))
+        down = wait_for(lambda: pool_is('down'), 15, every=0.2)
+        time.sleep(3)   # 看守又看了三眼
+        held = scrape()['series']
+    back = wait_for(lambda: scrape()['series'].get('idp_gateway_pool_starts_total') == 1 and pool_is('whole'), 40, every=0.2)
+    healed = wait_for(answering, 20)
+    after = scrape()['series']
+    r.check('一次发布正占着这个池时网关死了：池不是完整的了（down），被占着（busy 是 1）；又过了 3 秒，启动命令还是没有跑',
+            down is not None and standing(held, 'idp_gateway_pool_condition') == ['down'] and held.get('idp_gateway_pool_busy') == 1
+            and held.get('idp_gateway_pool_starts_total') == 0 and held.get('idp_gateway_keeper_last_look_failed') == 0)
+    r.check('锁放开，看守跑启动命令把网关起回来：启动命令的次数是 1，池又是完整的，没有被占着，接连没修好的次数是 0，账对得上，请求照常',
+            back is not None and healed is not None and standing(after, 'idp_gateway_pool_condition') == ['whole']
+            and after.get('idp_gateway_pool_starts_total') == 1 and after.get('idp_gateway_pool_busy') == 0
+            and after.get('idp_gateway_pool_unrepaired_attempts') == 0 and standing(after, 'idp_gateway_pool_reconcile_outcome') == ['IN_SYNC'])
+
+    key_bytes, key_mode = readback_key.read_bytes(), stat.S_IMODE(readback_key.stat().st_mode)
+    readback_key.unlink()   # 网关回读口的私钥不见了：它再启动时起不来（SH-13、SH-18）
+    docker('kill', container('agentgateway').get('name', '-'))
+    stuck = wait_for(lambda: scrape()['series'].get('idp_gateway_pool_unrepaired_attempts', 0) >= 2, 90, every=0.3)
+    failing = scrape()['series']
+    readback_key.write_bytes(key_bytes)
+    os.chmod(readback_key, key_mode)
+    mended = wait_for(lambda: pool_is('whole'), 90, every=0.3)
+    healed = wait_for(answering, 20)
+    recovered = scrape()['series']
+    r.note('网关起不来时读到的：池的样子，接连没修好的次数，启动命令的次数',
+           [standing(failing, 'idp_gateway_pool_condition'), failing.get('idp_gateway_pool_unrepaired_attempts'), failing.get('idp_gateway_pool_starts_total')])
+    r.check('网关死了而且起不来（它回读口的私钥不见了）：池一直不是完整的（down），接连没修好的次数到了 2，启动命令的次数跟着长到了 3；'
+            '这不是池被占着，也不是看守没看成',
+            stuck is not None and standing(failing, 'idp_gateway_pool_condition') == ['down']
+            and failing.get('idp_gateway_pool_unrepaired_attempts') == 2 and failing.get('idp_gateway_pool_starts_total') == 3
+            and failing.get('idp_gateway_pool_busy') == 0 and failing.get('idp_gateway_keeper_last_look_failed') == 0)
+    r.check('把私钥放回去，看守下一次再试就好了：池又是完整的，接连没修好的次数回到 0，启动命令的次数是 4，账对得上，请求照常',
+            mended is not None and healed is not None and standing(recovered, 'idp_gateway_pool_condition') == ['whole']
+            and recovered.get('idp_gateway_pool_unrepaired_attempts') == 0 and recovered.get('idp_gateway_pool_starts_total') == 4
+            and standing(recovered, 'idp_gateway_pool_reconcile_outcome') == ['IN_SYNC'])
+
+    before = running()
+    stray = Snapshot([*confirmed.routes, 'm'])   # 一份没有毛病的快照，只是没有人确认过
+    publish(stray)   # 绕过发布器把它放进目录
+    taken_back = wait_for(lambda: account_is('RESTORED'), 20, every=0.1)
+    counted = scrape()['series'].get('idp_gateway_pool_snapshots_put_back_total')
+    settled = wait_for(lambda: account_is('IN_SYNC'), 20, every=0.1)
+    calm = scrape()['series']
+    r.check('有人绕过发布器放了一份没人确认过的文件：看守下一次对账把记录的那一份放回去，对账的结局是 RESTORED，往回放的次数是 1；'
+            '再下一次对账又是 IN_SYNC，次数还是 1。启动命令没有跑，三个常驻容器没有动',
+            taken_back is not None and counted == 1 and settled is not None and calm.get('idp_gateway_pool_snapshots_put_back_total') == 1
+            and calm.get('idp_gateway_pool_starts_total') == 4 and on_disk() == confirmed.text
+            and all(same_process(before[service], container(service)) for service in LONG_RUNNING))
+
+    stopped = keeper.stop()
+    gone = scrape()
+    r.check('叫停看守：以 0 退出。那个地址上没有人了，读不到', stopped['exit'] == 0 and not stopped['stderr'] and gone['status'] is None)
+    with socket.socket() as squatter:
+        squatter.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        squatter.bind(('127.0.0.1', HOST['metrics']))
+        squatter.listen(1)
+        shut_out = Keeper('--interval', '1s', '--metrics-listen', METRICS)
+        refused = shut_out.ended(15)
+    r.note('那个地址被别的进程占着时启动看守：它说的', refused['stderr'])
+    r.check('那个地址已经被别的进程占着时启动看守：它不启动，退出码 1，说的是这个地址占不了；一行都没有写。'
+            '（看守在跑而监控读不到它，和它没有在跑，从外面分不清。）',
+            refused['exit'] == 1 and not shut_out.lines
+            and any(f'metrics: listen tcp {METRICS}' in line and 'address already in use' in line for line in refused['stderr']))
+    unset = Keeper('--interval', '1s', '--metrics-listen', '')
+    unfilled = unset.ended(15)
+    r.note('--metrics-listen 是空的时启动看守：它说的', unfilled['stderr'])
+    r.check('--metrics-listen 给了却是空的（.env 里漏了 KEEPER_METRICS_LISTEN 时，单元交给它的就是这样）：它不当成"不给指标"，不启动，'
+            '退出码 2，一行都没有写；池没有被动过',
+            unfilled['exit'] == 2 and not unset.lines and any('--metrics-listen must be host:port' in line for line in unfilled['stderr'])
+            and all(same_process(before[service], container(service)) for service in LONG_RUNNING))
+
+    r.case('SH-21', '告警规则（deploy/compose 里的那一份）：一个真的 Prometheus 来读真的看守，池出了事、看守没了，该响的那几条响；'
+                    '规则的写法和时长由 promtool 查')
+    shipped = [rule['alert'] for group in yaml.safe_load(RULES.read_text(encoding='utf-8'))['groups'] for rule in group['rules']]
+    summaries = {rule['alert']: rule['annotations']['summary']
+                 for group in yaml.safe_load(RULES.read_text(encoding='utf-8'))['groups'] for rule in group['rules']}
+    checked, tested = promtool('check', 'rules', RULES), promtool('test', 'rules', RULE_TESTS)
+    r.note('promtool check rules 和 promtool test rules 说的', [' '.join((done.stdout + done.stderr).split()) for done in (checked, tested)])
+    r.check('promtool check rules：部署目录里的那份规则写法没有毛病，一共 8 条',
+            checked.returncode == 0 and f'SUCCESS: {len(shipped)} rules found' in checked.stdout + checked.stderr and len(shipped) == 8)
+    r.check('promtool test rules（rules.test.yml，数是造的）：各条在该响的时候响，没到时长、或者事情自己过去了的不响',
+            tested.returncode == 0 and 'SUCCESS' in tested.stdout + tested.stderr and 'FAILED' not in tested.stdout + tested.stderr)
+
+    keeper = Keeper('--interval', '1s', '--reconcile-interval', '3s', '--metrics-listen', METRICS)
+    keeper.next(whole, 15)
+    started = prometheus_up()
+
+    def target() -> dict:
+        return (prometheus('/api/v1/targets').get('activeTargets') or [{}])[0]
+
+    reading = wait_for(lambda: target().get('health') == 'up', 40, every=0.3)
+    time.sleep(5)
+    loaded = [rule for group in prometheus('/api/v1/rules').get('groups') or [] for rule in group.get('rules') or []]
+    quiet = alerts()
+    r.note('Prometheus 读的是哪里', [target().get('scrapeUrl'), target().get('labels')])
+    r.check('Prometheus 起来了（主机网络，只听回环），装上了那 8 条规则，每一条都算得出来；它读得到看守：规则里写的那个抓取任务是 up',
+            started.returncode == 0 and reading is not None and [rule.get('name') for rule in loaded] == shipped
+            and all(rule.get('health') == 'ok' and rule.get('type') == 'alerting' for rule in loaded)
+            and target().get('labels', {}).get('job') == JOB and target().get('scrapeUrl') == f'http://{METRICS}/metrics')
+    r.check('一个安稳的池，看守刚启动、什么都没做过：一条都不响，也没有哪一条在等时长', quiet == {})
+
+    publish(Snapshot([*confirmed.routes, 'n']))   # 绕过发布器放一份没人确认过的文件
+    put_back = wait_for(lambda: alerts().get('GatewayPoolSnapshotPutBack') == 'firing', 30, every=0.3)
+    said = [alert for alert in prometheus('/api/v1/alerts').get('alerts') or [] if alert['labels']['alertname'] == 'GatewayPoolSnapshotPutBack']
+    r.note('看守往回放了一次文件之后 Prometheus 的告警', alerts())
+    r.check('有人绕过发布器放了一份文件，看守把记录的那一份放回去：GatewayPoolSnapshotPutBack 响了（这一条不等时长），'
+            '带着规则里写的严重程度和那句话；别的没有响',
+            put_back is not None and alerts() == {'GatewayPoolSnapshotPutBack': 'firing'} and len(said) == 1
+            and said[0]['labels'].get('severity') == 'warning' and said[0]['labels'].get('job') == JOB
+            and said[0]['annotations'].get('summary') == summaries['GatewayPoolSnapshotPutBack'])
+
+    with open(lock_file, 'r+b') as held_lock:
+        fcntl.flock(held_lock, fcntl.LOCK_EX)   # 一次发布正占着这个池，看守不动手：池要一直不完整下去
+        docker('kill', container('agentgateway').get('name', '-'))
+        waiting = wait_for(lambda: alerts().get('GatewayPoolNotWhole') == 'pending', 30, every=0.3)
+        during = alerts()
+    brought = wait_for(lambda: alerts().get('GatewayPoolBroughtBack') == 'firing' and 'GatewayPoolNotWhole' not in alerts(), 60, every=0.3)
+    healed = wait_for(answering, 20)
+    r.note('网关死着、池被占着时 Prometheus 的告警；看守把网关起回来之后的', [during, alerts()])
+    r.check('网关死了，池被占着：GatewayPoolNotWhole 的条件成立了，在等它的 2 分钟（pending），还没有响',
+            waiting is not None and during.get('GatewayPoolNotWhole') == 'pending' and 'GatewayPoolBroughtBack' not in during)
+    r.check('锁放开，看守把网关起回来：GatewayPoolNotWhole 没有等到 2 分钟就撤了，一次都没有响；GatewayPoolBroughtBack 响了，请求照常',
+            brought is not None and healed is not None
+            and alerts() == {'GatewayPoolSnapshotPutBack': 'firing', 'GatewayPoolBroughtBack': 'firing'})
+
+    stopped = keeper.stop()
+    stopped_at = time.monotonic()
+    noticed = wait_for(lambda: alerts().get('GatewayKeeperDown') == 'pending', 30, every=0.3)
+    unreachable = target().get('health')
+    fired = wait_for(lambda: alerts().get('GatewayKeeperDown') == 'firing', 90, every=0.5)
+    fired_after = round(time.monotonic() - stopped_at, 1)
+    cry = [alert for alert in prometheus('/api/v1/alerts').get('alerts') or [] if alert['labels']['alertname'] == 'GatewayKeeperDown']
+    r.note('看守停了之后过了多少秒 GatewayKeeperDown 响（规则里的时长是 1 分钟）', fired_after if fired is not None else None)
+    r.note('看守停了之后 Prometheus 的告警', alerts())
+    r.check('叫停看守（以 0 退出）：Prometheus 读不到它了，GatewayKeeperDown 的条件成立，先是在等（pending）',
+            stopped['exit'] == 0 and noticed is not None and unreachable == 'down')
+    r.check('等满规则里写的 1 分钟，GatewayKeeperDown 响了（真的等，不是造的数）：从看守停下算起 60 到 75 秒，'
+            '带着规则里写的严重程度和那句话',
+            fired is not None and 60 <= fired_after <= 75 and len(cry) == 1 and cry[0]['state'] == 'firing'
+            and cry[0]['labels'].get('severity') == 'critical' and cry[0]['annotations'].get('summary') == summaries['GatewayKeeperDown'])
+
+    removed = docker('rm', '-f', PROMETHEUS)
+    closed = wait_for(lambda: prometheus('/api/v1/alerts') == {} and scrape()['status'] is None, 15)
+    left = leftovers()
+    r.check('拆掉 Prometheus。两个端口上都没有人了；池还好好的，请求照常，配置目录里没有多出东西',
+            removed.returncode == 0 and closed is not None and answering() and left == CLEAN
+            and on_disk() == confirmed.text and all(container(service).get('running') for service in LONG_RUNNING))
 
 
 if __name__ == '__main__':
