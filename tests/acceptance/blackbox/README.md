@@ -120,7 +120,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
 
 `27610` 由 `deploy/agentgateway/agentgateway.local.example.yaml` 使用。`tests/integration/kubernetes` 在发布前做离线加载时也临时占用本机的 `27619`，`tests/integration/compose` 占用 `27618`–`27620`，它们都不能和这套用例同时跑。
 
-端口段选在 `27610-27622`，是因为它低于内核给出站连接分配源端口的临时端口范围（本机为 44620–48715，Linux 默认 32768–60999）。最初用的是 `47611-47617`，落在本机临时范围内：有一次运行中网关绑定就绪端口 47616 时报 `Address in use`、整轮没跑起来，而该端口在运行前后都是空闲的。占用者没有被直接抓到，最可能的解释是某个出站连接临时拿它做了源端口。脚本现在会在端口段与临时范围重叠时拒绝启动。
+端口段选在 `27610-27622`，是因为它低于内核给出站连接分配源端口的临时端口范围（本机当时为 44620–48715，2026-11-17 的那次运行记到的是 52810–56905；Linux 默认 32768–60999）。最初用的是 `47611-47617`，落在本机临时范围内：有一次运行中网关绑定就绪端口 47616 时报 `Address in use`、整轮没跑起来，而该端口在运行前后都是空闲的。占用者没有被直接抓到，最可能的解释是某个出站连接临时拿它做了源端口。脚本现在会在端口段与临时范围重叠时拒绝启动。
 
 ## 文件
 
@@ -155,6 +155,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
 16. 仓库里多了控制面的命令 `cmd/gateway-control` 和它的上下文 `internal/gatewayconfig`；`internal/platform/workloadtls` 加了客户端一侧的 TLS 配置，`gateway-authz` 用的服务端一侧行为没有变。证据的源码哈希覆盖 `cmd/` 和 `internal/` 下所有非测试的 Go 文件，所以重跑一次。`run.py`、配置和期望都没有动：仍是 58/59，326 项检查的结果与上一份证据逐项相同。
 17. `gateway-control` 多了 `reconcile` 和 `restart` 两条命令，`internal/gatewayconfig` 跟着多了记录和重启网关容器的部分；`gateway-authz` 自己的代码没有动。证据的源码哈希覆盖 `cmd/` 和 `internal/` 下所有非测试的 Go 文件，所以重跑一次。`run.py`、配置和期望都没有动：仍是 58/59，326 项检查的结果与上一份证据逐项相同。
 18. `gateway-control` 多了第四条命令 `place`（网关启动之前把记录的那一份配置放到位），是随单机的部署文件 `deploy/compose` 一起加的；`gateway-authz` 自己的代码没有动。证据的源码哈希覆盖 `cmd/` 和 `internal/` 下所有非测试的 Go 文件，所以重跑一次。`run.py`、配置和期望都没有动：仍是 58/59，326 项检查的结果与上一份证据逐项相同。
+19. `gateway-control` 多了第五条命令 `keep`（常驻的看守：池里的容器死了，它跑启动命令把它们起回来，平时定时对账），`internal/gatewayconfig` 跟着多了看一个池的容器、跑它的启动命令的部分；`gateway-authz` 自己的代码没有动。证据的源码哈希覆盖 `cmd/` 和 `internal/` 下所有非测试的 Go 文件，所以重跑一次。`run.py`、配置和期望都没有动：仍是 58/59，326 项检查的结果与上一份证据逐项相同。这一次记到的本机临时端口范围是 52810–56905，此前各次都是 44620–48715；端口段仍然低于它。
 
 没有任何期望被放宽过。
 
