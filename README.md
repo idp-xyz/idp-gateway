@@ -23,7 +23,7 @@
 | `tests/integration/kubernetes/` | 在本机的一个 kind 集群里验证 ADR-0010 在 Kubernetes 上的发布方式：不可变的快照，滚动替换，逐个副本回读 |
 | `tests/integration/compose/` | 在本机用 docker compose 验证 ADR-0010 在单机上的做法，跑的就是 `deploy/compose` 的部署文件。发布：换掉挂载目录里的配置文件，网关不重启，经回读口确认。启动：先把确认过的那一份放到位，回读对上了才收请求。容器死了：看守把它们起回来。`cmd/gateway-control` 的五条命令都在这里对着真的网关跑，看守的指标和一个真的 Prometheus 也在这里；两个 systemd 单元之间的关系另由 `units.py` 在用户级的 systemd 里用替身命令跑 |
 | `tests/contracts`、`tests/security`、`scripts/` | 针对契约的离线检查与尚未移植的 Python 参考实现 |
-| `docs/` | G01–G06 设计文档、[ADR](docs/adr/README.md)、治理记录、运行手册 |
+| `docs/` | G01–G06 设计文档、[ADR](docs/adr/README.md)、[开发计划](docs/development-plan.md)、治理记录、运行手册 |
 
 ## 构建与测试
 
