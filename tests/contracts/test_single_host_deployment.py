@@ -3,7 +3,8 @@
 The compose suite (tests/integration/compose/run.py) runs deploy/compose/compose.yml itself, but it needs
 docker and is run by hand. These tests keep what can be read off the files from drifting between two runs
 of that suite: the images, the start order that gates the front proxy, what is published on the host, the
-front proxy configuration, and the variables an operator fills in.
+front proxy configuration, the variables an operator fills in, and the two systemd units (the pool and its
+keeper, which tests/integration/compose/units.py runs under a user-level systemd).
 OFFLINE contract tests; nothing here starts a container.
 """
 import json, re, unittest
@@ -16,10 +17,40 @@ COMPOSE_TEXT = text('deploy/compose/compose.yml')
 SERVICES = yaml.safe_load(COMPOSE_TEXT)['services']
 LOCK = json.loads(text('deploy/agentgateway/agentgateway.lock.json'))
 CONTROL = text('cmd/gateway-control/main.go')
+POOL_ADAPTER = text('internal/gatewayconfig/adapters/container/pool.go')
 # ${NAME:?message} must be given; ${NAME:-default} may be left out.
 REFERENCE = re.compile(r'\$\{([A-Z][A-Z0-9_]*)(:\?|:-)?([^}]*)\}')
 STARTED, COMPLETED = {'condition': 'service_started'}, {'condition': 'service_completed_successfully'}
 STEPS = ('place', 'confirm')   # run to completion, then exit
+# What gateway-control keep accepts in the env file: comments, blank lines and NAME=value with a value that
+# systemd and docker compose read alike (container.CheckEnvFiles).
+PLAIN = re.compile(r"""[A-Za-z_][A-Za-z0-9_]*=[^\s"'$#\\`]*""")
+
+
+def directives(path: str) -> list:
+    """The settings of a unit file, in order: comments dropped, a line ending in a backslash joined with the next."""
+    found, pending = [], ''
+    for line in text(path).splitlines():
+        if not pending and (not line.strip() or line.lstrip().startswith(('#', ';'))):
+            continue
+        pending += line.strip()
+        if pending.endswith('\\'):
+            pending = pending[:-1] + ' '
+            continue
+        found.append(' '.join(pending.split()))
+        pending = ''
+    return found
+
+
+def setting(unit: list, name: str) -> str:
+    """The value of a setting that a unit gives exactly once."""
+    values = [line.split('=', 1)[1] for line in unit if line.startswith(name + '=')]
+    assert len(values) == 1, f'{name}= appears {len(values)} times'
+    return values[0]
+
+
+def go_constant(source: str, name: str) -> str:
+    return re.search(r'\b' + name + r'\s*=\s*"([^"]*)"', source).group(1)
 
 
 def front_image() -> str:
@@ -156,6 +187,25 @@ class Variables(unittest.TestCase):
     def test_the_filled_in_file_is_not_committed(self):
         self.assertIn('deploy/compose/.env', text('.gitignore').splitlines())
 
+    def test_the_example_is_written_the_way_the_keeper_accepts(self):
+        """systemd reads .env for the keeper unit; the keeper refuses lines the two readers read differently."""
+        for line in self.EXAMPLE:
+            with self.subTest(line=line):
+                self.assertTrue(not line.strip() or line.startswith('#') or PLAIN.fullmatch(line))
+        for line in (line[2:] for line in self.EXAMPLE if re.match(r'# [A-Z][A-Z0-9_]*=', line)):
+            with self.subTest(default=line):
+                self.assertTrue(PLAIN.fullmatch(line), 'an optional variable, once uncommented, must be accepted too')
+
+    def test_the_accepted_form_is_the_one_the_keeper_checks(self):
+        self.assertIn('strings.ContainsRune("\\"\'$#\\\\`", r)', POOL_ADAPTER)
+        self.assertIn('unicode.IsSpace(r) || unicode.IsControl(r)', POOL_ADAPTER)
+        self.assertIn('envName     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)', POOL_ADAPTER)
+        for line, accepted in (('POOL_DIR=/srv/pool', True), ('EMPTY=', True), ('POOL_DIR=/srv/pool # here', False),
+                               ('POOL_DIR="/srv/pool"', False), ("POOL_DIR='/srv/pool'", False), ('POOL_DIR=$HOME/pool', False),
+                               ('POOL_DIR=C:\\pool', False), ('POOL_DIR=`pwd`', False), ('export POOL_DIR=/srv/pool', False)):
+            with self.subTest(line=line):
+                self.assertEqual(bool(PLAIN.fullmatch(line)), accepted)
+
 
 class FrontProxy(unittest.TestCase):
     """The pool carries the front proxy configuration the black-box cases were run with."""
@@ -200,6 +250,110 @@ class BootUnit(unittest.TestCase):
         self.assertIn('docker.service', after.split('=', 1)[1].split())
 
 
+class KeeperUnit(unittest.TestCase):
+    """The unit that runs gateway-control keep next to the pool unit."""
+    UNIT = directives('deploy/compose/idp-gateway-pool-keep.service')
+    POOL = directives('deploy/compose/idp-gateway-pool.service')
+    COMMAND = setting(UNIT, 'ExecStart').split()
+    REQUIRED = {name for name, kind, _ in REFERENCE.findall(COMPOSE_TEXT) if kind == ':?'}
+
+    def test_the_two_files_have_these_sections(self):
+        self.assertEqual([line for line in self.UNIT if line.startswith('[')], ['[Unit]', '[Service]', '[Install]'])
+        self.assertEqual([line for line in self.POOL if line.startswith('[')], ['[Unit]', '[Service]', '[Install]'])
+
+    def test_it_follows_the_pool_unit(self):
+        """Started with it and after its start command, stopped before it, restarted with it."""
+        self.assertEqual(setting(self.UNIT, 'After').split(), ['docker.service', 'idp-gateway-pool.service'])
+        self.assertEqual(setting(self.UNIT, 'PartOf'), 'idp-gateway-pool.service')
+        self.assertEqual(setting(self.UNIT, 'WantedBy'), 'idp-gateway-pool.service')
+        self.assertEqual(setting(self.UNIT, 'Requires'), 'docker.service')
+
+    def test_it_does_not_depend_on_the_start_of_the_pool_succeeding(self):
+        """A pool that failed to start at boot is exactly what the keeper is there to retry."""
+        for line in self.UNIT:
+            name, _, value = line.partition('=')
+            if name in ('Requires', 'Requisite', 'BindsTo', 'Upholds', 'ConditionPathExists', 'AssertPathExists'):
+                self.assertNotIn('idp-gateway-pool.service', value, line)
+
+    def test_the_pool_unit_does_not_mention_the_keeper(self):
+        """The pool unit is the one the compose suite's start and stop commands stand for; it stays as it was."""
+        self.assertFalse([line for line in self.POOL if 'keep' in line])
+        self.assertEqual(setting(self.POOL, 'WantedBy'), 'multi-user.target')
+
+    def test_it_is_restarted_unless_what_it_was_given_is_wrong(self):
+        self.assertEqual(setting(self.UNIT, 'Type'), 'simple')
+        self.assertEqual(setting(self.UNIT, 'Restart'), 'always')
+        self.assertEqual(setting(self.UNIT, 'RestartPreventExitStatus'), '2')
+        self.assertRegex(CONTROL, r'exitUsage\s*=\s*2\b')
+        self.assertIn('if errors.Is(err, container.ErrEnvFile) {', CONTROL)
+
+    def test_stopping_lets_the_compose_command_in_hand_finish(self):
+        """Only the keeper is signalled; the docker compose command it is running gets the time gateway-control allows it."""
+        self.assertEqual(setting(self.UNIT, 'KillMode'), 'mixed')
+        minutes = int(re.search(r'"compose-timeout", (\d+)\*time\.Minute', CONTROL).group(1))
+        self.assertGreater(int(setting(self.UNIT, 'TimeoutStopSec')), minutes * 60)
+        # The same limit as the pool unit gives its own start command.
+        self.assertEqual(int(setting(self.POOL, 'TimeoutStartSec')), minutes * 60)
+
+    def test_it_runs_in_the_directory_of_the_pool_and_reads_its_env_file(self):
+        directory = setting(self.POOL, 'WorkingDirectory')
+        self.assertEqual(setting(self.UNIT, 'WorkingDirectory'), directory)
+        self.assertEqual(setting(self.UNIT, 'EnvironmentFile'), directory + '/.env')
+
+    def test_docker_compose_finds_the_project_the_way_the_pool_unit_does(self):
+        """No compose flags: docker compose reads compose.yml and .env of the working directory; only the project is named."""
+        self.assertFalse([word for word in self.COMMAND if word.startswith('--compose')])
+        self.assertEqual(go_constant(POOL_ADAPTER, 'DefaultProject'), yaml.safe_load(COMPOSE_TEXT)['name'])
+        self.assertIn('"compose-project", container.DefaultProject,', CONTROL)
+
+    def test_the_command_is_keep_with_the_settings_of_the_pool(self):
+        self.assertEqual(self.COMMAND, [
+            '/usr/bin/env', '${GATEWAY_CONTROL}', 'keep', '--config-dir', '${POOL_DIR}/config',
+            '--read-back', '127.0.0.1:${READBACK_PORT}', '--read-back-name', '${READBACK_NAME}',
+            '--tls-cert', '${PUBLISHER_CERT}', '--tls-key', '${PUBLISHER_KEY}', '--tls-ca', '${READBACK_CA}'])
+        self.assertRegex(CONTROL, r'commandKeep\s*=\s*"keep"')
+        for flag in flags(self.COMMAND):
+            with self.subTest(flag=flag):
+                self.assertIn(f'"{flag}"', CONTROL)
+
+    def test_every_variable_of_the_command_is_one_the_operator_must_fill_in(self):
+        used = re.findall(r'\$\{([^}]*)\}', ' '.join(self.COMMAND))
+        self.assertEqual(len(used), ' '.join(self.COMMAND).count('$'), 'systemd expands ${NAME} inside a word, $NAME only as a word')
+        self.assertLessEqual(set(used), self.REQUIRED)
+
+    def test_the_command_points_at_what_the_compose_file_gives_the_pool(self):
+        """The same binary as place and confirm, the directory they write, and the port the read-back is published on."""
+        self.assertIn('${GATEWAY_CONTROL:?see .env.example}:/usr/local/bin/gateway-control:ro', SERVICES['place']['volumes'])
+        self.assertIn('${POOL_DIR:?see .env.example}/config:/pool/config', SERVICES['place']['volumes'])
+        self.assertIn('127.0.0.1:${READBACK_PORT:?see .env.example}:8443', SERVICES['netns']['ports'])
+        self.assertIn('--read-back-name=${READBACK_NAME:?see .env.example}', SERVICES['confirm']['command'])
+        for variable, mounted in (('PUBLISHER_CERT', 'tls.crt'), ('PUBLISHER_KEY', 'tls.key'), ('READBACK_CA', 'ca.crt')):
+            self.assertIn('${' + variable + ':?see .env.example}:/publisher/' + mounted + ':ro', SERVICES['confirm']['volumes'])
+
+    def test_it_does_not_run_as_root(self):
+        """It must be the owner of the configuration directory (CONTROL_USER); a unit without User= runs as root."""
+        self.assertNotIn(setting(self.UNIT, 'User'), ('', 'root', '0'))
+        self.assertNotIn(setting(self.UNIT, 'Group'), ('', 'root', '0'))
+
+    def test_the_keeper_knows_the_long_running_services_by_their_names(self):
+        names = [go_constant(POOL_ADAPTER, name) for name in ('HolderService', 'GatewayService', 'FrontService')]
+        self.assertEqual(names, [name for name in SERVICES if name not in STEPS])
+        # What it stops before starting over: the two that sit in the network namespace of the holder.
+        self.assertEqual({name for name, service in SERVICES.items() if service.get('network_mode') == f'service:{names[0]}'}, set(names[1:]))
+        self.assertIn('p.compose(ctx, "stop", FrontService, GatewayService)', POOL_ADAPTER)
+        self.assertIn('p.compose(ctx, "up", "-d")', POOL_ADAPTER)
+        for name in names:
+            with self.subTest(reported=name):
+                self.assertIn(f'`json:"{name}"`', CONTROL)
+
+    def test_the_units_script_runs_these_two_files(self):
+        script = text('tests/integration/compose/units.py')
+        self.assertIn("DEPLOY = ROOT / 'deploy/compose'", script)
+        self.assertIn("POOL, KEEP = 'idp-gateway-pool.service', 'idp-gateway-pool-keep.service'", script)
+        self.assertIn("for line in (DEPLOY / name).read_text(encoding='utf-8').splitlines():", script)
+        self.assertIn(f"RESTART_SECONDS = {setting(self.UNIT, 'RestartSec')} ", script)
+
+
 class ComposeSuite(unittest.TestCase):
     """The suite must keep running the deployment file itself, not a copy of it."""
     RUNNER = text('tests/integration/compose/run.py')
@@ -212,6 +366,36 @@ class ComposeSuite(unittest.TestCase):
         overlay = yaml.safe_load(text('tests/integration/compose/echo.yml'))
         self.assertEqual(list(overlay), ['services'])
         self.assertEqual(list(overlay['services']), ['echo'])
+
+    def test_the_keeper_of_the_suite_starts_the_pool_from_the_same_files(self):
+        """The keeper the suite runs is given the project, the env file and the two files of the suite's own docker compose calls."""
+        self.assertIn("['docker', 'compose', '-p', PROJECT, '--env-file', str(POOL_ENV),", self.RUNNER)
+        self.assertIn("env_file: Path = POOL_ENV", self.RUNNER)
+        self.assertIn("'--compose-project', PROJECT, '--compose-env-file', str(env_file),", self.RUNNER)
+        self.assertIn("'--compose-file', str(DEPLOY / 'compose.yml'), '--compose-file', str(HERE / 'echo.yml'), *extra]", self.RUNNER)
+        for flag in ('compose-project', 'compose-env-file', 'compose-file'):
+            with self.subTest(flag=flag):
+                self.assertIn(f'"{flag}"', CONTROL)
+
+    def test_the_suite_runs_the_commands_the_two_units_carry(self):
+        """SH-19 takes ExecStart= and ExecStop= out of the two unit files and runs them, outside systemd, in a directory
+        that holds compose.yml and .env: nothing names the project or the files for docker compose."""
+        self.assertIn("pool_unit, keep_unit = unit_commands('idp-gateway-pool.service'), unit_commands('idp-gateway-pool-keep.service')",
+                      self.RUNNER)
+        self.assertIn("for line in (DEPLOY / name).read_text(encoding='utf-8').replace('\\\\\\n', ' ').splitlines():", self.RUNNER)
+        self.assertIn("if assigned and key in ('ExecStart', 'ExecStop'):", self.RUNNER)
+        self.assertIn("return subprocess.run(words, cwd=HOSTED, env=plain, capture_output=True, text=True, timeout=300)", self.RUNNER)
+        self.assertIn("up = run_in_place(pool_unit.get('ExecStart') or ['false'])", self.RUNNER)
+        self.assertIn("halted = run_in_place(pool_unit.get('ExecStop') or ['false'])", self.RUNNER)
+        self.assertIn("argv = filled_in(keep_unit.get('ExecStart') or ['false'], settings)", self.RUNNER)
+        self.assertIn("keeper = Keeper(command=argv, cwd=HOSTED, environment={**plain, **settings})", self.RUNNER)
+        # The directory holds the deployment's own files, and the pool it starts carries the project name they give.
+        self.assertIn("for name in ('compose.yml', 'front.nginx.conf'):\n        shutil.copy2(DEPLOY / name, HOSTED / name)", self.RUNNER)
+        self.assertIn("DEPLOYED_PROJECT = yaml.safe_load((DEPLOY / 'compose.yml').read_text(encoding='utf-8'))['name']", self.RUNNER)
+        # Cut the way the suite cuts it, the keeper's command is the one KeeperUnit checks.
+        joined = text('deploy/compose/idp-gateway-pool-keep.service').replace('\\\n', ' ')
+        cut = [line.partition('=')[2].split() for line in joined.splitlines() if line.partition('=')[0] == 'ExecStart']
+        self.assertEqual(cut, [KeeperUnit.COMMAND])
 
 
 if __name__ == '__main__':

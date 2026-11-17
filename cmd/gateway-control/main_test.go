@@ -161,6 +161,13 @@ func (g *fakeGateway) setting() string {
 	return document.Config["terminationMaxDeadline"]
 }
 
+// isDown 报告它是不是拿到了一份加载不了的文件、没有起来。
+func (g *fakeGateway) isDown() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.down
+}
+
 // asked 是回读口到现在被问过几次。
 func (g *fakeGateway) asked() int {
 	g.mu.Lock()
@@ -185,9 +192,18 @@ type fakeDocker struct {
 	gateway *fakeGateway
 	// restarted 是最近一条 docker restart 的全部参数。
 	restarted []string
+	// project 是它扮演的那个 compose 项目（keep_test.go）；没有时那几条命令什么都不答。
+	project *fakeProject
 }
 
 func (d *fakeDocker) run(_ context.Context, _ []string, argv ...string) (string, error) {
+	if d.project != nil && d.project.handles(argv) {
+		// 项目的命令里要跑 place 和 reconcile，后者要去读假网关：这里不能占着锁等它。
+		d.mu.Lock()
+		d.commands = append(d.commands, argv[0])
+		d.mu.Unlock()
+		return d.project.run(argv)
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.commands = append(d.commands, argv[0])

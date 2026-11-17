@@ -4,6 +4,7 @@
 //	gateway-control restart   [--snapshot <文件>] --container <网关容器> …   （其余参数与 publish 相同）
 //	gateway-control reconcile --config-dir <池的配置目录> --read-back <host:port> …
 //	gateway-control place     --config-dir <池的配置目录>
+//	gateway-control keep      --config-dir <池的配置目录> --read-back <host:port> … [--compose-file <文件>]
 //
 // publish 把一份网关配置发布到池里，网关不重启。restart 发布一份要重启网关才能全部生效的配置
 // （启动设置变了的那种），会让这个池中断一下；不给 --snapshot 时，用的是这个池上最后一次得到确认的那一份。
@@ -14,11 +15,17 @@
 // 记下是哪一份。放在那里的不是记录的那一份时，publish 和 restart 不动手（POOL_NOT_READY），先要 reconcile；
 // 只有一种情况 publish 自己补得上：放在那里的正是要发布的这一份，网关也报告它在生效。
 //
-// 这个命令不是常驻的服务，四条命令都要有人来叫。deploy/compose 在启动一个池时叫其中两条：网关启动之前
-// place，网关起来之后 reconcile，对上了才开前置代理。发布器被强行杀掉而池没有重新启动时，仍要有人或者
-// 定时任务来跑 reconcile。
+// 前四条命令做完就退出，要有人来叫。deploy/compose 在启动一个池时叫其中两条：网关启动之前 place，
+// 网关起来之后 reconcile，对上了才开前置代理。
 //
-// 结果以 JSON 写到标准输出；退出码说明池现在的状态：
+// keep 是常驻的：它守着这个池，直到被叫停。池里常驻的容器有没在跑的，它跑启动这个池的那条命令
+// （docker compose up -d，所以仍然先 place、后 reconcile、对上了才开前置代理）；网关在跑时，它隔一阵
+// 对一次账。另一次发布正占着这个池时它不动手。它每报告一次往标准输出写一行 JSON，格式见 tended。
+// 要让这个池停着，先停它。
+//
+// 这些命令要以池的配置目录的属主的身份运行，别的账号占不了这个池。
+//
+// 前四条命令的结果以 JSON 写到标准输出；退出码说明池现在的状态：
 //
 //	0  ACTIVE：这份配置正在网关上生效。IN_SYNC：池就是记录的样子，什么都没有写。
 //	   place 的两个结局：IN_PLACE，记录的那一份放在目录里了；NO_RECORD，还没有确认过任何发布，
@@ -34,6 +41,13 @@
 // 途中收到 SIGINT、SIGTERM 或 SIGHUP 时它不立刻退出：还没碰过池的，以退出码 1 结束；
 // 已经换上文件的，先把上一份放回去，结局是 RESTORED 或 UNKNOWN。重启一旦开始就做完。
 // 被强行杀掉时它来不及收拾，留下的由下一次 reconcile 或 place 收拾。
+//
+// keep 的退出码：收到这几个信号时把手上的那一步做完，以 0 结束；一开始就装不起来、占不了这个池时是 1；
+// 命令行写得不对是 2。池出了什么事不在退出码里，在它写的那些行里。
+//
+// keep 把自己的环境原样交给它跑的 docker compose。给 docker compose 的变量文件（--compose-env-file，
+// 不给时是当前目录里的 .env）里只能有 名字=值 这样的行，环境里同名的变量要与文件里的相同：不然这一次
+// docker compose 拿到的设置会与启动这个池时的不同。不合要求时 keep 不启动，退出码也是 2。
 //
 // 它不在请求路径上。RouteIntent 到网关配置的编译、发布的状态和审批都还没有。
 package main
@@ -57,6 +71,7 @@ import (
 	"go.idp.xyz/idp-gateway/internal/gatewayconfig/adapters/scratch"
 	"go.idp.xyz/idp-gateway/internal/gatewayconfig/application"
 	"go.idp.xyz/idp-gateway/internal/gatewayconfig/domain"
+	"go.idp.xyz/idp-gateway/internal/gatewayconfig/ports"
 	"go.idp.xyz/idp-gateway/internal/platform/workloadtls"
 )
 
@@ -75,6 +90,7 @@ const (
 	commandRestart   = "restart"
 	commandReconcile = "reconcile"
 	commandPlace     = "place"
+	commandKeep      = "keep"
 )
 
 // dockerRunner 是 scratch.Config.Docker 的类型；nil 表示用本机的 docker 命令行。
@@ -89,9 +105,9 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer, docker dockerRunner) int {
-	known := map[string]bool{commandPublish: true, commandRestart: true, commandReconcile: true, commandPlace: true}
+	known := map[string]bool{commandPublish: true, commandRestart: true, commandReconcile: true, commandPlace: true, commandKeep: true}
 	if len(args) == 0 || !known[args[0]] {
-		fmt.Fprintln(stderr, "usage: gateway-control publish|restart|reconcile|place [flags]   (gateway-control <command> --help lists them)")
+		fmt.Fprintln(stderr, "usage: gateway-control publish|restart|reconcile|place|keep [flags]   (gateway-control <command> --help lists them)")
 		return exitUsage
 	}
 	o, err := parse(args[0], args[1:], stderr)
@@ -100,6 +116,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, docker do
 			fmt.Fprintln(stderr, "gateway-control:", err)
 		}
 		return exitUsage
+	}
+	if o.command == commandKeep {
+		return keep(ctx, o, stdout, stderr, docker)
 	}
 	var result application.Result
 	switch o.command {
@@ -154,11 +173,27 @@ type options struct {
 	// 重启用的：池里的网关容器
 	container   string
 	stopTimeout time.Duration
+	// 看守用的：几个间隔，和启动这个池的那条 docker compose 命令怎么写
+	pace            application.Pace
+	composeProject  string
+	composeFiles    list
+	composeEnvFiles list
+	composeTimeout  time.Duration
 }
 
 // endpoint 是一个回读口和读它用的证书。
 type endpoint struct {
 	address, name, cert, key, ca string
+}
+
+// list 是一个可以给多次的参数。
+type list []string
+
+func (l *list) String() string { return strings.Join(*l, ",") }
+
+func (l *list) Set(value string) error {
+	*l = append(*l, value)
+	return nil
 }
 
 func parse(command string, args []string, output io.Writer) (options, error) {
@@ -172,10 +207,10 @@ func parse(command string, args []string, output io.Writer) (options, error) {
 			required[name] = target
 		}
 	}
-	// 四条命令都要的：池的配置目录。
+	// 每条命令都要的：池的配置目录。
 	text(&o.configDir, "config-dir", "池的配置目录：挂进网关容器的那个目录，里面的 "+scratch.ConfigFile+" 是网关读的文件", true)
 	if command != commandPlace {
-		// place 是网关启动之前做的，没有回读口可读；其余三条都要回读口和读它用的证书。
+		// place 是网关启动之前做的，没有回读口可读；其余几条都要回读口和读它用的证书。
 		text(&o.pool.address, "read-back", "池里网关的回读口，host:port", true)
 		text(&o.pool.name, "read-back-name", "回读口证书上的名字", true)
 		text(&o.pool.cert, "tls-cert", "发布器的证书（PEM）", true)
@@ -183,6 +218,16 @@ func parse(command string, args []string, output io.Writer) (options, error) {
 		text(&o.pool.ca, "tls-ca", "签发回读口证书的 CA（PEM）", true)
 		flags.DurationVar(&o.timing.Settle, "settle", o.timing.Settle, "换上文件之后至少过这么久，读到的才算数")
 		flags.DurationVar(&o.timing.Timeout, "timeout", o.timing.Timeout, "最多等网关这么久；到时没有生效就把上一份放回去")
+	}
+	if command == commandKeep {
+		o.pace = application.DefaultPace()
+		flags.DurationVar(&o.pace.Interval, "interval", o.pace.Interval, "隔多久看一眼池里常驻的容器")
+		flags.DurationVar(&o.pace.Reconcile, "reconcile-interval", o.pace.Reconcile, "网关在跑时，隔多久对一次账")
+		flags.DurationVar(&o.pace.MaxBackoff, "max-backoff", o.pace.MaxBackoff, "动了手却没修好时，两次动手之间最长隔多久")
+		flags.StringVar(&o.composeProject, "compose-project", container.DefaultProject, "docker compose 的项目名：看容器、起容器都按它")
+		flags.Var(&o.composeFiles, "compose-file", "compose 文件，可以给多次；不给时 docker compose 用当前目录里的 compose.yml")
+		flags.Var(&o.composeEnvFiles, "compose-env-file", "给 docker compose 的变量文件，可以给多次；不给时它用当前目录里的 .env。文件里只能有 名字=值 这样的行")
+		flags.DurationVar(&o.composeTimeout, "compose-timeout", 3*time.Minute, "启动命令、停止命令各自最多跑多久")
 	}
 	staged := command == commandPublish || command == commandRestart
 	if staged {
@@ -223,6 +268,16 @@ func parse(command string, args []string, output io.Writer) (options, error) {
 	}
 	if len(missing) > 0 {
 		return o, errors.New("missing required flags: " + strings.Join(missing, ", "))
+	}
+	if command == commandKeep {
+		switch {
+		case o.pace.Interval <= 0 || o.pace.Reconcile <= 0:
+			return o, errors.New("--interval and --reconcile-interval must be positive")
+		case o.pace.MaxBackoff < o.pace.Interval:
+			return o, errors.New("--max-backoff must not be shorter than --interval")
+		case o.composeTimeout <= 0:
+			return o, errors.New("--compose-timeout must be positive")
+		}
 	}
 	if !staged {
 		return o, nil
@@ -343,6 +398,139 @@ func place(ctx context.Context, o options) (application.Result, error) {
 		return application.Result{}, err
 	}
 	return application.Place(ctx, delivery)
+}
+
+// keep 把各部分装起来，守着这个池，直到被叫停。每报告一次往标准输出写一行 JSON。
+func keep(ctx context.Context, o options, stdout, stderr io.Writer, docker dockerRunner) int {
+	fail := func(err error) int {
+		fmt.Fprintln(stderr, "gateway-control:", err)
+		return exitError
+	}
+	// 给 docker compose 的变量文件里有它和 systemd 读法不同的行时，再起一次也一样：与命令行写错了同样对待。
+	if err := container.CheckEnvFiles(o.composeEnvFiles, os.LookupEnv); err != nil {
+		if errors.Is(err, container.ErrEnvFile) {
+			fmt.Fprintln(stderr, "gateway-control:", err)
+			return exitUsage
+		}
+		return fail(err)
+	}
+	delivery, err := directory.New(o.configDir, scratch.ConfigFile)
+	if err != nil {
+		return fail(err)
+	}
+	pool, err := reader(o.pool)
+	if err != nil {
+		return fail(fmt.Errorf("read-back of the pool: %w", err))
+	}
+	project, err := container.NewPool(container.PoolConfig{
+		Project: o.composeProject, Files: o.composeFiles, EnvFiles: o.composeEnvFiles, Timeout: o.composeTimeout, Docker: docker,
+	})
+	if err != nil {
+		return fail(err)
+	}
+	keeper, err := application.NewKeeper(project, delivery, pool, o.timing, o.pace)
+	if err != nil {
+		return fail(err)
+	}
+	// 先试一下占不占得了这个池：账号不对、目录写不了，现在就说，不等到池出了事要动手的时候。
+	// 正好有一次发布占着它不算。
+	release, err := delivery.Hold(ctx)
+	switch {
+	case err == nil:
+		release()
+	case !errors.Is(err, ports.ErrBusy):
+		return fail(err)
+	}
+	encoder := json.NewEncoder(stdout)
+	keeper.Run(ctx, func(tending application.Tending) {
+		if err := encoder.Encode(describe(tending, time.Now())); err != nil {
+			fmt.Fprintln(stderr, "gateway-control:", err)
+		}
+	})
+	return exitActive
+}
+
+// tended 是 keep 每报告一次写到标准输出的那一行 JSON。它有事才写：动过容器的，往回放过文件的，
+// 以及池的样子或对账的结局与上一行不同的。
+type tended struct {
+	Time string `json:"time"`
+	// Pool 是这一眼看到的三个常驻容器（动手之前的样子）；没看成时为 null。
+	// Condition 是它们合起来的样子：whole 都在跑；down 有没在跑的；orphaned 网关或前置代理接着的
+	// 是一个已经不在了的网络命名空间。Why 是依据，whole 时为空。
+	Pool      *members `json:"pool"`
+	Condition string   `json:"condition"`
+	Why       string   `json:"why"`
+	// Busy 为真：另一次发布正占着这个池，该做的这一次没有做。
+	Busy bool `json:"busy"`
+	// Action 是这一次对容器做了什么：空串是没有动；start 是跑了启动命令；stop+start 是先停下接错了
+	// 命名空间的再跑启动命令；stop 是停的那一步没做成，没有接着启动。
+	Action string `json:"action"`
+	// StartError 是启动命令没有成功时它说的；成功或者没跑时为空。
+	StartError string `json:"start_error"`
+	// After 是动过手之后的三个容器；没有动手、或者之后没看成时为 null。Repaired 为真表示它们都好了。
+	After    *members `json:"after"`
+	Repaired bool     `json:"repaired"`
+	// RetryInSeconds：动了手却没修好时，离下一次动手还有多久。
+	RetryInSeconds float64 `json:"retry_in_seconds"`
+	// Reconcile 是这一次对账的结果，与 reconcile 命令写的是同一种；这一次没有对账时为 null。
+	Reconcile *outcome `json:"reconcile"`
+	// Error：这一眼没看成，或者有一步没做成。
+	Error string `json:"error"`
+}
+
+// members 的三个名字是 deploy/compose/compose.yml 里的服务名。
+type members struct {
+	Holder  member `json:"netns"`
+	Gateway member `json:"agentgateway"`
+	Front   member `json:"front"`
+}
+
+type member struct {
+	Running bool `json:"running"`
+	// State 是 docker 报告的状态，退出了的带着退出码；没有这个容器时为空。
+	State string `json:"state"`
+	// Started 是它这一次启动的时刻；从来没有启动过时为空。
+	Started string `json:"started"`
+}
+
+func describe(tending application.Tending, now time.Time) tended {
+	line := tended{
+		Time: now.UTC().Format(time.RFC3339), Condition: string(tending.Condition), Why: tending.Why, Busy: tending.Busy,
+		StartError: tending.StartErr, Repaired: tending.Repaired(), RetryInSeconds: tending.RetryIn.Seconds(),
+	}
+	if tending.Condition != "" {
+		line.Pool = containers(tending.Members)
+	}
+	if tending.After != nil {
+		line.After = containers(*tending.After)
+	}
+	switch {
+	case tending.Stopped && tending.Started:
+		line.Action = "stop+start"
+	case tending.Started:
+		line.Action = "start"
+	case tending.Stopped:
+		line.Action = "stop"
+	}
+	if tending.Reconciled != nil {
+		reconciled := report(*tending.Reconciled)
+		line.Reconcile = &reconciled
+	}
+	if tending.Err != nil {
+		line.Error = tending.Err.Error()
+	}
+	return line
+}
+
+func containers(seen domain.Members) *members {
+	one := func(m domain.Member) member {
+		described := member{Running: m.Running, State: m.State}
+		if !m.Started.IsZero() {
+			described.Started = m.Started.UTC().Format(time.RFC3339Nano)
+		}
+		return described
+	}
+	return &members{Holder: one(seen.Holder), Gateway: one(seen.Gateway), Front: one(seen.Front)}
 }
 
 // outcome 是写到标准输出的那份 JSON。

@@ -3,7 +3,7 @@
 只另外套上一个会回话的后端（echo.yml）。网关跑在容器里，配置目录挂载进去；发布就是把目录里的配置文件整份
 换掉（写临时文件，再改名盖上去），网关不重启；之后经回读口确认它在跑的是哪一份。
 
-    .venv/bin/python tests/integration/compose/run.py        # 六分钟左右；自己起，跑完自己拆（需要 docker 和 go）
+    .venv/bin/python tests/integration/compose/run.py        # 十分钟左右；自己起，跑完自己拆（需要 docker 和 go）
 
 真的部分：docker compose 和部署文件本身、锁定的上游 agentgateway 镜像（按摘要引用）、网关前面的那层 nginx
 （与黑盒套件同一个镜像，配置只差端口）、网关自己的回读口（双向 TLS），以及发布器（cmd/gateway-control，
@@ -26,6 +26,12 @@ SH-01 到 SH-08 由本脚本扮演发布器：往挂载的目录里写文件，�
 在旁边看，并且替它制造麻烦：把它强行杀掉，绕过它往目录里写文件、删文件，带着坏文件重启网关。
 SH-12 到 SH-14 看部署文件：断电之后再启动的先后，启动时对不上会怎样，停，头一次安装。断电是把三个常驻
 容器同时强行杀掉来模拟的；真的重启一台机器没有做过。SH-15 是网关自己的一个性质，开机的先后与它有关。
+SH-16 到 SH-18 看看守（gateway-control keep）：真的看守在本机上跑着，本脚本去杀容器、杀发布器、绕过发布器写文件、
+占着配置目录的锁，看它怎么收拾，什么时候不动手。看守在这里不经 systemd：由本脚本直接起，docker compose 的项目和
+文件由参数给它。它在两个 systemd 单元里的那一面（跟着池的单元启停，死了被重新起来）由同目录的 units.py 用替身看。
+SH-19 把两个单元文件里写的命令原样跑一遍，仍然不经 systemd：在一个放着 compose.yml 和 .env 的目录里跑，docker compose
+的项目和文件都不另给，由它自己在那个目录里找。这一条里的池用的是部署文件自己的项目名，不带这套用例的前缀；这台机器上
+已经有叫这个名字的项目时，这一条不动它，也就不通过。
 
 占用本机回环上的 27618 到 27620，与黑盒套件、Gatekeeper 联调和 Kubernetes 套件的端口重叠，不能同时跑。
 """
@@ -55,7 +61,10 @@ CONTROL = RUN / 'control'
 CONTROL_BINARY = CONTROL / 'bin' / 'gateway-control'
 ONLY_IN_STAGING = 'only-in-staging.crt'   # 只有离线加载那边才有的一个文件
 RECORD = '.config.yaml.confirmed'         # 发布器留在配置目录里的记录
-STALE = (POOL, PKI, CONTROL, RUN / 'staging', RUN / 'single', RUN / 'expansion')   # 每次运行前后都清掉
+# SH-19 的安装目录：compose.yml、front.nginx.conf 和 .env 放在一起，像一台真的机器上那样。两个单元里的命令在这里面跑。
+HOSTED = RUN / 'deployed'
+HOSTED_MARK = RUN / 'deployed.started'   # SH-19 起过那个池的记号：拆的时候凭它删那个项目的网络
+STALE = (POOL, PKI, CONTROL, HOSTED, RUN / 'staging', RUN / 'single', RUN / 'expansion')   # 每次运行前后都清掉
 LOCK = pin.lock()
 # 两个镜像都不由本脚本交给 compose：部署文件自己按摘要写着。这里的两个值是拿来核对的（SH-01）。
 GATEWAY_IMAGE = pin.image_reference(LOCK)   # 上游镜像，按多平台索引的摘要引用
@@ -67,6 +76,8 @@ TOOLS_IMAGE = ('public.ecr.aws/docker/library/python:3.13-alpine'
                '@sha256:1e1f6334529d1fb26a2ef619d7cffb30a7c7d7cc1cc7338ebee283a58d1aeaca')
 
 PROJECT = 'idp-gateway-compose'
+# 部署文件自己写的项目名。SH-19 之外的用例都另给项目名（PROJECT）；SH-19 不给，用的就是这个。
+DEPLOYED_PROJECT = yaml.safe_load((DEPLOY / 'compose.yml').read_text(encoding='utf-8'))['name']
 SCRATCH = f'{PROJECT}-scratch'   # 另起的那个网关容器：发布前的离线加载用它，"只挂单个文件"的对照也用它
 HOST = {'front': 27620, 'readback': 27619, 'scratch': 27618}   # 本机回环上的端口
 # netns 占着的那个网络命名空间里的端口：front 和网关都接在里面。
@@ -573,7 +584,11 @@ def moment(stamp: str) -> float:
 def step(service: str) -> dict:
     """部署文件里跑完就退出的一步（place 或 confirm）最近一次运行。-> 退出码、它写到标准输出的那份 JSON、
     标准错误的末尾、开始和结束的时刻。容器不存在、还在跑或者从没跑过时 exit 是 None。"""
-    c = container(service)
+    return step_of(container(service))
+
+
+def step_of(c: dict) -> dict:
+    """同 step；c 是那一步的容器（container 或 hosted 给出的样子）。"""
     if not c or c['running'] or not moment(c['started']):
         return {'exit': None, 'report': {}, 'stderr': '', 'started': 0.0, 'finished': 0.0}
     logs = docker('logs', '--since', c['started'], c['id'])   # 以前各次运行的输出也在这个容器的日志里：只要最近这一次的
@@ -683,23 +698,28 @@ class Knock:
         return sorted(self.log, key=lambda q: q['back'])
 
 
-def boot(routes: tuple = ('a',)) -> dict:
+def boot(routes: tuple = ('a',), start=None) -> dict:
     """跑一次部署文件的启动命令（docker compose up -d，开机时那个单元跑的就是它），这期间一直有人在敲业务端口。
-    时刻都是 Unix 时间。
+    时刻都是 Unix 时间。start 给的是另一种跑法（由看守来跑这条命令时用）：一个函数，等到启动命令跑完才返回，
+    返回它成没成（0 是成了）和它最后说的那一行。
     -> exit、said：命令的退出码和它最后说的那一行；began、seconds：命令开始的时刻和用了多少秒；
        place、confirm：这两步这一次的结果（见 step）；started：五个容器各自最近一次启动的时刻；
        answers：每条路由上各种结果各有多少个；first：第一个应答是什么时候到的（一个都没有时是 None），
        first_sent：得到它的那个请求是什么时候发出的；unanswered：在那之前落空的请求有多少个。"""
     knock, began = Knock(routes), time.time()
-    up = compose('up', '-d')
+    if start is None:
+        up = compose('up', '-d')
+        code, said = up.returncode, (up.stderr.strip().splitlines() or [''])[-1].strip()
+    else:
+        code, said = start()
     seconds = round(time.time() - began, 2)
-    if up.returncode == 0:
+    if code == 0:
         wait_for(lambda: get(f'{routes[0]}.test', '/quick')['status'] is not None, 10)
     time.sleep(1)   # front 开了之后再敲一秒：每条路由都问到几次
     log = knock.finish()
     answered = min((q for q in log if q['status'] is not None), key=lambda q: q['back'], default=None)
     first = answered['back'] if answered else None
-    return {'exit': up.returncode, 'said': (up.stderr.strip().splitlines() or [''])[-1].strip(), 'began': began, 'seconds': seconds,
+    return {'exit': code, 'said': said, 'began': began, 'seconds': seconds,
             'place': step('place'), 'confirm': step('confirm'),
             'started': {name: moment(container(name).get('started') or '') for name in SERVICES},
             'answers': {route: dict(collections.Counter(str(q['status']) for q in log if q['route'] == route)) for route in routes},
@@ -742,6 +762,205 @@ def wait_for(predicate, seconds: float, every: float = 0.05):
             return round(time.monotonic() - started, 2)
         time.sleep(every)
     return None
+
+
+# ---- 看守 -------------------------------------------------------------------------------------------
+KEEPERS = []   # 本次运行起过的看守。拆的时候先停它们：看守在跑的话，会把正在拆的池再起起来
+
+
+class Keeper:
+    """本机上跑着的一个真的看守（gateway-control keep）。它不经 systemd：由本脚本直接起，docker compose 的项目、
+    文件和变量文件，与本脚本自己跑 docker compose 时给的相同。它写到标准输出的每一行 JSON 连同到的时刻
+    （at，Unix 时间）记在 lines 里，写到标准错误上的记在 said 里。
+    settings 为真时，它的环境里带着部署文件的各个变量：看守的单元由 systemd 读了 .env 交给它的就是这样。
+    more 是另外放进它环境里的变量。
+    SH-19 把这些都另给：command 是整条命令行（看守的单元里写的那一条），cwd 是它在哪个目录里跑，environment 是它的环境。"""
+
+    def __init__(self, *extra: str, settings: bool = False, env_file: Path = POOL_ENV, more: dict | None = None,
+                 command: list | None = None, cwd: Path | None = None, environment: dict | None = None):
+        self.lines, self.said = [], []
+        if command is None:
+            command = [str(CONTROL_BINARY), 'keep', *pool_flags(), '--compose-project', PROJECT, '--compose-env-file', str(env_file),
+                       '--compose-file', str(DEPLOY / 'compose.yml'), '--compose-file', str(HERE / 'echo.yml'), *extra]
+        if shutil.which('setpriv'):   # 本脚本被强行杀掉时让看守跟着死：不然它留在本机上，一直守着一个没人管的池
+            command = ['setpriv', '--pdeathsig', 'KILL', *command]
+        if environment is None:
+            environment = {**compose_environment(), **(pool_settings() if settings else {}), **(more or {})}
+        self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=environment, cwd=cwd)
+        KEEPERS.append(self)
+        self.readers = [threading.Thread(target=self._read, daemon=True), threading.Thread(target=self._listen, daemon=True)]
+        for reader in self.readers:
+            reader.start()
+
+    def _read(self):
+        for line in self.process.stdout:
+            try:
+                self.lines.append({'at': time.time(), **json.loads(line)})
+            except ValueError:
+                self.lines.append({'at': time.time(), 'unparsed': line[:300]})
+
+    def _listen(self):
+        for line in self.process.stderr:
+            self.said.append(line.rstrip())
+
+    def mark(self) -> int:
+        """它现在写到了第几行：把它交给 wait 或 next，就只看这之后的。"""
+        return len(self.lines)
+
+    def wait(self, want, seconds: float, since: int = 0, count: int = 1) -> list:
+        """等它从第 since 行起写出 count 行符合 want 的。-> 那几行，按先后；到时还不够的，有几行是几行。"""
+        def found() -> list:
+            return [line for line in self.lines[since:] if want(line)]
+        wait_for(lambda: len(found()) >= count, seconds)
+        return found()[:count]
+
+    def next(self, want, seconds: float, since: int = 0) -> dict:
+        """等它从第 since 行起写出一行符合 want 的。-> 那一行；到时没有等到是空的。"""
+        return (self.wait(want, seconds, since) or [{}])[0]
+
+    def children(self) -> list[str]:
+        """它这时的子进程各自的命令行。"""
+        found = subprocess.run(['ps', '-o', 'args=', '--ppid', str(self.process.pid)], capture_output=True, text=True).stdout
+        return [line.strip() for line in found.splitlines() if line.strip()]
+
+    def composing(self) -> bool:
+        """它这时是不是正跑着启动命令：docker compose … up -d 是它的子进程。"""
+        return any(line.endswith(' up -d') for line in self.children())
+
+    def stop(self, how: int = signal.SIGTERM, seconds: float = 60) -> dict:
+        """给它发一个信号（默认是 SIGTERM：叫停它），等它退出；已经退出了的不再发。
+        -> 退出码，从发信号到退出过了多少秒，退出的时刻，它在标准错误上说过的。"""
+        began = time.monotonic()
+        if self.process.poll() is None:
+            self.process.send_signal(how)
+        try:
+            code = self.process.wait(seconds)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            code = self.process.wait(30)
+        at = time.time()
+        for reader in self.readers:
+            reader.join(5)
+        return {'exit': code, 'seconds': round(time.monotonic() - began, 2), 'at': at, 'stderr': list(self.said)}
+
+    def ended(self, seconds: float = 15) -> dict:
+        """等它自己退出，不给它发信号；到时还在跑的才叫停它。-> 同 stop。"""
+        wait_for(lambda: self.process.poll() is not None, seconds)
+        return self.stop()
+
+
+def whole(line: dict) -> bool:
+    """看守的一行说的是不是三个常驻容器都在跑。"""
+    return line.get('condition') == 'whole'
+
+
+def acted(line: dict) -> bool:
+    """看守的一行说的是不是它动过容器。"""
+    return bool(line.get('action'))
+
+
+def reconciled(line: dict) -> dict:
+    """看守的一行里那一次对账的结果；那一次没有对账时是空的。"""
+    return line.get('reconcile') or {}
+
+
+def restored(line: dict) -> bool:
+    return reconciled(line).get('outcome') == 'RESTORED'
+
+
+def member(line: dict, when: str, service: str) -> dict:
+    """看守的一行里某个容器的样子。when 是 'pool'（动手之前）或 'after'（动手之后）。"""
+    return (line.get(when) or {}).get(service) or {}
+
+
+def brief(line: dict) -> dict:
+    """看守写的一行里要紧的几项；三个容器各自的样子略去。"""
+    account = reconciled(line)
+    return {**{k: line.get(k) for k in ('condition', 'why', 'busy', 'action', 'start_error', 'repaired', 'retry_in_seconds', 'error')},
+            'reconcile': [account.get('outcome'), account.get('reason')] if account else None}
+
+
+def patient(command, tries: int = 5) -> dict:
+    """跑一次发布器的命令（command 是 control、control_reconcile 那样的调用）。看守在跑时，它正好撞上看守在对账的
+    那一瞬间的话，会说有另一次发布在进行、什么都不做（退出码 1）：隔一会儿再来。"""
+    for _ in range(tries):
+        done = command()
+        if not (done['exit'] == 1 and 'another publication' in done['stderr']):
+            break
+        time.sleep(0.3)
+    return done
+
+
+def strays() -> list[int]:
+    """本脚本上一次被强行杀掉时可能留在本机上的进程：本次运行目录里的那个 gateway-control（看守），
+    和对着这套用例的项目、或者在 SH-19 的安装目录里跑着的 docker compose。"""
+    found = []
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            continue
+        try:
+            argv = [word.decode(errors='replace') for word in (entry / 'cmdline').read_bytes().split(b'\0') if word]
+            directory = os.readlink(entry / 'cwd')
+        except OSError:
+            continue
+        composing = 'compose' in argv and (any(argv[i:i + 2] == ['-p', PROJECT] for i in range(len(argv))) or directory == str(HOSTED))
+        if argv and (argv[0] == str(CONTROL_BINARY) or composing):
+            found.append(int(entry.name))
+    return found
+
+
+def unit_commands(name: str) -> dict:
+    """deploy/compose 里一个单元文件写的命令（ExecStart=、ExecStop=），切成词：行尾的反斜杠接下一行，按空白切。"""
+    found = {}
+    for line in (DEPLOY / name).read_text(encoding='utf-8').replace('\\\n', ' ').splitlines():
+        key, assigned, value = line.partition('=')
+        if assigned and key in ('ExecStart', 'ExecStop'):
+            found[key] = value.split()
+    return found
+
+
+def filled_in(words: list[str], settings: dict) -> list[str]:
+    """把各个词里的 ${名字} 换成 settings 里的值，一个词还是一个词。看守的单元的 ExecStart 由 systemd 这样填
+    （值取自 EnvironmentFile；真的 systemd 填出来是什么，units.py 的 UN-01 看过）。没有这个名字就是出了错。"""
+    return [re.sub(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}', lambda found: settings[found.group(1)], word) for word in words]
+
+
+def hosted() -> dict:
+    """SH-19 的那个池：部署文件自己的项目名下各服务的容器现在的样子，按 docker compose 贴的标签找。
+    directory 和 files 是 docker compose 记在容器上的项目目录和它用的 compose 文件。"""
+    ids = docker('ps', '-a', '-q', '--no-trunc', '--filter', f'label=com.docker.compose.project={DEPLOYED_PROJECT}').stdout.split()
+    found = {}
+    for c in (json.loads(docker('inspect', *ids).stdout or '[]') if ids else []):
+        labels = c['Config'].get('Labels') or {}
+        found[labels.get('com.docker.compose.service')] = {
+            'id': c['Id'], 'name': c['Name'].lstrip('/'), 'running': c['State']['Running'], 'started': c['State']['StartedAt'],
+            'finished': c['State']['FinishedAt'], 'exit': c['State']['ExitCode'], 'pid': c['State']['Pid'], 'restarts': c['RestartCount'],
+            'directory': labels.get('com.docker.compose.project.working_dir'),
+            'files': labels.get('com.docker.compose.project.config_files')}
+    return found
+
+
+def hosted_networks() -> list[str]:
+    return docker('network', 'ls', '--filter', f'label=com.docker.compose.project={DEPLOYED_PROJECT}', '--format', '{{.Name}}').stdout.split()
+
+
+def remove_hosted():
+    """SH-19 起的那个项目不带这套用例的前缀，所以只删认得出是本脚本起的：容器按 docker compose 记下的项目目录认
+    （本次运行的安装目录）；网络没有这个标签，凭 SH-19 开始时留下的记号删，而且要那个项目已经没有容器了。"""
+    rows = [line.split() for line in docker('ps', '-a', '--filter', f'label=com.docker.compose.project.working_dir={HOSTED}',
+                                            '--format', '{{.ID}} {{.Label "com.docker.compose.project"}}').stdout.splitlines()]
+    rows = [row for row in rows if len(row) == 2]
+    if rows:
+        docker('rm', '-f', '-v', *(row[0] for row in rows))
+    projects = {row[1] for row in rows}
+    if HOSTED_MARK.exists():
+        projects.add(HOSTED_MARK.read_text(encoding='utf-8').strip())
+    for project in sorted(p for p in projects if p):
+        mine = f'label=com.docker.compose.project={project}'
+        if not docker('ps', '-a', '-q', '--filter', mine).stdout.split():
+            for network in docker('network', 'ls', '-q', '--filter', mine).stdout.split():
+                docker('network', 'rm', network)
+    HOSTED_MARK.unlink(missing_ok=True)
 
 
 def differing(a: dict, b: dict) -> list[str]:
@@ -924,7 +1143,15 @@ def prepare():
 
 
 def teardown():
-    """容器、网络和本次运行的证书都不留；留下的只有 .run/result.json。"""
+    """看守、容器、网络和本次运行的证书都不留；留下的只有 .run/result.json。"""
+    for keeper in KEEPERS:   # 先停看守，再拆它守着的池
+        keeper.stop(seconds=30)
+    for pid in strays():
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    remove_hosted()
     if POOL_ENV.exists():
         compose('down', '--volumes', '--remove-orphans', '--timeout', '5')
     # 上一次运行死在半路时 pool.env 可能已经不在了，compose 读不了部署文件：按项目的标签直接删。
@@ -941,6 +1168,9 @@ def teardown():
 
 
 def main() -> int:
+    # 被叫停时也照样拆：不然留下的看守会一直守着这个池。
+    for number in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(number, lambda received, _: sys.exit(128 + received))
     try:
         return run()
     finally:
@@ -1795,6 +2025,549 @@ def cases(r: Results):
     asked = get('a.test', '/quick')
     r.check('对照：网关启动时后端的名字解析不了，但在第一个请求到来之前它解析得了了。这个请求得到 200：网关是第一次用到这个名字时才去解析的',
             up is not None and back is not None and asked['status'] == 200)
+
+    keeper_cases(r, fresh)
+
+
+def keeper_cases(r: Results, confirmed: Snapshot):
+    """看守的用例（SH-16 到 SH-18）。开始时池好好地在跑：三个常驻容器和后端都在，confirmed 是这个池上最后一次
+    得到确认的那份快照，网关在跑的就是它。"""
+    config_file, lock_file = POOL / 'config' / 'config.yaml', POOL / 'config' / '.config.yaml.lock'
+    routes = confirmed.routes
+
+    def running() -> dict:
+        return {service: container(service) for service in LONG_RUNNING}
+
+    def all_up() -> bool:
+        return all(container(service).get('running') for service in LONG_RUNNING)
+
+    def answering() -> bool:
+        return get('a.test', '/quick')['status'] == 200
+
+    r.case('SH-16', '看守（gateway-control keep）：池里常驻的容器死了，它跑启动命令把它们起回来；一次发布占着池时它不动手')
+    kept, before = record(), running()
+    ids = {service: container(service).get('id') for service in SERVICES}
+    ran = {service: container(service).get('started') for service in ('place', 'confirm')}
+    # 不给间隔：5 秒看一眼，一分钟对一次账。环境里带着部署文件的各个变量。两样都与看守的单元里的相同。
+    keeper = Keeper(settings=True)
+    first = keeper.next(lambda line: True, 15)
+    time.sleep(7)
+    r.note('看守在一个好好的池上写的那一行（原样）', {name: value for name, value in first.items() if name != 'at'})
+    r.check('在一个好好的池上启动看守：它写了一行，说三个常驻容器都在跑（whole），账对得上（IN_SYNC）；它没有动手',
+            whole(first) and first.get('action') == '' and first.get('busy') is False and first.get('error') == ''
+            and first.get('after') is None and all(member(first, 'pool', service).get('running') is True for service in LONG_RUNNING)
+            and reconciled(first).get('outcome') == 'IN_SYNC' and reconciled(first).get('snapshot') == confirmed.sha256
+            and reconciled(first).get('replaced') is False)
+    r.check('之后 7 秒（它 5 秒看一眼）它没有再出声；三个常驻容器没有动，place 和 confirm 没有再跑',
+            len(keeper.lines) == 1 and not keeper.said and all(same_process(before[service], container(service)) for service in LONG_RUNNING)
+            and all(container(service).get('started') == ran[service] for service in ran))
+
+    traffic, mark, since = Load(), keeper.mark(), time.time()
+    docker('kill', before['agentgateway'].get('name', '-'))
+    back = keeper.next(acted, 40, mark)
+    healed = wait_for(answering, 20)
+    time.sleep(3)
+    result = traffic.finish()
+    cut, placed, confirming, after, now = outage(traffic), step('place'), step('confirm'), running(), observe()
+    refused = cut['refused']
+    r.note('网关被杀掉：看守写的那一行', brief(back))
+    r.note('网关被杀掉：没有得到 200 的快请求（时刻是相对于流量开始的秒数）',
+           f"{len(refused)} 个，发出的时刻从 {refused[0]['at']} 到 {refused[-1]['at']}" if refused else '没有')
+    r.note('网关被杀掉：没有得到 200 的请求得到的是什么', cut['answers'])
+    r.note('网关被杀掉：快请求 / 慢请求的结果', f"{result['quick']} / {result['slow']}，历时 {result['seconds']} 秒")
+    r.check('网关被强行杀掉（docker kill）：看守下一眼看到它没在跑（down），跑了启动命令（start）；之后三个容器都在跑，账对得上',
+            back.get('action') == 'start' and back.get('condition') == 'down'
+            and back.get('why') == 'the gateway is not running (exited (137))' and back.get('busy') is False
+            and back.get('repaired') is True and back.get('start_error') == '' and back.get('retry_in_seconds') == 0 and back.get('error') == ''
+            and member(back, 'pool', 'agentgateway').get('running') is False and member(back, 'after', 'agentgateway').get('running') is True
+            and reconciled(back).get('outcome') == 'IN_SYNC')
+    r.check('网关是经启动命令起来的：place 先跑完（IN_PLACE），网关才启动，然后是 confirm（IN_SYNC）',
+            outcome(placed) == (0, 'IN_PLACE') and outcome(confirming) == (0, 'IN_SYNC')
+            and since <= placed['started'] <= placed['finished'] <= moment(after['agentgateway'].get('started') or '') <= confirming['started'])
+    r.check('网关换了一个进程，还是那个容器；netns 和 front 没有被动过',
+            bool(after['agentgateway'].get('running')) and after['agentgateway'].get('id') == before['agentgateway'].get('id')
+            and after['agentgateway'].get('pid') != before['agentgateway'].get('pid')
+            and all(same_process(before[service], after[service]) for service in ('netns', 'front')))
+    r.check('网关在跑的是记录的那一份。请求只在网关死着的那一段得不到 200（不超过 15 秒：看守 5 秒看一眼），之后照常',
+            healed is not None and now['reload'] == LOADED and now['digest'] == kept.get('digest') and on_disk() == confirmed.text
+            and bool(refused) and refused[-1]['at'] - refused[0]['at'] <= 15
+            and len(cut['last']) == 20 and all(q['outcome'] == '200' for q in cut['last']))
+
+    mark, before = keeper.mark(), running()
+    docker('kill', before['front'].get('name', '-'))
+    back = keeper.next(acted, 40, mark)
+    healed, after = wait_for(answering, 20), running()
+    r.note('front 被杀掉：看守写的那一行', brief(back))
+    r.check('front 被强行杀掉：看守跑启动命令把它起回来；front 换了一个进程，网关和 netns 没有被动过，请求照常',
+            back.get('action') == 'start' and back.get('condition') == 'down' and back.get('why') == 'the front proxy is not running (exited (137))'
+            and back.get('repaired') is True and back.get('start_error') == '' and reconciled(back).get('outcome') == 'IN_SYNC'
+            and bool(after['front'].get('running')) and after['front'].get('id') == before['front'].get('id')
+            and after['front'].get('pid') != before['front'].get('pid')
+            and all(same_process(before[service], after[service]) for service in ('netns', 'agentgateway')) and healed is not None)
+    r.check('看守的环境里带着部署文件的各个变量（它的单元里就是这样），它跑的启动命令没有因此重建哪个容器：五个容器都还是原来那五个',
+            ids == {service: container(service).get('id') for service in SERVICES} and len(set(ids.values())) == 5)
+    stopped = keeper.stop()
+    r.check('叫停看守（SIGTERM）：它以 0 退出，标准错误上什么都没有说', stopped['exit'] == 0 and stopped['seconds'] < 5 and not stopped['stderr'])
+
+    keeper = Keeper('--interval', '1s')   # 以下 1 秒看一眼：省时间
+    keeper.next(whole, 15)
+    mark, since, before = keeper.mark(), time.time(), running()
+    docker('kill', before['netns'].get('name', '-'))
+    back = keeper.next(acted, 60, mark)
+    healed, after, events = wait_for(answering, 20), running(), pool_events(since)
+    r.note('netns 单独被杀掉：看守写的那一行', brief(back))
+    r.note('netns 单独被杀掉：这期间 docker 给各容器发的信号和它们的退出，按先后', events)
+    r.check('netns 单独被强行杀掉（SH-13：这时只跑启动命令修不好）：看守看出网关和 front 接着的那个命名空间已经不在了（orphaned），'
+            '先把这两个停下，再跑启动命令（stop+start）；之后三个容器都在跑，账对得上',
+            back.get('action') == 'stop+start' and back.get('condition') == 'orphaned'
+            and back.get('why') == '; '.join(f'{what} is running but the container that holds its network namespace is not'
+                                             for what in ('the gateway', 'the front proxy'))
+            and back.get('repaired') is True and back.get('start_error') == '' and reconciled(back).get('outcome') == 'IN_SYNC')
+    r.check('停的是 front 和网关，front 在先，两个都是自己退出的；然后启动命令照它的先后来（place，网关，confirm，front）',
+            events == ['kill netns 9', 'die netns', 'kill front 3', 'die front', 'kill agentgateway 15', 'die agentgateway',
+                       'die place', 'die confirm']
+            and outcome(step('place')) == (0, 'IN_PLACE') and outcome(step('confirm')) == (0, 'IN_SYNC')
+            and step('place')['finished'] <= moment(after['agentgateway'].get('started') or '')
+            and step('confirm')['finished'] <= moment(after['front'].get('started') or ''))
+    r.check('三个常驻容器都换了进程，还是那三个容器；请求照常',
+            all(bool(after[service].get('running')) and after[service].get('id') == before[service].get('id')
+                and after[service].get('pid') != before[service].get('pid') for service in LONG_RUNNING)
+            and healed is not None and routes_seen(routes) == {name: 200 for name in routes})
+    stopped = keeper.stop()
+
+    dark = power_cut()
+    time.sleep(1)
+
+    def kept_alive() -> tuple:
+        """起一个看守，等它把启动命令跑完。"""
+        nonlocal keeper
+        keeper = Keeper('--interval', '1s')
+        line = keeper.next(acted, 60)
+        return (0 if line.get('repaired') and not line.get('start_error') else 1), str(line.get('start_error') or '')
+
+    seen = boot(('a',), start=kept_alive)
+    back = keeper.next(acted, 1)
+    r.note('三个常驻容器都死了时启动看守：它写的那一行', brief(back))
+    r.note('三个常驻容器都死了时启动看守：各件事发生的时刻（相对于看守启动的秒数；"命令返回"是看守写出那一行的时刻）', timeline(seen))
+    r.note('三个常驻容器都死了时启动看守：这期间发往业务端口的请求各得到什么（None 是没有得到应答）', seen['answers'])
+    r.check('三个常驻容器同时被强行杀掉（断电的样子），这时才启动看守：它第一眼看到三个都没在跑，跑了启动命令，都起来了',
+            stopped['exit'] == 0 and dark and seen['exit'] == 0 and back.get('action') == 'start' and back.get('condition') == 'down'
+            and back.get('why') == '; '.join(f'{what} is not running (exited (137))' for what in (
+                'the container that holds the network namespace', 'the gateway', 'the front proxy'))
+            and back.get('repaired') is True and reconciled(back).get('outcome') == 'IN_SYNC')
+    r.check('看守跑的启动命令与开机时的是同一条：place 跑完网关才启动，confirm 跑完 front 才启动；confirm 跑完之前没有请求得到应答',
+            outcome(seen['place']) == (0, 'IN_PLACE') and outcome(seen['confirm']) == (0, 'IN_SYNC') and in_order(seen) and gated(seen, 'a'))
+
+    unconfirmed = Snapshot([*routes, 't'])   # 一份没有毛病的快照，只是没有人确认过
+    before, knock = running(), Knock(('a', 't'))
+    with open(lock_file, 'r+b') as held_lock:
+        fcntl.flock(held_lock, fcntl.LOCK_EX)   # 发布器做一次发布，从头到尾就是这样占着这个池
+        mark = keeper.mark()
+        docker('kill', before['agentgateway'].get('name', '-'))
+        publish(unconfirmed)   # 绕过发布器把它放进目录：一次发布做到一半时，目录里就是这样一份文件
+        busy = keeper.next(lambda line: line.get('busy'), 15, mark)
+        time.sleep(4)   # 看守又看了四眼
+        waiting = list(keeper.lines[mark:])
+        left_alone = not container('agentgateway').get('running') and on_disk() == unconfirmed.text
+    back = keeper.next(acted, 30, mark)
+    healed = wait_for(answering, 20)
+    time.sleep(1)
+    log = knock.finish()
+    placed = step('place')
+    answers = {route: dict(collections.Counter(str(q['status']) for q in log if q['route'] == route)) for route in ('a', 't')}
+    r.note('池被占着时看守写的', [brief(line) for line in waiting])
+    r.note('锁放开之后看守写的那一行', brief(back))
+    r.note('池被占着到网关回来，这期间发往业务端口的请求各得到什么', answers)
+    r.check('一次发布正占着这个池（配置目录的锁被占着），这时网关死了，目录里放着一份没人确认过的文件。看守说池被占着（busy），不动手：'
+            '它又看了四眼，网关还是没在跑，那份文件没有被动过',
+            busy.get('busy') is True and busy.get('action') == '' and busy.get('condition') == 'down' and busy.get('reconcile') is None
+            and len(waiting) == 1 and left_alone)
+    r.check('锁放开之后看守才跑启动命令：place 把记录的那一份放回去（写了文件，说了原来放着的是哪一份），网关带着它起来，账对得上',
+            back.get('action') == 'start' and back.get('busy') is False and back.get('repaired') is True
+            and outcome(placed) == (0, 'IN_PLACE') and placed['report'].get('replaced') is True
+            and placed['report'].get('previous') == unconfirmed.sha256 and on_disk() == confirmed.text
+            and reconciled(back).get('outcome') == 'IN_SYNC')
+    r.check('没人确认过的那条路由 t 从头到尾一次都没有应答过 200；网关回来之后请求照常',
+            '200' not in answers['t'] and answers['t'].get('404', 0) >= 1 and healed is not None
+            and routes_seen(['a', 't']) == {'a': 200, 't': 404})
+    stopped = keeper.stop()
+    r.check('这几次之后叫停看守：以 0 退出', stopped['exit'] == 0 and not stopped['stderr'])
+
+    r.case('SH-17', '看守定时对账：发布器死在半路留下的文件、有人绕过发布器写的文件，它在下一次对账时收回去；正常的发布它不碰，网关它不重启')
+    key = 'terminationMaxDeadline'
+    keeper = Keeper('--interval', '1s', '--reconcile-interval', '5s')
+    keeper.next(whole, 15)
+    before = running()
+    stray = Snapshot([*routes, 'u'])
+    traffic, mark = Load(), keeper.mark()
+    for _ in range(3):   # 发布器一开始正好撞上看守在对账时，它什么都没做就退出了：再来
+        killed = control_killed(stray)
+        if killed['killed']:
+            break
+    at = time.time()
+    back = keeper.next(restored, 20, mark)
+    gone = wait_for(lambda: routes_seen(['u']) == {'u': 404}, 10)
+    time.sleep(3)
+    result, now = traffic.finish(), observe()
+    r.note('发布器被杀掉之后过了多少秒，看守写出把文件收回去的那一行（它 5 秒对一次账）', round(back['at'] - at, 2) if back else None)
+    r.note('发布器被杀掉之后：看守写的那一行', brief(back))
+    r.check('发布器刚把一份没人确认过的快照换上去就被强行杀掉。看守在下一次对账时把记录的那一份放回去（RESTORED），'
+            '说了原来放着的是哪一份；它没有动容器',
+            killed['killed'] and restored(back) and back.get('action') == '' and whole(back)
+            and reconciled(back).get('replaced') is True and reconciled(back).get('restarted') is False
+            and reconciled(back).get('snapshot') == confirmed.sha256 and reconciled(back).get('previous') == stray.sha256
+            and back.get('at', at + 99) - at <= 15)
+    r.check('网关在跑的又是记录的那一份，没人确认过的那条路由没有了；三个常驻容器都没有重启',
+            gone is not None and on_disk() == confirmed.text and now['reload'] == LOADED and now['digest'] == kept.get('digest')
+            and all(same_process(before[service], container(service)) for service in LONG_RUNNING))
+    no_failures(r, result, '从发布器被杀掉到看守收回去')
+
+    broken = Snapshot([*routes, 'c'], unloadable='c')
+    mark = keeper.mark()
+    publish(broken)   # 绕过发布器，放一份网关加载不了的文件
+    back = keeper.next(restored, 20, mark)
+    r.note('有人放了一份网关加载不了的文件：看守给出的原因', reconciled(back).get('reason'))
+    r.check('有人绕过发布器放了一份网关加载不了的文件：看守在下一次对账时收回去（RESTORED）',
+            restored(back) and back.get('action') == '' and reconciled(back).get('previous') == broken.sha256
+            and on_disk() == confirmed.text)
+    mark = keeper.mark()
+    config_file.unlink()   # 有人把配置文件删了
+    back = keeper.next(restored, 20, mark)
+    now = observe()
+    r.check('配置文件被删掉：看守在下一次对账时把记录的那一份放回去（RESTORED），说那里原来没有文件',
+            restored(back) and back.get('action') == '' and reconciled(back).get('previous') == ''
+            and 'there was no configuration file in place' in str(reconciled(back).get('reason')) and on_disk() == confirmed.text
+            and now['reload'] == LOADED and now['digest'] == kept.get('digest'))
+    r.check('这两次网关和 front 也都没有重启', all(same_process(before[service], container(service)) for service in LONG_RUNNING))
+
+    newer = Snapshot([*routes, 'w'])
+    mark = keeper.mark()
+    done = patient(lambda: control(newer))
+    time.sleep(12)   # 看守又对了两次账还多
+    lines = list(keeper.lines[mark:])
+    r.note('看守在跑时正常发布一份新快照：这期间看守写的', [brief(line) for line in lines])
+    r.check('看守在跑时用发布器正常发布一份新快照：ACTIVE。过了 12 秒（看守又对了两次账还多），这一份还在生效，看守没有把它收回去',
+            outcome(done) == (0, 'ACTIVE') and done['report'].get('replaced') is True and on_disk() == newer.text
+            and record().get('snapshot') == newer.sha256 and routes_seen(['w']) == {'w': 200}
+            and not any(acted(line) or reconciled(line).get('replaced') for line in lines))
+
+    tuned = Snapshot([*routes, 'w'], deadline=46)   # 与上一份只差 config 段里的一项：要重启网关才生效
+    name = before['agentgateway'].get('name', '-')
+    mark, since, before = keeper.mark(), time.time(), running()
+    done = patient(lambda: control_restart(tuned, name))
+    time.sleep(3)
+    lines, events, after, now = list(keeper.lines[mark:]), docker_events(name, since), running(), observe()
+    r.note('看守在跑时做一次带重启的发布：这期间看守写的', [brief(line) for line in lines])
+    r.note('看守在跑时做一次带重启的发布：这期间 docker 对网关容器做过的事', events)
+    r.check('看守在跑时做一次带重启的发布（gateway-control restart）：ACTIVE，网关重启了，就这一次；启动设置换成了新的',
+            outcome(done) == (0, 'ACTIVE') and done['report'].get('restarted') is True
+            and events.count('restart') == 1 and events.count('start') == 1
+            and now['config'].get(key) == '46s' and record().get('snapshot') == tuned.sha256
+            and after['agentgateway'].get('pid') != before['agentgateway'].get('pid')
+            and all(same_process(before[service], after[service]) for service in ('netns', 'front')))
+    r.check('看守没有插手：这期间它没有动过容器，也没有往回放过文件',
+            not any(acted(line) or reconciled(line).get('replaced') for line in lines)
+            and all(line.get('busy') is True for line in lines if line.get('condition') == 'down'))
+
+    # 一份离线加载得了、网关拿它却起不来的快照（指标端口撞上 front 的，见 SH-11）：发布器重启网关之后读不到它，等满时限，
+    # 把上一份放回去再重启一次。网关前后停了 5 秒多，这期间池一直被这次发布占着。
+    clash = Snapshot([*routes, 'w'], deadline=46, stats=PORT['front'])
+    ran = {service: container(service).get('started') for service in ('place', 'confirm')}
+    mark, since = keeper.mark(), time.time()
+    rolled = patient(lambda: control_restart(clash, name, '--timeout', '5s'))
+    time.sleep(3)
+    lines, events, now = list(keeper.lines[mark:]), docker_events(name, since), observe()
+    down = [line for line in lines if line.get('condition') == 'down']
+    r.note('带重启的发布让网关停了 5 秒多：发布器用了多少秒，这期间 docker 对网关容器做过的事', [rolled['seconds'], events])
+    r.note('带重启的发布让网关停了 5 秒多：这期间看守写的', [brief(line) for line in lines])
+    r.check('一份网关拿它起不来的快照做带重启的发布：网关停了 5 秒多，发布器把上一份放回去再重启一次（RESTORED）。'
+            '看守这期间看到网关没在跑，说的是池被占着（busy），没有动手：place 和 confirm 没有跑，网关只有发布器的那两次重启',
+            outcome(rolled) == (4, 'RESTORED') and rolled['seconds'] >= 5 and events.count('restart') == 2
+            and len(down) >= 1 and all(line.get('busy') is True and line.get('reconcile') is None for line in down)
+            and not any(acted(line) or reconciled(line).get('replaced') for line in lines)
+            and all(container(service).get('started') == ran[service] for service in ran))
+    r.check('发布器做完之后看守看到池又好了，账对得上（IN_SYNC）：在跑的是记录的那一份，启动设置也是它的',
+            bool(lines) and whole(lines[-1]) and reconciled(lines[-1]).get('outcome') == 'IN_SYNC'
+            and now['config'].get(key) == '46s' and on_disk() == tuned.text and record().get('snapshot') == tuned.sha256)
+
+    # 带重启的发布做到一半，发布器被强行杀掉：docker 已经把网关带着新设置重新起来，记录里仍是上一份（SH-11）。
+    half = Snapshot([*routes, 'w', 'z'], deadline=47)
+    mark = keeper.mark()
+    for _ in range(3):   # 发布器一开始正好撞上看守在对账时，它什么都没做就退出了：再来
+        killed = restart_killed(half, name)
+        if killed['killed']:
+            break
+    left_running = running()
+    pending = keeper.next(lambda line: reconciled(line).get('outcome') == 'RESTART_PENDING', 20, mark)
+    time.sleep(7)   # 看守又对了一次账还多
+    lines, now = list(keeper.lines[mark:]), observe()
+    r.note('带重启的发布做到一半发布器被杀掉：这期间看守写的', [brief(line) for line in lines])
+    r.check('带重启的发布做到一半，发布器被强行杀掉：网关已经带着新设置起来了。看守在下一次对账时把记录的那一份放回去，'
+            '报告启动设置还差一次重启（RESTART_PENDING），指出是哪一项',
+            killed['killed'] and pending.get('action') == '' and whole(pending) and reconciled(pending).get('replaced') is True
+            and reconciled(pending).get('restart') == [key] and reconciled(pending).get('snapshot') == tuned.sha256
+            and reconciled(pending).get('previous') == half.sha256 and on_disk() == tuned.text
+            and routes_seen(['w', 'z']) == {'w': 200, 'z': 404})
+    r.check('它自己不重启网关：又过了 7 秒（它又对了一次账还多），网关还是发布器被杀掉时的那个进程，启动设置还是新的那一套',
+            not any(acted(line) for line in lines) and same_process(left_running['agentgateway'], container('agentgateway'))
+            and now['config'].get(key) == '47s')
+    mark = keeper.mark()
+    again = patient(lambda: control_restart(None, name))
+    settled = keeper.next(lambda line: reconciled(line).get('outcome') == 'IN_SYNC', 20, mark)
+    now = observe()
+    r.check('由人来做完：不给快照的 restart 拿记录的那一份再重启一次（ACTIVE）。启动设置回来了，看守下一次对账是 IN_SYNC',
+            outcome(again) == (0, 'ACTIVE') and again['report'].get('restarted') is True and now['config'].get(key) == '46s'
+            and whole(settled) and settled.get('action') == '' and not any(acted(line) for line in keeper.lines[mark:]))
+    stopped = keeper.stop()
+    r.check('这些事做下来看守一直在跑；叫停它，以 0 退出', stopped['exit'] == 0 and not stopped['stderr'])
+    confirmed = tuned
+
+    r.case('SH-18', '看守修不好时隔得越来越久再试；它在跑时这个池停不住；叫停它、杀掉它；变量文件写得不对它不启动；头一次安装')
+    readback_key = POOL / 'tls' / 'gateway-readback.key'
+    key_bytes, key_mode = readback_key.read_bytes(), stat.S_IMODE(readback_key.stat().st_mode)
+    keeper = Keeper('--interval', '1s')
+    keeper.next(whole, 15)
+    before, mark = running(), keeper.mark()
+    readback_key.unlink()   # 网关回读口的私钥不见了：它再启动时起不来（SH-13）
+    docker('kill', before['agentgateway'].get('name', '-'))
+    failed = keeper.next(acted, 40, mark)
+    meanwhile = get('a.test', '/quick')
+    readback_key.write_bytes(key_bytes)
+    os.chmod(readback_key, key_mode)
+    attempts = keeper.wait(acted, 40, mark, count=2)
+    back = attempts[1] if len(attempts) == 2 else {}
+    healed = wait_for(answering, 20)
+    r.note(f'网关起不来时：看守写的那一行（confirm 等网关的时限在这里设成了 {CONFIRM_SECONDS} 秒）', brief(failed))
+    r.note('网关起不来时：往业务端口发请求得到的', [meanwhile.get('status'), meanwhile.get('body')])
+    r.note('私钥放回去之后：看守写的那一行', brief(back))
+    r.check('网关死了，而且起不来（它回读口的私钥不见了）。看守跑了启动命令，没有修好：它说了启动命令卡在 confirm 这一步，'
+            '隔 2 秒再试（它 1 秒看一眼）',
+            failed.get('action') == 'start' and failed.get('repaired') is False and failed.get('retry_in_seconds') == 2
+            and '"confirm" didn\'t complete successfully: exit 5' in str(failed.get('start_error'))
+            and member(failed, 'after', 'agentgateway').get('running') is False and failed.get('reconcile') is None)
+    r.check('这期间 front 一直开着，没有被动过：发往业务端口的请求得到 502', meanwhile.get('status') == 502
+            and same_process(before['front'], container('front')))
+    r.check('把私钥放回去，看守下一次再试就好了：网关起来了，账对得上，请求照常；netns 和 front 没有被动过',
+            back.get('action') == 'start' and back.get('repaired') is True and back.get('start_error') == ''
+            and reconciled(back).get('outcome') == 'IN_SYNC' and back.get('at', 0) - failed.get('at', 0) >= 2 and healed is not None
+            and all(same_process(before[service], container(service)) for service in ('netns', 'front')))
+
+    mark = keeper.mark()
+    halted = compose('stop', *SERVICES)
+    healed = wait_for(lambda: all_up() and answering(), 90, every=0.5)
+    time.sleep(3)
+    lines = list(keeper.lines[mark:])
+    r.note('看守在跑时停这个池：停止命令的退出码，和这期间看守写的', [halted.returncode, [brief(line) for line in lines]])
+    r.check('看守在跑时停这个池（docker compose stop）：停不住。看守把它起回来了：三个容器都在跑，请求照常，账对得上。'
+            '要让这个池停着，得先停看守',
+            any(acted(line) for line in lines) and healed is not None and all_up() and answering()
+            and outcome(patient(control_reconcile)) == (0, 'IN_SYNC'))
+
+    mark, since, before = keeper.mark(), time.time(), running()
+    docker('kill', before['agentgateway'].get('name', '-'))
+    caught = wait_for(keeper.composing, 15, every=0.02)
+    stopped = keeper.stop()   # 它正跑着启动命令
+    last, confirming = (keeper.lines[mark:] or [{}])[-1], step('confirm')
+    r.note('看守正跑着启动命令时叫停它：从发信号到它退出过了多少秒', stopped['seconds'])
+    r.note('看守正跑着启动命令时叫停它：它最后写的那一行', brief(last))
+    r.check('看守正跑着启动命令时叫停它（SIGTERM）：它把这条命令跑完才退出，退出码 0；池没有停在半路：三个容器都在跑，'
+            'confirm 是 IN_SYNC，请求照常',
+            caught is not None and stopped['exit'] == 0 and not stopped['stderr'] and last.get('action') == 'start'
+            and last.get('repaired') is True and all_up() and outcome(confirming) == (0, 'IN_SYNC')
+            and since < confirming['finished'] <= stopped['at'] and wait_for(answering, 10) is not None)
+
+    keeper = Keeper('--interval', '1s')
+    keeper.next(whole, 15)
+    before = running()
+    killed = keeper.stop(signal.SIGKILL)
+    time.sleep(2)
+    with open(lock_file, 'r+b') as held_lock:
+        try:
+            fcntl.flock(held_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            free = True
+        except BlockingIOError:
+            free = False
+    r.check('看守闲着时被强行杀掉（SIGKILL）：池不受影响，三个常驻容器没有动，请求照常；配置目录的锁空着，目录里没有多出东西',
+            killed['exit'] == -signal.SIGKILL and free and all(same_process(before[service], container(service)) for service in LONG_RUNNING)
+            and answering() and leftovers()['配置目录'] == CLEAN['配置目录'])
+
+    keeper = Keeper('--interval', '1s')
+    again = keeper.next(whole, 15)
+    stopped = keeper.stop()
+    halted = compose('stop', *SERVICES)
+    time.sleep(5)
+    r.check('再起一个看守，它照常（whole，IN_SYNC）。先叫停它（它闲着，立刻以 0 退出），再停这个池：停住了，过了 5 秒三个容器都还停着',
+            reconciled(again).get('outcome') == 'IN_SYNC' and stopped['exit'] == 0 and stopped['seconds'] < 3
+            and halted.returncode == 0 and not any(container(service).get('running') for service in LONG_RUNNING))
+
+    # 变量文件：看守把自己的环境交给 docker compose，docker compose 先用环境里的。systemd 读法不同的行、环境里另一个值，
+    # 都会让它跑的启动命令拿到另一套设置。池这时停着：看守要是启动了，会把它起起来。
+    commented = CONTROL / 'commented.env'
+    listen = f"CALLERS_LISTEN=127.0.0.1:{HOST['front']}\n"
+    commented.write_text(POOL_ENV.read_text(encoding='utf-8').replace(listen, listen.rstrip() + ' # 只给本机\n'), encoding='utf-8')
+    unread = Keeper('--interval', '1s', env_file=commented)
+    refused = unread.ended()
+    unlike = Keeper('--interval', '1s', more={'CONFIRM_TIMEOUT': '99s'})
+    differing_value = unlike.ended()
+    r.note('变量文件里有一行的值后面跟着注释：看守说了什么', refused['stderr'])
+    r.note('环境里有一个变量与变量文件里的值不同：看守说了什么', differing_value['stderr'])
+    r.check('变量文件里有一行的值后面跟着注释（systemd 会把注释也读进值里）：看守不启动，退出码 2，指出是哪个文件的哪一行，'
+            '那一行的内容不写出来',
+            POOL_ENV.read_text(encoding='utf-8').startswith(listen) and refused['exit'] == 2
+            and any(f'env file {commented}, line 1: only NAME=value lines are accepted' in line for line in refused['stderr'])
+            and not any('只给本机' in line or '127.0.0.1:' in line for line in refused['stderr']))
+    r.check('环境里有一个变量与变量文件里的值不同：看守不启动，退出码 2，指出是哪个变量，两个值都不写出来',
+            differing_value['exit'] == 2
+            and any('CONFIRM_TIMEOUT has another value in the environment of this command' in line for line in differing_value['stderr'])
+            and not any(value in line.replace(str(POOL_ENV), '') for line in differing_value['stderr']
+                        for value in ('99s', f'{CONFIRM_SECONDS}s')))
+    r.check('这两次它什么都没做：没有写出一行，停着的池没有被起起来',
+            not unread.lines and not unlike.lines and not any(container(service).get('running') for service in LONG_RUNNING))
+
+    # 头一次安装时看守已经在跑。先把这个池整个拆掉：容器都删了，配置目录里只有第一份快照。
+    opening = Snapshot(['a', 'x'])
+    compose('down', '--timeout', '2')
+    shutil.rmtree(POOL / 'config')
+    (POOL / 'config').mkdir()
+    compose('up', '-d', 'echo')
+    config_file.write_text(opening.text, encoding='utf-8')
+    os.chmod(config_file, 0o644)
+    keeper = Keeper('--interval', '1s', '--reconcile-interval', '1s')
+    attempts = keeper.wait(acted, 90, count=4)
+    front, closed = container('front'), get('a.test', '/quick')
+    mark = keeper.mark()
+    done = patient(lambda: control(opening))   # 用发布器把这一份发布一次：这个池有了第一条记录
+    published = time.time()
+    agreed = keeper.next(lambda line: not acted(line) and reconciled(line).get('outcome') == 'IN_SYNC', 30, mark)
+    opened = keeper.next(lambda line: acted(line) and line.get('repaired'), 30, mark)
+    healed = wait_for(answering, 20)
+    r.note('一个全新的池上看守头四次跑启动命令：各次写的', [brief(line) for line in attempts])
+    r.note('发布了第一份之后看守写的两行：账对上了的那一行，开了 front 的那一行', [brief(agreed), brief(opened)])
+    opened_at = moment(container('front').get('started') or '')
+    r.note('从第一份发布做完到 front 启动过了多少秒；这时离原定的下一次再试还有多少秒',
+           [round(opened_at - published, 2), round(attempts[-1]['at'] + 16 - opened_at, 2)] if opened and len(attempts) == 4 else None)
+    r.check('一个全新的池（容器都没有，配置目录里只有第一份快照，没有记录）上启动看守：它跑启动命令，网关起来了，confirm 没有可对的，'
+            'front 不开。它隔 2、4、8、16 秒再试，每次都报告账还没有可对的（UNCONFIRMED）',
+            len(attempts) == 4 and [line.get('retry_in_seconds') for line in attempts] == [2, 4, 8, 16]
+            and all(line.get('action') == 'start' and line.get('repaired') is False
+                    and '"confirm" didn\'t complete successfully: exit 3' in str(line.get('start_error'))
+                    and reconciled(line).get('outcome') == 'UNCONFIRMED' and member(line, 'after', 'agentgateway').get('running') is True
+                    and member(line, 'after', 'front').get('running') is False for line in attempts)
+            and 'the front proxy is not running (there is no such container)' in str(attempts[0].get('why'))
+            and front.get('status') == 'created' and closed['status'] is None)
+    r.check('用发布器发布第一份（ACTIVE）。看守下一次对账时看到账对上了（IN_SYNC），不再等到原定的时候：下一眼就跑启动命令，'
+            'front 开了，请求照常',
+            outcome(done) == (0, 'ACTIVE') and agreed.get('condition') == 'down' and agreed.get('retry_in_seconds') == 0
+            and opened.get('action') == 'start' and opened.get('start_error') == '' and reconciled(opened).get('outcome') == 'IN_SYNC'
+            and 0 < agreed.get('at', 0) <= opened.get('at', 0) and len(attempts) == 4 and opened['at'] < attempts[-1]['at'] + 16
+            and healed is not None and routes_seen(['a', 'x']) == {'a': 200, 'x': 200} and record().get('snapshot') == opening.sha256)
+    stopped = keeper.stop()
+    left = leftovers()
+    r.note('五条命令都用过之后', left)
+    r.check('叫停看守，以 0 退出。五条命令都用过之后没有留下别的东西', stopped['exit'] == 0 and not stopped['stderr'] and left == CLEAN)
+
+    unit_command_case(r, opening)
+
+
+def unit_command_case(r: Results, confirmed: Snapshot):
+    """SH-19。开始时这套用例的池在跑（看守已经停了），confirmed 是池的目录里最后一次得到确认的那份快照。
+    这一条先把那个池拆掉，再拿同一个池的目录，照两个单元文件里写的命令起一个：命令在安装目录里跑，
+    docker compose 的项目和文件都不另给。这个池没有后端，所以不往路由上发请求：front 开没开，看一条没有的路由
+    是不是得到网关的 404。"""
+    r.case('SH-19', '两个 systemd 单元里写的命令原样跑一遍：在放着 compose.yml 和 .env 的目录里，docker compose 的项目和文件都不另给')
+    pool_unit, keep_unit = unit_commands('idp-gateway-pool.service'), unit_commands('idp-gateway-pool-keep.service')
+    settings = pool_settings()
+    # 两条命令的环境：不带部署文件的变量，也不带 COMPOSE_ 开头的。看守的那一条另加 .env 里的各个变量：
+    # 它的单元由 systemd 读了 .env 交给它的就是这样。
+    plain = {name: value for name, value in compose_environment().items() if name not in ('TOOLS_IMAGE', 'PROBE')}
+
+    def nowhere() -> bool:
+        return get('nowhere.test', '/quick')['status'] == 404
+
+    def run_in_place(words: list[str]) -> subprocess.CompletedProcess:
+        return subprocess.run(words, cwd=HOSTED, env=plain, capture_output=True, text=True, timeout=300)
+
+    compose('down', '--timeout', '2')   # 这套用例自己的池让出两个端口
+    others = sorted(c['name'] for c in hosted().values()) + hosted_networks()
+    r.note(f'开始之前，这台机器上叫 {DEPLOYED_PROJECT} 的 compose 项目的容器和网络', others)
+    if not r.check(f'这台机器上没有叫 {DEPLOYED_PROJECT} 的 compose 项目（部署文件自己的项目名）。有的话这一条不动它，后面的也就没有跑', not others):
+        return
+    HOSTED.mkdir()
+    for name in ('compose.yml', 'front.nginx.conf'):
+        shutil.copy2(DEPLOY / name, HOSTED / name)
+    shutil.copy2(POOL_ENV, HOSTED / '.env')
+    HOSTED_MARK.write_text(DEPLOYED_PROJECT + '\n', encoding='utf-8')
+
+    up = run_in_place(pool_unit.get('ExecStart') or ['false'])
+    opened = wait_for(nowhere, 20)
+    first, now = hosted(), observe()
+    placed, confirming = step_of(first.get('place', {})), step_of(first.get('confirm', {}))
+    r.note('池的单元的启动命令和停止命令（原样）', [pool_unit.get('ExecStart'), pool_unit.get('ExecStop')])
+    r.note('docker compose 记在容器上的项目目录和它用的 compose 文件', sorted({(c['directory'], c['files']) for c in first.values()}))
+    r.check('池的单元的启动命令（ExecStart=，原样）在安装目录里跑：退出码 0。命令里没有给项目和文件，docker compose 自己找到了'
+            '那个目录里的 compose.yml 和 .env：项目名是部署文件里写的那个，五个服务各一个容器',
+            up.returncode == 0 and pool_unit.get('ExecStart', [''])[0] == '/usr/bin/docker'
+            and not any(word.startswith('-') and word != '-d' for word in pool_unit['ExecStart'])
+            and sorted(first) == sorted(SERVICES)
+            and all(c['name'] == f'{DEPLOYED_PROJECT}-{service}-1' for service, c in first.items())
+            and {(c['directory'], c['files']) for c in first.values()} == {(str(HOSTED), str(HOSTED / 'compose.yml'))})
+    r.check('这个池照部署文件的先后起来了：place 是 IN_PLACE，confirm 是 IN_SYNC，网关在跑的是记录的那一份，front 开了',
+            outcome(placed) == (0, 'IN_PLACE') and outcome(confirming) == (0, 'IN_SYNC') and opened is not None
+            and all(first.get(service, {}).get('running') for service in LONG_RUNNING)
+            and now['reload'] == LOADED and now['digest'] == record().get('digest') and on_disk() == confirmed.text)
+
+    argv = filled_in(keep_unit.get('ExecStart') or ['false'], settings)
+    keeper = Keeper(command=argv, cwd=HOSTED, environment={**plain, **settings})
+    began = keeper.next(lambda line: True, 20)
+    time.sleep(2)
+    r.note('看守的单元的命令行，${…} 换成 .env 里的值之后', argv)
+    r.check('看守的单元的命令行（ExecStart=，${…} 换成 .env 里的值）在同一个目录里跑，环境里带着 .env 的各个变量。命令行里没有给它'
+            ' docker compose 的项目、文件和变量文件；它看的就是这个池（whole），账对得上（IN_SYNC），没有动手',
+            argv[:3] == ['/usr/bin/env', str(CONTROL_BINARY), 'keep'] and not any(word.startswith('--compose') for word in argv)
+            and whole(began) and began.get('action') == '' and reconciled(began).get('outcome') == 'IN_SYNC'
+            and reconciled(began).get('snapshot') == confirmed.sha256 and len(keeper.lines) == 1 and not keeper.said)
+
+    ran = []
+
+    def composing() -> bool:
+        ran.extend(line for line in keeper.children() if line.endswith(' up -d'))
+        return bool(ran)
+
+    before, mark, since = hosted(), keeper.mark(), time.time()
+    docker('kill', before.get('agentgateway', {}).get('id', '-'))
+    caught = wait_for(composing, 30, every=0.02)
+    back = keeper.next(acted, 40, mark)
+    healed = wait_for(nowhere, 20)
+    after, now = hosted(), observe()
+    r.note('网关被杀掉之后看守跑的那条命令（它的子进程的命令行）', ran[:1])
+    r.note('网关被杀掉：看守写的那一行', brief(back))
+    r.check('网关被强行杀掉：看守在那个目录里跑的启动命令是 docker compose -p <部署文件里写的项目名> up -d，没有给文件。'
+            '它把网关起回来了（start），账对得上，front 照常',
+            caught is not None and ran[:1] == [f'docker compose -p {DEPLOYED_PROJECT} up -d']
+            and back.get('action') == 'start' and back.get('condition') == 'down'
+            and back.get('why') == 'the gateway is not running (exited (137))' and back.get('repaired') is True
+            and back.get('start_error') == '' and reconciled(back).get('outcome') == 'IN_SYNC' and healed is not None
+            and now['reload'] == LOADED and now['digest'] == record().get('digest'))
+    r.check('这条命令拿到的设置与池的单元的启动命令拿到的相同：没有哪个容器被重建，五个还是原来那五个；netns 和 front 没有被动过，'
+            '网关换了一个进程；place 和 confirm 各又跑了一遍（IN_PLACE、IN_SYNC）',
+            len(after) == 5 and {service: c['id'] for service, c in after.items()} == {service: c['id'] for service, c in before.items()}
+            and all(same_process(before[service], after[service]) for service in ('netns', 'front'))
+            and bool(after['agentgateway']['running']) and after['agentgateway']['pid'] != before['agentgateway']['pid']
+            and outcome(step_of(after['place'])) == (0, 'IN_PLACE') and outcome(step_of(after['confirm'])) == (0, 'IN_SYNC')
+            and all(moment(after[service]['started']) >= since for service in ('place', 'confirm')))
+
+    stopped = keeper.stop()
+    halted = run_in_place(pool_unit.get('ExecStop') or ['false'])
+    time.sleep(3)
+    resting = hosted()
+    r.check('停，照 systemctl stop 池的单元时的先后（units.py 的 UN-03）：先叫停看守，它以 0 退出；再跑池的单元的停止命令'
+            '（ExecStop=，原样）：退出码 0，三个常驻容器都停了，过了 3 秒还停着',
+            stopped['exit'] == 0 and not stopped['stderr'] and halted.returncode == 0 and len(resting) == 5
+            and not any(c['running'] for c in resting.values()))
+    down = run_in_place(['docker', 'compose', 'down', '--volumes', '--timeout', '2'])
+    left = sorted(c['name'] for c in hosted().values()) + hosted_networks()
+    r.note('拆掉之后这台机器上这个项目还剩什么', left)
+    r.check('在那个目录里 docker compose down 之后，这台机器上没有留下这个项目的容器和网络', down.returncode == 0 and not left)
 
 
 if __name__ == '__main__':

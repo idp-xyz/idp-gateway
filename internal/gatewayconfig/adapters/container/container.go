@@ -4,6 +4,9 @@
 // 单机上一个池只有这一个网关实例，重启期间新来的请求没有别处可去。在途的请求有多久做完，
 // 由网关配置里的 connectionTerminationDeadline 和容器的停止时限两样决定：容器的停止时限更短时，
 // 到时 docker 会直接杀掉进程。
+//
+// pool.go 是整个池：deploy/compose 的那个 docker compose 项目。看池里常驻的容器在不在跑、
+// 把没在跑的起回来，用的也是本机的 docker 命令行，做法与 tests/integration/compose 的 SH-16 到 SH-18 相同。
 package container
 
 import (

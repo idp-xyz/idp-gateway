@@ -1,5 +1,5 @@
 // Package ports 是配置发布对外部的要求：发布之前在哪里试着加载一份快照，快照怎么送到一个池的
-// 网关那里，网关在跑什么从哪里读，网关进程怎么重启。
+// 网关那里，网关在跑什么从哪里读，网关进程怎么重启，池的容器死了怎么起回来。
 //
 // 这几样都是对着一个池说的。平台不同，实现不同；第一期是单机上的 docker compose
 // （docs/adr/ADR-0010.md 第 10 条）。
@@ -62,4 +62,18 @@ type Process interface {
 	// Restart 让网关停下再起来。返回时新的进程已经被启动，但不保证它起得来：那要经回读口看。
 	// 停下之前在途的请求有多久做完，由池的部署决定。开始之后不随 ctx 取消。
 	Restart(ctx context.Context) error
+}
+
+// Pool 是单机上一个池里常驻的那几个容器，和启动这个池的那条命令。只有单机上才有它：
+// 别的平台上，容器死了由平台自己起回来。
+type Pool interface {
+	// Members 报告三个常驻容器此刻的样子。
+	Members(ctx context.Context) (domain.Members, error)
+	// Start 跑启动这个池的命令：没有在跑的容器按部署规定的先后起起来，网关启动之前先把确认过的那份
+	// 配置放到位，回读对上了才开前置代理。在跑着的容器它不动。返回错误表示有一步没有通过，
+	// 它后面的容器没有启动。开始之后不随 ctx 取消。
+	Start(ctx context.Context) error
+	// StopDependents 停下接在网络命名空间里的两个容器：前置代理先停，然后是网关。
+	// 占着命名空间的那个它不动。开始之后不随 ctx 取消。
+	StopDependents(ctx context.Context) error
 }

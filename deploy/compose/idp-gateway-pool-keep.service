@@ -1,0 +1,54 @@
+# 看守：守着这个池（deploy/compose/README.md 的"看守"）。跑的是 gateway-control keep：池里常驻的容器
+# 有没在跑的，它跑 docker compose up -d，让它们按 compose.yml 规定的先后起回来；网关在跑时，它每分钟
+# 对一次账。
+#
+# 装之前改两样：
+#   WorkingDirectory、EnvironmentFile   compose.yml 和 .env 所在的目录，与 idp-gateway-pool.service 里的相同
+#   User、Group                         .env 里 CONTROL_USER 的那个账号：池的配置目录的属主，要用得了 docker
+# 然后：
+#
+#   sudo install -m 0644 idp-gateway-pool-keep.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now idp-gateway-pool-keep.service
+#
+# 它跟着 idp-gateway-pool.service 走：那个单元启动时它跟着启动（等那边的启动命令跑完），那个单元停下或者
+# 重启时它先停。它在跑的时候，停下来的容器会被它起回来：要让这个池停着，停的是 idp-gateway-pool.service。
+# 它自己死了由 systemd 重新起来，池不受影响。
+#
+# systemd 也要读 .env：下面的 ${…} 取自它，看守跑 docker compose 时用的也是它读出来的值。所以 .env 里
+# 每一行只写 名字=值，值不加引号、后面不跟注释、里面没有空白、$、# 和反斜杠：别的写法 systemd 和
+# docker compose 读出来不一样。看守启动时会核对，不合要求就以退出码 2 结束，是哪一行写在日志里。
+#
+# 它写的每一行 JSON 在 journalctl -u idp-gateway-pool-keep.service 里。
+#
+# 这个单元没有在真机上跑过，见 README.md 的"没有验证的"。
+
+[Unit]
+Description=IDP Gateway pool keeper on this host (gateway-control keep)
+Requires=docker.service
+After=docker.service idp-gateway-pool.service
+PartOf=idp-gateway-pool.service
+
+[Service]
+Type=simple
+User=idp-gateway
+Group=idp-gateway
+WorkingDirectory=/opt/idp-gateway/deploy/compose
+EnvironmentFile=/opt/idp-gateway/deploy/compose/.env
+# 第一个词不能是变量，所以经 env 去跑 .env 里 GATEWAY_CONTROL 指的那个文件：与 place、confirm 跑的是同一个。
+# docker compose 的项目和文件不用给：它在 WorkingDirectory 里跑，找到的就是那里的 compose.yml 和 .env。
+ExecStart=/usr/bin/env ${GATEWAY_CONTROL} keep \
+    --config-dir ${POOL_DIR}/config \
+    --read-back 127.0.0.1:${READBACK_PORT} --read-back-name ${READBACK_NAME} \
+    --tls-cert ${PUBLISHER_CERT} --tls-key ${PUBLISHER_KEY} --tls-ca ${READBACK_CA}
+Restart=always
+RestartSec=5
+# 命令行或者 .env 写得不对（退出码 2）时再起一次也一样：不重新起，单元的状态是 failed。
+RestartPreventExitStatus=2
+# 停的时候只给看守发终止信号，它手上的那条 docker compose 命令由它跑完；到 TimeoutStopSec 还没完，一起杀掉。
+# gateway-control keep 让一条 docker compose 命令最多跑 3 分钟。
+KillMode=mixed
+TimeoutStopSec=200
+
+[Install]
+WantedBy=idp-gateway-pool.service

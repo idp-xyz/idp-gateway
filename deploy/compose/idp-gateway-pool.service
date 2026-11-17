@@ -10,6 +10,9 @@
 # 先后见 compose.yml。对账没有通过时 up 以非零码结束，这个单元的状态是 failed，front 没有启动：
 # 看 docker compose logs place confirm，处理之后 systemctl restart idp-gateway-pool.service。
 #
+# 容器死了把它们起回来的是另一个单元：idp-gateway-pool-keep.service（看守）。装了它，它跟着这个单元
+# 启动和停下；这个单元启动失败时它照样起来，隔一阵再跑一次启动命令。见 README.md 的"看守"。
+#
 # 这个单元没有在真机上跑过，见 README.md 的"没有验证的"。
 
 [Unit]

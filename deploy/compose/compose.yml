@@ -14,7 +14,8 @@
 #
 # 每个容器都写了 restart: "no"，docker 自己不去起其中任何一个：由 docker 起来的网关不经过 place，
 # 读到的是目录里当时放着的文件，不管有没有人确认过它。机器开机时启动这个池的是
-# idp-gateway-pool.service，它做的就是 docker compose up -d。
+# idp-gateway-pool.service，它做的就是 docker compose up -d。容器死了，把它们起回来的是看守
+# （idp-gateway-pool-keep.service，跑的是 gateway-control keep）：它跑的也是这条命令。
 name: idp-gateway-pool
 
 x-locked-down: &locked-down

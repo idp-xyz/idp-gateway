@@ -198,6 +198,36 @@ func TestHoldIsExclusive(t *testing.T) {
 	}
 }
 
+// 换一个账号来占（比如忘了降权的 root）：被挡下，目录里什么都没有多出来。
+func TestOnlyTheOwnerOfTheDirectoryCanHoldIt(t *testing.T) {
+	directory, dir := open(t)
+	owner := os.Geteuid()
+	euid = func() int { return owner + 1 }
+	t.Cleanup(func() { euid = os.Geteuid })
+
+	_, err := directory.Hold(ctx)
+	if err == nil || errors.Is(err, ports.ErrBusy) || !strings.Contains(err.Error(), "run it as the owner of that directory") {
+		t.Fatalf("得到 %v", err)
+	}
+	if found := names(t, dir); len(found) != 0 {
+		t.Fatalf("目录里多出了 %v", found)
+	}
+
+	// 属主自己照常占得到；目录不见了是另一种错。
+	euid = os.Geteuid
+	release, err := directory.Hold(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := directory.Hold(ctx); err == nil || strings.Contains(err.Error(), "owner") {
+		t.Fatalf("得到 %v", err)
+	}
+}
+
 func TestNewRefusesWhatIsNotADirectoryAndAPlainName(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "a-file")
