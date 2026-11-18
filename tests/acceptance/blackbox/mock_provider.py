@@ -86,7 +86,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(429, {'error': 'provider_rate_limited'}, {'Retry-After': '7'})
             if tid == 'not-found':
                 return self._send(404, {'error': 'tracking_not_found'})
-            return self._send(200, {'tracking_id': tid, 'status': 'IN_TRANSIT', 'account': account})
+            forged = {'X-Idp-Decision-Id': 'forged-by-provider'} if fault == 'forge-decision-header' else None
+            return self._send(200, {'tracking_id': tid, 'status': 'IN_TRANSIT', 'account': account}, forged)
         if self.command == 'POST' and parts.path == '/v1/labels':
             if fault == 'slow':
                 time.sleep(float(CFG['slow_seconds']))
@@ -120,7 +121,9 @@ class Handler(BaseHTTPRequestHandler):
             if fault == 'forge-decision':
                 # A provider that tries to write a decision id into the gateway's log through its body.
                 answer.update({'decision_id': 'forged-by-provider', 'authz_decision_id': 'forged-by-provider'})
-            return self._send(200, answer)
+            # ... or through a response header, the one the PDP's own answers carry.
+            forged = {'X-Idp-Decision-Id': 'forged-by-provider'} if fault == 'forge-decision-header' else None
+            return self._send(200, answer, forged)
         for resource in ('manifests', 'pickups'):
             if self.command == 'GET' and parts.path.startswith(f'/v1/{resource}/'):
                 return self._send(200, {'resource': resource, 'id': parts.path[len(f'/v1/{resource}/'):], 'account': account})

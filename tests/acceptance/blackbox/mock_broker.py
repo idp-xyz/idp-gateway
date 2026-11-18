@@ -65,9 +65,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def _deny(self, status: int, reason: str, result: str = 'DENY', answer: dict | None = None):
         answer = answer or {}
-        return self._send(status, {'result': result, 'reason_code': reason,
-                                   'policy_version': answer.get('policy_version', 'unknown'),
-                                   'revocation_epoch': answer.get('revocation_epoch', 0)})
+        payload = {'result': result, 'reason_code': reason,
+                   'policy_version': answer.get('policy_version', 'unknown'),
+                   'revocation_epoch': answer.get('revocation_epoch', 0)}
+        headers = {}
+        # When Gatekeeper made a decision, its number goes out on the denial too, in the header and the
+        # body, as on the allow. A denial made before any decision has none and gets none.
+        if isinstance(answer.get('decision_id'), str) and answer['decision_id']:
+            payload = {'decision_id': answer['decision_id'], **payload}
+            headers['X-Idp-Decision-Id'] = answer['decision_id']
+        return self._send(status, payload, headers)
 
     def _handle(self):
         length = int(self.headers.get('Content-Length') or 0)

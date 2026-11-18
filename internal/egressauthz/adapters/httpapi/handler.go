@@ -45,6 +45,9 @@ const (
 	headerAccount = "X-Provider-Account"
 )
 
+// headerDecisionID 是 ExtAuthZ 应答里的判定编号：放行和做出了判定的拒绝都带，没走到判定的不带。
+const headerDecisionID = "X-Idp-Decision-Id"
+
 const (
 	resultAllow         = "ALLOW"
 	resultDeny          = "DENY"
@@ -135,8 +138,10 @@ type allowBody struct {
 	RevocationEpoch uint64 `json:"revocation_epoch"`
 }
 
-// denialBody 对应契约里的 ExtAuthzDenial。
+// denialBody 对应契约里的 ExtAuthzDenial。DecisionID 只在已经做出（或试图做出）一次判定时有：
+// 没走到判定就被挡下的请求（身份不对、可信上下文有歧义）没有编号，字段省略，也不另造一个。
 type denialBody struct {
+	DecisionID      string `json:"decision_id,omitempty"`
 	Result          string `json:"result"`
 	ReasonCode      string `json:"reason_code"`
 	PolicyVersion   string `json:"policy_version"`
@@ -174,16 +179,18 @@ func (h *Handler) extAuthz(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err != nil:
 		// 判定没能完成。按拒绝处理，但用 503 与策略拒绝区分开。
-		writeJSON(w, http.StatusServiceUnavailable, denialBody{Result: resultIndeterminate, ReasonCode: out.Reason,
+		w.Header().Set(headerDecisionID, out.DecisionID)
+		writeJSON(w, http.StatusServiceUnavailable, denialBody{DecisionID: out.DecisionID, Result: resultIndeterminate, ReasonCode: out.Reason,
 			PolicyVersion: out.PolicyVersion, RevocationEpoch: out.RevocationEpoch})
 		h.record(r, PathExtAuthz, caller, http.StatusServiceUnavailable, resultIndeterminate, in, out, err)
 	case !out.Allowed:
-		writeJSON(w, http.StatusForbidden, denialBody{Result: resultDeny, ReasonCode: out.Reason,
+		w.Header().Set(headerDecisionID, out.DecisionID)
+		writeJSON(w, http.StatusForbidden, denialBody{DecisionID: out.DecisionID, Result: resultDeny, ReasonCode: out.Reason,
 			PolicyVersion: out.PolicyVersion, RevocationEpoch: out.RevocationEpoch})
 		h.record(r, PathExtAuthz, caller, http.StatusForbidden, resultDeny, in, out, nil)
 	default:
 		w.Header().Set("Authorization", credential.Reveal())
-		w.Header().Set("X-Idp-Decision-Id", out.DecisionID)
+		w.Header().Set(headerDecisionID, out.DecisionID)
 		writeJSON(w, http.StatusOK, allowBody{DecisionID: out.DecisionID, Result: resultAllow, ReasonCode: out.Reason,
 			PolicyVersion: out.PolicyVersion, RevocationEpoch: out.RevocationEpoch})
 		h.record(r, PathExtAuthz, caller, http.StatusOK, resultAllow, in, out, nil)

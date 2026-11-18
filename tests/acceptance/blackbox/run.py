@@ -2269,9 +2269,11 @@ def _(c):
             and data.get('ReferenceId') == ref)
 
 
-@case('P1-CO-06', 'calls the PDP refuses',
-      'the gateway line for a refused call has no decision id and no reference number, and the 403 body has none either (the limit '
-      'as it is today); gateway-authz has one DENY line for the refusal, with a decision id of its own',
+@case('P1-CO-06', 'calls the PDP refuses, and a call the PDP cannot be asked about',
+      'a refused call carries the id of the decision that refused it: the caller\'s 403 has it in the X-Idp-Decision-Id header and as '
+      'decision_id in the body, the same one; the gateway line has it as authz_decision_id; gateway-authz has exactly one DENY line '
+      'with it; nothing is forwarded. The line has no reference number (1.7.0 reads no request body on a refused call). When the PDP '
+      'cannot be asked there is no decision and the line has no decision id',
       ('GW-FR-017',))
 def _(c):
     def refused(name, token_fn, before=None, after=None):
@@ -2288,24 +2290,41 @@ def _(c):
                 after()
         body = body_json(r)
         f = line_fields(reqs[-1]) if reqs else {}
+        in_header = header(r, 'x-idp-decision-id')
         c.note(f'{name}: the gateway line', {k: f.get(k) for k in ('http.status', 'reason', 'authz_decision_id', 'tenant_ref', 'provider_reference_id')})
         c.note(f'{name}: the 403 body', {k: v for k, v in body.items()})
+        c.note(f'{name}: the X-Idp-Decision-Id header of the 403', in_header)
         c.check(f'{name}: 403 with the PDP\'s reason, nothing forwarded', r['status'] == 403 and 'reason_code' in body and len(provider_hits()) == 0)
+        decision = body.get('decision_id')
+        c.check(f'{name}: the 403 carries a decision id, in the header and in the body, the same one',
+                isinstance(decision, str) and decision != '' and in_header == [decision])
         c.check(f'{name}: one gateway line', len(reqs) == 1)
-        c.check(f'{name}: the line has no decision id and no reference number',
-                'authz_decision_id' not in f and 'provider_reference_id' not in f and ref not in (reqs[-1] if reqs else ref))
-        c.check(f'{name}: gateway-authz wrote one line for it, a DENY', len(decisions) == 1 and decisions[0].get('result') == 'DENY')
-        # The limit, recorded and not wished away: the PDP's 403 body has no decision id (denialBody in
-        # internal/egressauthz/adapters/httpapi), and the gateway line has none either. gateway-authz did
-        # give the refusal an id and logged it; a caller or an operator can match the two only by route,
-        # tenant and time.
-        c.note(f'{name}: decision id in the gateway-authz line', decisions[0].get('decision_id') if decisions else None)
-        c.check(f'{name}: the 403 body carries no decision id (the limit as it is), while gateway-authz logged one for the refusal',
-                'decision_id' not in body and bool(decisions) and bool(decisions[0].get('decision_id')))
+        c.check(f'{name}: the line has that decision id as authz_decision_id', bool(decision) and f.get('authz_decision_id') == decision)
+        c.check(f'{name}: gateway-authz wrote exactly one line for the call, a DENY with that decision id',
+                len(decisions) == 1 and decisions[0].get('result') == 'DENY' and bool(decision) and decisions[0].get('decision_id') == decision)
+        # What 1.7.0 does, as it is: a refused call has no request body to read for the log, so the line has no
+        # reference number. The decision id is what leads from a refusal to both ends.
+        c.check(f'{name}: the line has no reference number',
+                'provider_reference_id' not in f and ref not in (reqs[-1] if reqs else ref))
         reset_all()
     refused('a tenant with no grant', lambda: blue(tenant_id='tenant-red'))
     refused('a revoked account', blue, before=lambda: pdp_admin('/admin/revoke?account=account-blue'),
             after=lambda: pdp_admin('/admin/restore?account=account-blue'))
+
+    # No decision, no id: the PDP is down and the gateway answers 503 itself.
+    stop('gateway-authz', PORTS['gatekeeper'])
+    try:
+        mark_gw = gateway_log_size()
+        r = gw('POST', LABELS, blue(), JSON_CT, create_body(new_reference()))
+        reqs = gateway_request_lines(mark_gw)
+    finally:
+        start_gatekeeper()
+    f = line_fields(reqs[-1]) if reqs else {}
+    c.note('the PDP cannot be asked: the gateway line', {k: f.get(k) for k in ('http.status', 'reason', 'authz_decision_id', 'tenant_ref')})
+    c.check('the PDP cannot be asked: 503 from the gateway itself, with no decision id in the header or the body',
+            r['status'] == 503 and answered_by_the_gateway(r) and not header(r, 'x-idp-decision-id') and 'decision_id' not in body_json(r))
+    c.check('the PDP cannot be asked: one gateway line, without authz_decision_id', len(reqs) == 1 and 'authz_decision_id' not in f)
+    reset_all()
 
 
 @case('P1-CO-07', 'what the logs hold of a call that carries token-like strings, a JWT and credentials',
@@ -2330,8 +2349,9 @@ def _(c):
         c.check(f'{name}: no broker key and no session key', S.broker_key not in text and S.session_key not in text)
 
 
-@case('P1-CO-08', 'a route that does not ask the PDP, with a provider answer that names a decision',
-      'the gateway line has no decision id: it comes from the PDP\'s answer header only, not from anything a provider says',
+@case('P1-CO-08', 'a provider that names a decision in its answer, in the body or in a header',
+      'the decision id on the gateway line is only ever the PDP\'s: a provider\'s body cannot write it, and a provider\'s X-Idp-Decision-Id '
+      'header is removed before the caller or the log expression sees it, on a route that asks the PDP and on one that does not',
       ('GW-FR-017',))
 def _(c):
     mark = gateway_log_size()
@@ -2339,7 +2359,7 @@ def _(c):
     reqs = gateway_request_lines(mark)
     body = body_json(r)
     f = line_fields(reqs[-1]) if reqs else {}
-    c.note('gateway_line_fields', {k: f.get(k) for k in ('route', 'authz_decision_id', 'tenant_ref', 'provider_reference_id', 'provider_request_id')})
+    c.note('body_forged_gateway_line_fields', {k: f.get(k) for k in ('route', 'authz_decision_id', 'tenant_ref', 'provider_reference_id', 'provider_request_id')})
     c.check('200, and the answer the caller got does name a decision (so there was something to copy)',
             r['status'] == 200 and body.get('decision_id') == 'forged-by-provider')
     c.check('one gateway line, on the static-credential route', len(reqs) == 1 and f.get('route') == 'default/mockcarrier-rates-get-static')
@@ -2347,6 +2367,32 @@ def _(c):
     c.check('nothing of the forged id is in the line', 'forged-by-provider' not in (reqs[-1] if reqs else 'forged-by-provider'))
     c.check('the tenant is on the line all the same', f.get('tenant_ref') == 'tenant-blue')
     c.check('gateway-authz was not asked', len(pdp_log()) == 0)
+
+    # The same through a response header, on the route that does not ask the PDP.
+    mark = gateway_log_size()
+    r = gw('GET', RATES + '?fault=forge-decision-header', blue())
+    reqs = gateway_request_lines(mark)
+    f = line_fields(reqs[-1]) if reqs else {}
+    c.note('header_forged_no_pdp_gateway_line_fields', {k: f.get(k) for k in ('route', 'authz_decision_id', 'tenant_ref')})
+    c.check('header forged, route without a PDP: 200 with the provider\'s answer', r['status'] == 200 and body_json(r).get('rate') == '12.34')
+    c.check('...the caller\'s answer has no X-Idp-Decision-Id header', header(r, 'x-idp-decision-id') == [])
+    c.check('...one gateway line, on the static-credential route, without authz_decision_id',
+            len(reqs) == 1 and f.get('route') == 'default/mockcarrier-rates-get-static' and 'authz_decision_id' not in f)
+    c.check('...nothing of the forged id is in the line', 'forged-by-provider' not in (reqs[-1] if reqs else 'forged-by-provider'))
+
+    # And on a route that asks the PDP: the PDP allows, then the provider writes the header.
+    mark_gw, mark_az = gateway_log_size(), authz_log_size()
+    r = gw('GET', TRACKING + '/TRK-CO8?fault=forge-decision-header', blue())
+    reqs = gateway_request_lines(mark_gw)
+    decisions = authz_decisions(mark_az)
+    f = line_fields(reqs[-1]) if reqs else {}
+    c.note('header_forged_after_allow_gateway_line_fields', {k: f.get(k) for k in ('route', 'authz_decision_id', 'tenant_ref')})
+    c.check('header forged after an allow: 200', r['status'] == 200 and body_json(r).get('tracking_id') == 'TRK-CO8')
+    c.check('...gateway-authz wrote one ALLOW line, and one gateway line has its decision id',
+            len(decisions) == 1 and decisions[0].get('result') == 'ALLOW' and len(reqs) == 1 and
+            bool(decisions[0].get('decision_id')) and f.get('authz_decision_id') == decisions[0].get('decision_id'))
+    c.check('...the caller\'s answer has no X-Idp-Decision-Id header, the PDP\'s or the provider\'s', header(r, 'x-idp-decision-id') == [])
+    c.check('...nothing of the forged id is in the line', 'forged-by-provider' not in (reqs[-1] if reqs else 'forged-by-provider'))
 
 
 # --------------------------------------------------------------------------------------

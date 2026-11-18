@@ -18,7 +18,7 @@ G04 §4 要求用 PoC 比较三种凭证返回模式，G04 §9 列了 PoC 必须
 | 内部 JWT 会不会到第三方？第三方凭证会不会回到调用方？ | **都不会**。Provider 只收到 Provider 凭证；PDP 收不到调用方 JWT，也收不到任何 Bearer 凭证；网关整轮运行的日志里没有 Provider 凭证、调用方 JWT 或密钥。 | `P1-CR-01/02/03/04` |
 | 网关到 PDP 能否用工作负载 mTLS，PDP 能否据此只认网关？ | **能**。网关出示自己的证书，并且只接受工作负载 CA 为指定名字签发的 PDP 证书；PDP 从已验证的客户端证书取调用方身份。没有证书或证书来自别的 CA，连 TLS 都建立不了；同一信任域里不是网关的工作负载（业务应用、本地 Broker）拿到 401，拿不到凭证。冒充 PDP 的服务（名字对、CA 不对）收不到网关的任何请求。 | `P1-AZ-11`、`P1-CR-03`、`P1-TL-01` |
 | PDP 故障时是否默认拒绝？ | **是**。PDP 返回 500、超时、进程不在，请求都没有到达 Provider。 | `P1-FC-01/02/03` |
-| 拿一次创建调用的客单号，只凭日志能不能对上这次调用的两头？ | **能，放行的调用能；被拒绝的调用在网关那一行对不上**。网关访问日志里有且只有一行带这个客单号，同一行有 `gateway-authz` 给的判定编号、租户、承运商应答里的处理号；`gateway-authz` 的日志里有且只有一行带同一个判定编号。见下面"一次调用对得上"。 | `P1-CO-01` 至 `08` |
+| 拿一次创建调用的客单号，只凭日志能不能对上这次调用的两头？ | **放行的调用能；被拒绝的调用凭判定编号能**。放行的：网关访问日志里有且只有一行带这个客单号，同一行有 `gateway-authz` 给的判定编号、租户、承运商应答里的处理号；`gateway-authz` 的日志里有且只有一行带同一个判定编号。被拒绝的：403 的应答头和正文里有判定编号，网关那一行有同一个，`gateway-authz` 有一行拒绝带着它；那一行取不到请求正文，没有客单号。见下面"一次调用对得上"。 | `P1-CO-01` 至 `08` |
 | 调用方能不能分清策略拒绝和问不到 PDP？ | **能，靠状态码和正文**。策略拒绝仍是 403，正文是 PDP 的原因。超时、进程不在、证书不被接受，以及模式 B 的 Broker 不在，是网关自己的 503，正文里没有判定；PDP 自己答的 500 和"定不了"原样到达。网关日志里这两类 503 不再是 `reason=ExtAuth`。见下面"失败从哪来"。 | `P1-FO-01/02` |
 | Provider 会不会收到调用方自己加的请求头？ | **不会，只收到登记过的**。六条路由用同一份名单重建请求头。没登记的不到；登记过的到，凭证仍是那一个 `Authorization`。见下面"请求头只放行登记过的"。 | `P1-HD-01/02/03/04` |
 | 非幂等写会不会被网关重放？ | **不会**（未配置重试策略时）。上游超时返回 504、上游断连返回 503，Provider 各只收到一次。 | `P1-WR-02/03` |
@@ -84,11 +84,11 @@ G04 §4 要求用 PoC 比较三种凭证返回模式，G04 §9 列了 PoC 必须
 
 开发计划 3.3，对着替身的这一部分。目标：拿一次创建调用的客单号（请求正文里的 `ReferenceId`），只凭日志找到网关的那一行、`gateway-authz` 的那一次判定，以及承运商应答里的处理号（`Data.ProcessCode`）。
 
-做法：配置顶层 `frontendPolicies.accessLog.add` 往网关访问日志的每一行加四个字段，值是 CEL 表达式（老的 `config.logging.fields` 已弃用，没有用）。问 PDP 的五条路由各在 `protocol.http.metadata` 里把 `gateway-authz` 放行时给的应答头 `X-Idp-Decision-Id` 读成 `extauthz.decision_id`，日志字段再取它。Mock Provider 的创建应答带承运商那样的 `Succeeded` 和 `Data.ProcessCode`、`Data.ReferenceId`（请求带字符串 `ReferenceId` 时）。
+做法：配置顶层 `frontendPolicies.accessLog.add` 往网关访问日志的每一行加四个字段，值是 CEL 表达式（老的 `config.logging.fields` 已弃用，没有用）。问 PDP 的五条路由各在 `protocol.http.metadata` 里把 `gateway-authz` 放行时给的应答头 `X-Idp-Decision-Id` 读成 `extauthz.decision_id`；`metadata` 只在放行时求值，所以被 PDP 拒绝的调用没有它，日志字段改为“有 `extauthz.decision_id` 就取它，否则取应答头 `x-idp-decision-id`”。`gateway-authz` 拒绝时（做出了判定的拒绝）也在应答头和正文里给判定编号，网关把 PDP 的拒绝原样转给调用方，这个头就在应答里。Mock Provider 的创建应答带承运商那样的 `Succeeded` 和 `Data.ProcessCode`、`Data.ReferenceId`（请求带字符串 `ReferenceId` 时）。
 
 | 字段 | 值从哪来 |
 |---|---|
-| `authz_decision_id` | `gateway-authz` 的应答头 `X-Idp-Decision-Id`，只从这里来，Provider 的应答正文写不进去（`P1-CO-08`） |
+| `authz_decision_id` | 放行的：`gateway-authz` 的应答头 `X-Idp-Decision-Id`，由 `metadata` 读成 `extauthz.decision_id`。被 PDP 拒绝的：同一个应答头，直接从应答里取。表达式 `has(extauthz.decision_id) ? extauthz.decision_id : response.headers["x-idp-decision-id"]`；两样都没有（问不到 PDP，或还没走到判定就被挡下）时这个字段不出现。Provider 写不进去：正文进不了表达式，Provider 应答里的这个头在六条后端路由上都被 `responseHeaderModifier.remove` 去掉（`P1-CO-08`） |
 | `tenant_ref` | 已验签 JWT 里的租户。表达式 `jwt.tenant_id` 在日志里能用（不问 PDP 的路由上也有，`P1-CO-08`） |
 | `provider_reference_id` | 请求正文的 `ReferenceId` |
 | `provider_request_id` | 应答正文的 `Data.ProcessCode` |
@@ -104,16 +104,17 @@ G04 §4 要求用 PoC 比较三种凭证返回模式，G04 §9 列了 PoC 必须
 | `P1-CO-03` | Broker 路由和另外三条问 PDP 的 GET 路由：有判定编号，能对到判定方的日志，没有客单号和处理号字段。Broker 那条对到的是 Broker 向 `gateway-authz` 问的那一次（`/v1/egress/authorizations/decision`，调用者是 Broker 的身份），不是网关问的 |
 | `P1-CO-04` | 客单号带引号和换行、5000 个字符、是数字、是对象、是空串：日志只多一行，写的是 `(malformed)`（数字和对象时没有这个字段），替身收到的正文与发出的一致，调用方照常得到应答 |
 | `P1-CO-05` | 应答里的处理号带引号、换行、超过 5000 个字符：日志只多一行，写的是 `(malformed)`，调用方收到的应答没有被改 |
-| `P1-CO-06` | 被拒绝的调用（没有授权的租户、被撤销的账户）：网关那一行没有判定编号也没有客单号；403 正文里也没有判定编号；`gateway-authz` 的日志里有一行拒绝，有它自己的判定编号 |
+| `P1-CO-06` | 被拒绝的调用（没有授权的租户、被撤销的账户）：调用方得到 403；应答头 `X-Idp-Decision-Id` 和正文的 `decision_id` 是同一个编号；网关那一行的 `authz_decision_id` 是它；`gateway-authz` 的日志里正好一行拒绝带着它；Provider 没收到请求；网关那一行没有客单号。另有：问不到 PDP（它不在）时，网关自己答 503，应答里没有判定编号，那一行没有 `authz_decision_id` |
 | `P1-CO-07` | 正文里别的字段放像令牌的串、请求带着 JWT：网关和 `gateway-authz` 这几次的日志里没有那些串、JWT、Provider 凭证和密钥 |
-| `P1-CO-08` | 不问 PDP 的路由（rates），Provider 应答正文里带 `decision_id`：那一行没有 `authz_decision_id` |
+| `P1-CO-08` | Provider 伪造判定编号。正文里伪造（不问 PDP 的 rates 路由）：那一行没有 `authz_decision_id`。应答头里伪造 `X-Idp-Decision-Id`：不问 PDP 的 rates 路由上，那一行没有 `authz_decision_id`，调用方的应答里没有这个头；问 PDP 的 tracking 路由上放行之后伪造，那一行的 `authz_decision_id` 仍是 `gateway-authz` 给的那个，调用方的应答里没有这个头 |
 
 实测到的限度，都是 1.7.0 上的行为：
 
-- **被拒绝的那一行没有判定编号**，也没有从请求正文取的字段（只有租户）。`gateway-authz` 给了拒绝一个编号并记在自己的日志里，但 403 的正文（`denialBody`）不带它，网关那一行也没有，所以被拒绝的调用只能靠路由、租户和时间对。这里只记下现状，没有改 `gateway-authz`。
+- **被拒绝的调用靠判定编号对，不再靠路由、租户和时间。** `gateway-authz` 做出了判定的拒绝（策略拒绝、账户被撤销、定不了的 503）在应答头 `X-Idp-Decision-Id` 和 403/503 的正文 `decision_id` 里给编号，和它日志里那一行是同一个；网关写日志时从应答头取。没走到判定的（调用者身份不对、可信上下文有歧义）没有编号，也不另造。防伪造：回退到应答头有一个风险，Provider 也能写这个头（没有去掉时它到得了调用方，也读得到日志里）。所以六条后端路由（含不问 PDP 的 rates）的 `responseHeaderModifier.remove` 都列了 `x-idp-decision-id`，上游应答里的这个头一律去掉；PDP 的拒绝由网关直接转答、不经过上游，不受影响。回退因此只可能取到 PDP 的头（`P1-CO-08`；`tests/contracts` 检查六条路由写法一样）。
+- **被拒绝的那一行仍没有从请求正文取的字段**（只有租户和判定编号）：被拒绝的请求那一行取不到请求正文，这是 1.7.0 的行为（`P1-CO-06`）。
 - **正文太大时取不到**：约 3MB 的试过取不到；上限在哪里没有量。取不到只是没有这个字段，请求和应答照常透传。正文不是 JSON、没有这个字段、没有正文（GET）也一样。
 - **没有 `traceparent` 时网关不自己生成 trace id**；带了，日志里有 `trace.id`，转给上游的是同一个 trace id 加新的 span id。**ExtAuthZ 的请求里没有 trace 信息**，所以 `gateway-authz` 的日志里没有 trace id。这次不处理，完整的 Trace 在第 5 节。
-- Broker 那条路由上，网关日志里的判定编号是 Broker 问 `gateway-authz` 得来的那一个，Broker 把它放在自己的应答头里转给网关（Mock Broker 也这样做）；真的 Broker 要照这个做，否则这条路由上没有判定编号。
+- Broker 那条路由上，网关日志里的判定编号是 Broker 问 `gateway-authz` 得来的那一个，Broker 把它放在自己的应答头里转给网关（Mock Broker 也这样做，放行和拒绝时都放，拒绝时正文里也有 `decision_id`）；真的 Broker 要照这个做，否则这条路由上没有判定编号。Broker 路由上被拒绝的调用，用例里没有单独覆盖。
 - 没有对着承运商沙箱试过：处理号的真实格式不知道。
 
 ## 失败从哪来

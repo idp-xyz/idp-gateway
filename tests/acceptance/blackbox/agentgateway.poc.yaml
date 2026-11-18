@@ -61,13 +61,22 @@ frontendPolicies:
   # evaluated when the line is written. A value that cannot be computed is left out of the
   # line; the request is not affected (tried on 1.7.0: body not JSON, field absent, no body,
   # a body of about 3MB, which is too large to be read).
-  #   authz_decision_id  the id gateway-authz gave this decision, read from the PDP's
-  #                      X-Idp-Decision-Id answer header by `metadata` on each route that asks the
-  #                      PDP. It comes only from that header, never from a body, so a provider
-  #                      cannot write it. A request the PDP refused has no such line value: the
-  #                      refusal is answered by the gateway from the PDP's answer, and extauthz
-  #                      is not set. The 403 the caller gets carries no id either: the id of a
-  #                      refusal is only in gateway-authz's own log (P1-CO-06).
+  #   authz_decision_id  the id gateway-authz gave this decision, allowed or refused. An allowed call
+  #                      has it from the PDP's X-Idp-Decision-Id answer header, which `metadata` on
+  #                      each route that asks the PDP reads into extauthz.decision_id. `metadata` is
+  #                      only evaluated for an allow. A call the PDP refused (403, or 503 when it
+  #                      decided it could not decide) is answered by the gateway straight from the
+  #                      PDP's answer, which carries the same header; extauthz is not set then, so the
+  #                      expression falls back to the response header. A call that never got a
+  #                      decision (PDP unreachable, caller refused before a decision) has neither,
+  #                      and the field is left out. The id never comes from a body.
+  #                      The fallback reads the response header, which the provider could also
+  #                      write. Every route therefore lists x-idp-decision-id under
+  #                      responseHeaderModifier.remove: the header from an upstream is dropped
+  #                      before the caller or this expression can see it, while the PDP's refusal,
+  #                      which does not pass the upstream, keeps it. So the fallback can only read
+  #                      the PDP's. All six backend routes, the one without a PDP included, carry
+  #                      the removal (P1-CO-06, P1-CO-08). Tried on 1.7.0, small experiments.
   #   tenant_ref         the tenant from the validated token.
   #   provider_reference_id  ReferenceId in the request body (the number we give the carrier).
   #   provider_request_id    Data.ProcessCode in the provider's answer (the carrier's number).
@@ -78,13 +87,13 @@ frontendPolicies:
   # could put 5000 characters of its choosing into the line. A value that is not a string (a
   # number, an object) makes `matches` fail and the field is left out. The format is that of
   # the mock provider; with the real carrier set it from the carrier's own format (plan 3.2).
-  # No tokens: the only header read is the PDP's X-Idp-Decision-Id (by `metadata`), and the JWT
+  # No tokens: the only header read is the PDP's X-Idp-Decision-Id (by `metadata`, or from the response), and the JWT
   # is not in the body.
   # Not handled here: without a traceparent from the caller the gateway makes no trace id, and
   # the ExtAuthZ request carries no trace information.
   accessLog:
     add:
-      authz_decision_id: 'extauthz.decision_id'
+      authz_decision_id: 'has(extauthz.decision_id) ? extauthz.decision_id : response.headers["x-idp-decision-id"]'
       tenant_ref: 'jwt.tenant_id'
       provider_reference_id: 'json(request.body).ReferenceId.matches("^[A-Za-z0-9._-]{1,64}$") ? json(request.body).ReferenceId : "(malformed)"'
       provider_request_id: 'json(response.body).Data.ProcessCode.matches("^[A-Za-z0-9._-]{1,64}$") ? json(response.body).Data.ProcessCode : "(malformed)"'
@@ -193,10 +202,14 @@ routes:
       path:
         prefix: /v1/tracking
     # G03 §5: provider redirects and cookies are not handed to the business client.
+    # x-idp-decision-id is removed on all six routes, with the same text (tests/contracts
+    # checks it): whatever the upstream answers with that header never reaches the caller
+    # and the access-log expression cannot read it. See authz_decision_id under accessLog.
     responseHeaderModifier:
       remove:
       - location
       - set-cookie
+      - x-idp-decision-id
     timeout:
       requestTimeout: 2s
   backends:
@@ -286,6 +299,7 @@ routes:
       remove:
       - location
       - set-cookie
+      - x-idp-decision-id
     # No retry policy on purpose: a non-idempotent write must reach the provider at most once.
     timeout:
       requestTimeout: 2s
@@ -368,6 +382,7 @@ routes:
       remove:
       - location
       - set-cookie
+      - x-idp-decision-id
     timeout:
       requestTimeout: 2s
   backends:
@@ -416,6 +431,7 @@ routes:
       remove:
       - location
       - set-cookie
+      - x-idp-decision-id
     timeout:
       requestTimeout: 2s
   backends:
@@ -500,6 +516,7 @@ routes:
       remove:
       - location
       - set-cookie
+      - x-idp-decision-id
     timeout:
       requestTimeout: 2s
   backends:
@@ -592,6 +609,7 @@ routes:
       remove:
       - location
       - set-cookie
+      - x-idp-decision-id
     timeout:
       requestTimeout: 2s
   backends:

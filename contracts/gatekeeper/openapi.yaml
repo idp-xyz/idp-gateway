@@ -73,13 +73,33 @@ paths:
         '401':
           description: The caller of this endpoint is not an authenticated gateway workload. No decision is made.
         '403':
-          description: Denied. The body explains why and carries no credential.
+          description: Denied. The body explains why and carries no credential. When a decision was made (policy
+            denial, revoked account) the answer carries its number, in the X-Idp-Decision-Id header and as decision_id
+            in the body - the same number the PDP logs - so the gateway can write it on the access-log line of
+            the refused call. A request refused before any decision (ambiguous trusted context, ambiguous account
+            request) has no number and the header and field are absent; none is made up for it.
+          headers:
+            X-Idp-Decision-Id:
+              required: false
+              description: Number of the decision that denied the request. Absent when no decision was made.
+              schema:
+                type: string
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ExtAuthzDenial'
         '503':
-          description: 'PDP or Broker cannot decide: treated as a denial'
+          description: 'PDP or Broker cannot decide: treated as a denial. Like 403, it carries the decision number
+            (header and decision_id) when a decision was attempted.'
+          headers:
+            X-Idp-Decision-Id:
+              required: false
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtAuthzDenial'
   /v1/egress/authorizations/decision:
     post:
       operationId: evaluateEgressRequest
@@ -345,6 +365,10 @@ components:
       - policy_version
       - revocation_epoch
       properties:
+        decision_id:
+          type: string
+          description: Number of the decision that produced this answer; the same as the X-Idp-Decision-Id header.
+            Absent when the request was refused before any decision was made.
         result:
           type: string
           enum:

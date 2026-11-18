@@ -104,6 +104,19 @@ class CredentialRedemption(unittest.TestCase):
                 self.assertEqual(route['policies']['extAuthz']['protocol']['http']['metadata']['decision_id'],
                                  self.DECISION_METADATA['decision_id'])
 
+    def test_poc_every_backend_route_removes_the_decision_id_header_of_the_upstream(self):
+        """The access-log expression falls back to the response header x-idp-decision-id, to show the id of a call the
+        PDP refused. That is only the PDP's header if no upstream's can get there: all six backend routes (the five
+        that ask the PDP and the static-credential one that does not) remove it, written the same way."""
+        config = text('tests/acceptance/blackbox/agentgateway.poc.yaml')
+        self.assertEqual(config.count("    responseHeaderModifier:\n      remove:\n      - location\n      - set-cookie\n      - x-idp-decision-id\n"), 6)
+        routes = [r for r in yaml.safe_load(config)['routes'] if r['name'] != 'read-back']
+        self.assertEqual(len(routes), 6)
+        for route in routes:
+            with self.subTest(route=route['name']):
+                self.assertEqual(route['policies']['responseHeaderModifier']['remove'],
+                                 ['location', 'set-cookie', 'x-idp-decision-id'])
+
     ACCESS_LOG_FIELDS = {'authz_decision_id', 'tenant_ref', 'provider_reference_id', 'provider_request_id'}
     BODY_FORMAT = '.matches("^[A-Za-z0-9._-]{1,64}$")'
 
@@ -112,7 +125,8 @@ class CredentialRedemption(unittest.TestCase):
         added = document['frontendPolicies']['accessLog']['add']
         self.assertEqual(set(added), self.ACCESS_LOG_FIELDS)
         self.assertEqual(set(document['frontendPolicies']['accessLog']), {'add'}, 'nothing removed or filtered, no preset')
-        self.assertEqual(added['authz_decision_id'], 'extauthz.decision_id')
+        self.assertEqual(added['authz_decision_id'],
+                         'has(extauthz.decision_id) ? extauthz.decision_id : response.headers["x-idp-decision-id"]')
         self.assertEqual(added['tenant_ref'], 'jwt.tenant_id')
         self.assertNotIn('logging', document.get('config', {}), 'config.logging.fields is deprecated')
 
@@ -294,8 +308,15 @@ class ServiceSpeaksTheContract(unittest.TestCase):
     def test_denial_body_fields(self):
         denial = GATEKEEPER['components']['schemas']['ExtAuthzDenial']
         sent = self.fields('denialBody')
-        self.assertEqual(set(sent), set(denial['required']))
-        self.assertFalse(any(omit for _, omit in sent.values()), 'a required field may be left out')
+        # decision_id is the one optional field: a request refused before any decision has none.
+        self.assertEqual(set(sent), set(denial['required']) | {'decision_id'})
+        self.assertEqual(set(denial['properties']), set(sent))
+        self.assertNotIn('decision_id', denial['required'])
+        self.assertEqual({name for name, (_, omit) in sent.items() if omit}, {'decision_id'}, 'a required field may be left out')
+        check = GATEKEEPER['paths']['/v1/extauthz/check']['get']['responses']
+        for status in ('403', '503'):
+            self.assertIn('X-Idp-Decision-Id', check[status]['headers'])
+            self.assertFalse(check[status]['headers']['X-Idp-Decision-Id'].get('required', False))
 
     def test_trusted_context_headers(self):
         """The service reads exactly the headers the contract documents, and the gateway routes send."""

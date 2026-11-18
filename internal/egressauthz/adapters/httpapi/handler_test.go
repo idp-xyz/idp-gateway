@@ -129,6 +129,43 @@ func carriesCredential(recorder *httptest.ResponseRecorder) bool {
 	return strings.Contains(all.String(), "provider-token")
 }
 
+// lastLog 解出日志里最后一行。
+func lastLog(t *testing.T, f *fixture) map[string]any {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(f.logs.String()), "\n")
+	var line map[string]any
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &line); err != nil {
+		t.Fatalf("日志不是 JSON：%q", lines[len(lines)-1])
+	}
+	return line
+}
+
+// requireDecisionID 核对做出了判定的非放行应答：应答头、正文、日志里是同一个编号。
+func requireDecisionID(t *testing.T, f *fixture, recorder *httptest.ResponseRecorder, body map[string]any) {
+	t.Helper()
+	id, _ := body["decision_id"].(string)
+	if !strings.HasPrefix(id, "dec-") {
+		t.Fatalf("正文里没有判定编号：%v", body)
+	}
+	if got := recorder.Header().Values("X-Idp-Decision-Id"); len(got) != 1 || got[0] != id {
+		t.Fatalf("应答头 %v 与正文 %q 不一致", got, id)
+	}
+	if logged := lastLog(t, f); logged["decision_id"] != id {
+		t.Fatalf("日志里的编号 %v 与应答的 %q 不一致", logged["decision_id"], id)
+	}
+}
+
+// requireNoDecisionID 核对没走到判定的应答：头里、正文里、日志里都没有编号。
+func requireNoDecisionID(t *testing.T, f *fixture, recorder *httptest.ResponseRecorder, body map[string]any) {
+	t.Helper()
+	if _, has := body["decision_id"]; has || len(recorder.Header().Values("X-Idp-Decision-Id")) != 0 {
+		t.Fatalf("没走到判定的应答里有编号：%v %v", recorder.Header(), body)
+	}
+	if _, has := lastLog(t, f)["decision_id"]; has {
+		t.Fatal("没走到判定的日志里有编号")
+	}
+}
+
 func TestExtAuthzReleasesEachTenantsOwnCredentialInAHeaderOnly(t *testing.T) {
 	f := newFixture(t)
 	for tenant, token := range map[string]string{"tenant-blue": blueToken, "tenant-green": greenToken} {
@@ -178,9 +215,11 @@ func TestExtAuthzOnlyTheGatewayMayAsk(t *testing.T) {
 		if recorder.Code != http.StatusUnauthorized {
 			t.Errorf("身份 %q: %d", peer, recorder.Code)
 		}
-		if body := decode(t, recorder); body["result"] != "DENY" || body["reason_code"] != reasonCallerUnauthenticated {
+		body := decode(t, recorder)
+		if body["result"] != "DENY" || body["reason_code"] != reasonCallerUnauthenticated {
 			t.Errorf("身份 %q: %v", peer, body)
 		}
+		requireNoDecisionID(t, f, recorder, body)
 		if carriesCredential(recorder) {
 			t.Errorf("身份 %q 拿到了凭证", peer)
 		}
@@ -275,6 +314,12 @@ func TestExtAuthzDenials(t *testing.T) {
 			if carriesCredential(recorder) || recorder.Header().Get("Authorization") != "" {
 				t.Fatal("拒绝响应里有凭证")
 			}
+			// 没走到判定的（上下文有歧义）没有编号；其余的拒绝都做过判定，带着日志里的那个编号。
+			if tc.reason == reasonAmbiguousContext || tc.reason == reasonAmbiguousAccount {
+				requireNoDecisionID(t, f, recorder, body)
+			} else {
+				requireDecisionID(t, f, recorder, body)
+			}
 		})
 	}
 }
@@ -286,6 +331,7 @@ func TestExtAuthzRevocation(t *testing.T) {
 	if body := decode(t, recorder); recorder.Code != http.StatusForbidden || body["reason_code"] != "ACCOUNT_REVOKED" || body["revocation_epoch"] != float64(1) {
 		t.Fatalf("%d %v", recorder.Code, body)
 	}
+	requireDecisionID(t, f, recorder, decode(t, recorder))
 	if carriesCredential(recorder) {
 		t.Fatal("已撤销的账户拿到了凭证")
 	}
@@ -310,6 +356,7 @@ func TestExtAuthzIndeterminate(t *testing.T) {
 	if recorder.Header().Get("Authorization") != "" {
 		t.Fatal("取不到凭证时仍写了 Authorization 头")
 	}
+	requireDecisionID(t, f, recorder, decode(t, recorder))
 
 	service := application.New(domain.Policy{Version: "policy-7"}, f.credentials, brokenRevocations{})
 	handler := New(service, Callers{Gateway: gatewayID}, slog.New(slog.NewJSONHandler(f.logs, nil)))
@@ -320,6 +367,7 @@ func TestExtAuthzIndeterminate(t *testing.T) {
 	if body := decode(t, response); response.Code != http.StatusServiceUnavailable || body["reason_code"] != application.ReasonRevocationStateUnavailable {
 		t.Fatalf("读不到撤销状态：%d %v", response.Code, body)
 	}
+	requireDecisionID(t, f, response, decode(t, response))
 }
 
 func decisionJSON(overrides map[string]any) string {
@@ -387,6 +435,9 @@ func TestDecisionDenials(t *testing.T) {
 		}
 		if _, has := body["credential_handle"]; has {
 			t.Errorf("%s: 拒绝的判定带了凭证句柄", name)
+		}
+		if id, _ := body["decision_id"].(string); !strings.HasPrefix(id, "dec-") || lastLog(t, f)["decision_id"] != id {
+			t.Errorf("%s: 拒绝的判定没有编号，或与日志不一致：%v", name, body)
 		}
 	}
 
