@@ -2073,6 +2073,282 @@ def _(c):
     c.check('the gateway is serving while this is checked', gw('GET', TRACKING + '/TRK-1', blue())['status'] == 200)
 
 
+# ---- one call, matched at both ends ------------------------------------------------------------------
+# Development plan 3.3. From the reference number in a create call's body, the logs alone lead to the gateway's
+# line for that call, gateway-authz's decision for it, and the provider's process number. The access log fields
+# (frontendPolicies.accessLog.add in the configuration) are the means; what they leave out is pinned here too.
+def gateway_request_lines(since: int = 0) -> list[str]:
+    time.sleep(0.5)
+    with open(RUN / 'agentgateway.log', 'rb') as f:
+        f.seek(since)
+        return [l for l in f.read().decode(errors='replace').splitlines() if '\trequest ' in l]
+
+
+def gateway_all_lines(since: int = 0) -> list[str]:
+    time.sleep(0.5)
+    with open(RUN / 'agentgateway.log', 'rb') as f:
+        f.seek(since)
+        return f.read().decode(errors='replace').splitlines()
+
+
+def line_fields(line: str) -> dict:
+    """key=value pairs of a gateway line; a quoted value is kept as written (escapes not undone)."""
+    return {m[2]: m[3][1:-1] if m[3].startswith('"') else m[3]
+            for m in re.finditer(r'(^|\s)([A-Za-z0-9_.]+)=("(?:[^"\\]|\\.)*"|\S+)', line)}
+
+
+def authz_log_size() -> int:
+    return (RUN / 'gateway-authz.log').stat().st_size
+
+
+def authz_decisions(since: int = 0) -> list[dict]:
+    """The "egress authorization" lines gateway-authz wrote after byte `since`."""
+    time.sleep(0.3)
+    with open(RUN / 'gateway-authz.log', 'rb') as f:
+        f.seek(since)
+        lines = f.read().decode(errors='replace').splitlines()
+    found = []
+    for l in lines:
+        try:
+            d = json.loads(l)
+        except ValueError:
+            continue
+        if d.get('msg') == 'egress authorization':
+            found.append(d)
+    return found
+
+
+def new_reference() -> str:
+    return 'CO-' + secrets.token_hex(5)
+
+
+def create_body(reference=None, **more) -> bytes:
+    doc = {'shipmentReference': 'DEMO-SHP-1024', 'weight': {'value': 1.2, 'unit': 'KG'}}
+    if reference is not None:
+        doc['ReferenceId'] = reference
+    doc.update(more)
+    return json.dumps(doc).encode()
+
+
+def lines_with(text: str, lines: list[str]) -> list[str]:
+    return [l for l in lines if text in l]
+
+
+@case('P1-CO-01', 'a create call, found from its reference number alone',
+      'exactly one gateway line carries the reference number; it names the gateway-authz decision, the tenant and the provider\'s '
+      'process number, and the decision is the one line gateway-authz wrote for this call',
+      ('GW-FR-017',))
+def _(c):
+    ref = new_reference()
+    body = create_body(ref)
+    mark_gw, mark_az = gateway_log_size(), authz_log_size()
+    r = gw('POST', LABELS, blue(), JSON_CT, body)
+    answer = body_json(r)
+    process = (answer.get('Data') or {}).get('ProcessCode')
+    c.check('201, with a process number and the reference number in the answer',
+            r['status'] == 201 and isinstance(process, str) and process != '' and (answer.get('Data') or {}).get('ReferenceId') == ref)
+    lines = gateway_all_lines()
+    mine = lines_with(ref, lines)
+    c.note('gateway_lines_with_the_reference_number', len(mine))
+    c.check('the gateway log has exactly one line with the reference number', len(mine) == 1)
+    f = line_fields(mine[0]) if mine else {}
+    c.note('gateway_line_fields', {k: f.get(k) for k in ('route', 'http.status', 'authz_decision_id', 'tenant_ref',
+                                                           'provider_reference_id', 'provider_request_id')})
+    decision = f.get('authz_decision_id')
+    c.check('that line has the decision id', bool(decision))
+    c.check('...the tenant from the caller\'s token', f.get('tenant_ref') == 'tenant-blue')
+    c.check('...the provider\'s process number, the one the caller received', process is not None and f.get('provider_request_id') == process)
+    c.check('...the reference number as a field', f.get('provider_reference_id') == ref)
+    c.check('...and the route is the create route', f.get('route') == 'default/mockcarrier-labels-create')
+    ours = [d for d in authz_decisions() if d.get('decision_id') == decision] if decision else []
+    c.note('gateway_authz_lines_with_the_decision', len(ours))
+    c.check('gateway-authz has exactly one "egress authorization" line with that decision id', len(ours) == 1)
+    if ours:
+        d = ours[0]
+        c.check('...it is an ALLOW', d.get('result') == 'ALLOW')
+        c.check('...for this route, tenant and operation',
+                (d.get('route_id'), d.get('tenant'), d.get('operation_id')) == ('mockcarrier-labels-create', 'tenant-blue', 'labels.create'))
+    c.check('the provider received the request', len(provider_hits()) == 1 and
+            hashlib.sha256(body).hexdigest() == provider_hits()[0]['body_sha256'])
+
+
+@case('P1-CO-02', 'two tenants create one call each',
+      'each reference number leads to its own decision and process number; nothing is crossed',
+      ('GW-FR-017', 'GW-NAT-001'))
+def _(c):
+    refs = {'tenant-blue': new_reference(), 'tenant-green': new_reference()}
+    tokens = {'tenant-blue': blue(), 'tenant-green': green()}
+    answers = {t: gw('POST', LABELS, tokens[t], JSON_CT, create_body(refs[t])) for t in refs}
+    c.check('both answered 201', all(a['status'] == 201 for a in answers.values()))
+    lines = gateway_all_lines()
+    seen = {}
+    for tenant, ref in refs.items():
+        mine = lines_with(ref, lines)
+        c.check(f'{tenant}: exactly one gateway line with its reference number', len(mine) == 1)
+        f = line_fields(mine[0]) if mine else {}
+        seen[tenant] = f
+        process = (body_json(answers[tenant]).get('Data') or {}).get('ProcessCode')
+        c.check(f'{tenant}: the line has its tenant and the process number its caller received',
+                f.get('tenant_ref') == tenant and process is not None and f.get('provider_request_id') == process)
+        d = [x for x in authz_decisions() if x.get('decision_id') == f.get('authz_decision_id')]
+        c.check(f'{tenant}: the decision id is one line at gateway-authz, for that tenant, with that tenant\'s account',
+                len(d) == 1 and d[0].get('tenant') == tenant and d[0].get('account') == body_json(answers[tenant]).get('account'))
+    c.check('the two lines have different decision ids and different process numbers',
+            seen['tenant-blue'].get('authz_decision_id') != seen['tenant-green'].get('authz_decision_id')
+            and seen['tenant-blue'].get('provider_request_id') != seen['tenant-green'].get('provider_request_id'))
+
+
+@case('P1-CO-03', 'the Mode B route and the other GET routes that ask the PDP',
+      'the line has the decision id and the tenant, and that decision is found at gateway-authz; there is no reference number '
+      'or process number on a call that has none',
+      ('GW-FR-017',))
+def _(c):
+    tok = blue()
+    calls = {'tracking (Mode A)': (TRACKING, 'mockcarrier-tracking-get'), 'manifests (Mode B, local broker)': (MANIFESTS, 'mockcarrier-manifests-get-broker'),
+             'pickups (key.expression)': (PICKUPS, 'mockcarrier-pickups-get-expression'),
+             'parcels (developer token)': (PARCELS, 'mockcarrier-parcels-get-developer-token')}
+    for name, (prefix, route) in calls.items():
+        unique = 'CO3' + secrets.token_hex(4).upper()
+        r = gw('GET', f'{prefix}/{unique}', tok)
+        mine = lines_with(f'/{unique} ', gateway_request_lines())
+        f = line_fields(mine[0]) if len(mine) == 1 else {}
+        c.check(f'{name}: 200 and exactly one line', r['status'] == 200 and len(mine) == 1)
+        decision = f.get('authz_decision_id')
+        c.check(f'{name}: the line has the decision id, the tenant and the route',
+                bool(decision) and f.get('tenant_ref') == 'tenant-blue' and f.get('route') == 'default/' + route)
+        c.check(f'{name}: no reference number and no process number', 'provider_reference_id' not in f and 'provider_request_id' not in f)
+        d = [x for x in authz_decisions() if x.get('decision_id') == decision] if decision else []
+        c.check(f'{name}: exactly one gateway-authz line with that decision id, an ALLOW for this route', len(d) == 1 and
+                d[0].get('result') == 'ALLOW' and d[0].get('route_id') == route)
+        if d:
+            c.note(f'{name}: the gateway-authz line', {'endpoint': d[0].get('endpoint'), 'caller': d[0].get('caller')})
+
+
+@case('P1-CO-04', 'a reference number that is not of the accepted form',
+      'one line for each call; the log has (malformed) or no such field, and none of what the caller put there; the provider '
+      'receives the body byte for byte; the caller gets its answer',
+      ('GW-FR-017', 'GW-NFR-05'))
+def _(c):
+    quote = 'x"y\nz\tCO-forged-line level=ERROR'
+    variants = {'a string with a quote and a newline': quote, 'a string of 5000 characters': 'A' * 5000,
+                'a number': 123456789, 'an object': {'a': 1}, 'an empty string': ''}
+    for name, value in variants.items():
+        body = create_body(value)
+        mark = gateway_log_size()
+        r = gw('POST', LABELS, blue(), JSON_CT, body)
+        lines = gateway_all_lines(mark)
+        reqs = [l for l in lines if '\trequest ' in l]
+        f = line_fields(reqs[-1]) if reqs else {}
+        c.note(f'{name}: the logged value', f.get('provider_reference_id', '(no such field)'))
+        c.check(f'{name}: 201 for the caller', r['status'] == 201)
+        c.check(f'{name}: the gateway log grew by exactly one line', len(lines) == 1 and len(reqs) == 1)
+        c.check(f'{name}: it says (malformed) or has no such field', f.get('provider_reference_id') in ('(malformed)', None))
+        c.check(f'{name}: nothing of what the caller put there is in the line',
+                'forged-line' not in lines[0] and 'AAAAA' not in lines[0] and '123456789' not in lines[0] if lines else False)
+        c.check(f'{name}: the provider received the body byte for byte, and said so',
+                body_json(r).get('body_sha256') == hashlib.sha256(body).hexdigest() == provider_hits()[-1]['body_sha256'])
+
+
+@case('P1-CO-05', 'the provider answers with a process number that is not of the accepted form',
+      'one line for the call; the log has (malformed) for the process number; the caller gets the provider\'s answer unchanged',
+      ('GW-FR-017', 'GW-NFR-05'))
+def _(c):
+    ref = new_reference()
+    mark = gateway_log_size()
+    r = gw('POST', LABELS + '?fault=bad-process-code', blue(), JSON_CT, create_body(ref))
+    lines = gateway_all_lines(mark)
+    c.check('the gateway log grew by exactly one line', len(lines) == 1 and '\trequest ' in lines[0])
+    f = line_fields(lines[0]) if lines else {}
+    c.note('process_number_as_logged', f.get('provider_request_id'))
+    c.check('the process number is written as (malformed)', f.get('provider_request_id') == '(malformed)')
+    c.check('the reference number, which was fine, is written', f.get('provider_reference_id') == ref)
+    c.check('nothing of the provider\'s process number is in the line', lines != [] and 'forged-line' not in lines[0] and 'AAAAA' not in lines[0])
+    data = body_json(r).get('Data') or {}
+    c.check('the caller got 201 and the provider\'s answer as it was: the long process number with its quote and newline',
+            r['status'] == 201 and data.get('ProcessCode', '').startswith('PC-"x"\nforged-line ') and len(data.get('ProcessCode', '')) > 5000
+            and data.get('ReferenceId') == ref)
+
+
+@case('P1-CO-06', 'calls the PDP refuses',
+      'the gateway line for a refused call has no decision id and no reference number, and the 403 body has none either (the limit '
+      'as it is today); gateway-authz has one DENY line for the refusal, with a decision id of its own',
+      ('GW-FR-017',))
+def _(c):
+    def refused(name, token_fn, before=None, after=None):
+        ref = new_reference()
+        if before:
+            before()
+        try:
+            mark_gw, mark_az = gateway_log_size(), authz_log_size()
+            r = gw('POST', LABELS, token_fn(), JSON_CT, create_body(ref))
+            reqs = gateway_request_lines(mark_gw)
+            decisions = authz_decisions(mark_az)
+        finally:
+            if after:
+                after()
+        body = body_json(r)
+        f = line_fields(reqs[-1]) if reqs else {}
+        c.note(f'{name}: the gateway line', {k: f.get(k) for k in ('http.status', 'reason', 'authz_decision_id', 'tenant_ref', 'provider_reference_id')})
+        c.note(f'{name}: the 403 body', {k: v for k, v in body.items()})
+        c.check(f'{name}: 403 with the PDP\'s reason, nothing forwarded', r['status'] == 403 and 'reason_code' in body and len(provider_hits()) == 0)
+        c.check(f'{name}: one gateway line', len(reqs) == 1)
+        c.check(f'{name}: the line has no decision id and no reference number',
+                'authz_decision_id' not in f and 'provider_reference_id' not in f and ref not in (reqs[-1] if reqs else ref))
+        c.check(f'{name}: gateway-authz wrote one line for it, a DENY', len(decisions) == 1 and decisions[0].get('result') == 'DENY')
+        # The limit, recorded and not wished away: the PDP's 403 body has no decision id (denialBody in
+        # internal/egressauthz/adapters/httpapi), and the gateway line has none either. gateway-authz did
+        # give the refusal an id and logged it; a caller or an operator can match the two only by route,
+        # tenant and time.
+        c.note(f'{name}: decision id in the gateway-authz line', decisions[0].get('decision_id') if decisions else None)
+        c.check(f'{name}: the 403 body carries no decision id (the limit as it is), while gateway-authz logged one for the refusal',
+                'decision_id' not in body and bool(decisions) and bool(decisions[0].get('decision_id')))
+        reset_all()
+    refused('a tenant with no grant', lambda: blue(tenant_id='tenant-red'))
+    refused('a revoked account', blue, before=lambda: pdp_admin('/admin/revoke?account=account-blue'),
+            after=lambda: pdp_admin('/admin/restore?account=account-blue'))
+
+
+@case('P1-CO-07', 'what the logs hold of a call that carries token-like strings, a JWT and credentials',
+      'no planted token-like string from the body, no caller JWT and no provider credential in the gateway line or in gateway-authz\'s lines',
+      ('GW-AT-007', 'GW-FR-007', 'GW-NFR-05'))
+def _(c):
+    ref = new_reference()
+    planted = ['eyJ' + secrets.token_urlsafe(30), 'Bearer ' + secrets.token_urlsafe(24), 'sk_live_' + secrets.token_hex(12)]
+    tok = blue()
+    mark_gw, mark_az = gateway_log_size(), authz_log_size()
+    r = gw('POST', LABELS, tok, JSON_CT, create_body(ref, note=planted[0], memo={'auth': planted[1]}, key=planted[2]))
+    gw('GET', TRACKING + '/TRK-1', tok)
+    c.check('the create call was answered 201', r['status'] == 201)
+    gateway_text = '\n'.join(gateway_all_lines(mark_gw))
+    authz_text = (RUN / 'gateway-authz.log').read_bytes()[mark_az:].decode(errors='replace')
+    c.check('the gateway line for the call exists (so the search below is not empty)', ref in gateway_text and 'authz_decision_id=' in gateway_text)
+    c.check('gateway-authz lines for these calls exist', authz_text.count('"msg":"egress authorization"') == 2)
+    for name, text in (('the gateway', gateway_text), ('gateway-authz', authz_text)):
+        c.check(f'{name}: none of the planted strings', not any(p in text or p.split(' ')[-1] in text for p in planted))
+        c.check(f'{name}: no caller JWT', tok not in text and 'eyJ' not in text)
+        c.check(f'{name}: no provider credential', not any(t in text for t in all_provider_credentials()) and not developer_in(text))
+        c.check(f'{name}: no broker key and no session key', S.broker_key not in text and S.session_key not in text)
+
+
+@case('P1-CO-08', 'a route that does not ask the PDP, with a provider answer that names a decision',
+      'the gateway line has no decision id: it comes from the PDP\'s answer header only, not from anything a provider says',
+      ('GW-FR-017',))
+def _(c):
+    mark = gateway_log_size()
+    r = gw('GET', RATES + '?fault=forge-decision', blue())
+    reqs = gateway_request_lines(mark)
+    body = body_json(r)
+    f = line_fields(reqs[-1]) if reqs else {}
+    c.note('gateway_line_fields', {k: f.get(k) for k in ('route', 'authz_decision_id', 'tenant_ref', 'provider_reference_id', 'provider_request_id')})
+    c.check('200, and the answer the caller got does name a decision (so there was something to copy)',
+            r['status'] == 200 and body.get('decision_id') == 'forged-by-provider')
+    c.check('one gateway line, on the static-credential route', len(reqs) == 1 and f.get('route') == 'default/mockcarrier-rates-get-static')
+    c.check('the line has no decision id', 'authz_decision_id' not in f)
+    c.check('nothing of the forged id is in the line', 'forged-by-provider' not in (reqs[-1] if reqs else 'forged-by-provider'))
+    c.check('the tenant is on the line all the same', f.get('tenant_ref') == 'tenant-blue')
+    c.check('gateway-authz was not asked', len(pdp_log()) == 0)
+
+
 # --------------------------------------------------------------------------------------
 # main
 # --------------------------------------------------------------------------------------

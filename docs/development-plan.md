@@ -194,6 +194,7 @@ flowchart TD
 - **依据**：`GW-FR-017`；[G05](G05_Engineering_and_Operations.md) 11.2 节列的关联字段；[G06](G06_Testing_and_Acceptance.md) 第 1 节 V3 的证据要求。
 - **等**：不等别人。
 - **做完的标准**：拿一次沙箱调用的客单号，能在网关和 `gateway-authz` 的日志里找到同一次调用的两头，以及承运商返回的处理号；这些日志里没有令牌和密钥。
+- **到哪了（2026-11-18）**：对着替身做完了。锁定的 1.7.0 的访问日志可以用配置顶层 `frontendPolicies.accessLog.add` 加字段，加了四个：`authz_decision_id`（取自 `gateway-authz` 放行时的应答头 `X-Idp-Decision-Id`）、`tenant_ref`、`provider_reference_id`（请求正文的 `ReferenceId`）、`provider_request_id`（应答正文的 `Data.ProcessCode`）。没有改 `gateway-authz`：它本来就在应答头和自己的日志里给判定编号。仓库所有者 2026-11-18 定：客单号和处理号进网关的访问日志，代价是网关为了写日志要缓冲并解析正文，两个业务单号进日志。从正文取的值只在 1 到 64 位 `A-Za-z0-9._-` 的字符串时写，否则写 `(malformed)`，因为日志不限长度。黑盒用例 `P1-CO-01` 至 `08`（[黑盒](../tests/acceptance/blackbox/README.md)"一次调用对得上"）：从客单号只凭日志对到网关的一行、`gateway-authz` 的一次判定、承运商的处理号，两个租户不串，日志里没有令牌和密钥。没有做的：对着沙箱（处理号的真实格式不知道，格式限制是按替身写的）；完整的 Trace（没有 `traceparent` 时网关不生成 trace id，ExtAuthZ 的请求不带 trace 信息）；被拒绝的调用在网关那一行对不上（那一行没有判定编号，403 正文也不带，只能靠路由、租户和时间对）。
 
 ### 3.4 P2 套件和证据
 

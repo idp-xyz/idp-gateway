@@ -98,10 +98,29 @@ class Handler(BaseHTTPRequestHandler):
                 except OSError:
                     pass
                 return
-            return self._send(201, {'label_id': 'lbl-' + uuid.uuid4().hex[:10], 'account': account,
-                                    'body_sha256': hashlib.sha256(body).hexdigest()})
+            answer = {'label_id': 'lbl-' + uuid.uuid4().hex[:10], 'account': account,
+                      'body_sha256': hashlib.sha256(body).hexdigest()}
+            # Like the carrier, a create answer that carries the reference number it was given
+            # and a process number of the carrier's own. Only when the request has a string
+            # ReferenceId: a body without one is answered as it always was.
+            try:
+                reference = json.loads(body).get('ReferenceId')
+            except (ValueError, AttributeError):
+                reference = None
+            if isinstance(reference, str):
+                process_code = 'PC-' + uuid.uuid4().hex[:12]
+                if fault == 'bad-process-code':
+                    # A process number that is not of the format the gateway's log accepts: quotes,
+                    # a newline and a length no real number has.
+                    process_code = 'PC-"x"\nforged-line ' + 'A' * 5000
+                answer.update({'Succeeded': True, 'Data': {'ProcessCode': process_code, 'ReferenceId': reference}})
+            return self._send(201, answer)
         if self.command == 'GET' and parts.path == '/v1/rates':
-            return self._send(200, {'rate': '12.34', 'currency': 'USD', 'account': account})
+            answer = {'rate': '12.34', 'currency': 'USD', 'account': account}
+            if fault == 'forge-decision':
+                # A provider that tries to write a decision id into the gateway's log through its body.
+                answer.update({'decision_id': 'forged-by-provider', 'authz_decision_id': 'forged-by-provider'})
+            return self._send(200, answer)
         for resource in ('manifests', 'pickups'):
             if self.command == 'GET' and parts.path.startswith(f'/v1/{resource}/'):
                 return self._send(200, {'resource': resource, 'id': parts.path[len(f'/v1/{resource}/'):], 'account': account})

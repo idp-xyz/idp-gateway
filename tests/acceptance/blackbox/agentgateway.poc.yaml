@@ -56,6 +56,39 @@ frontendPolicies:
     - allow: 'destination.port == 27611'
     - allow: 'destination.port == 27619 && source.spiffeId == "spiffe://idp.test/gateway-control/publisher"'
 
+  # One access-log line per call that lets a person go from the provider's reference number
+  # to both ends of the call (development plan 3.3, G05 11.2). Each value is a CEL expression
+  # evaluated when the line is written. A value that cannot be computed is left out of the
+  # line; the request is not affected (tried on 1.7.0: body not JSON, field absent, no body,
+  # a body of about 3MB, which is too large to be read).
+  #   authz_decision_id  the id gateway-authz gave this decision, read from the PDP's
+  #                      X-Idp-Decision-Id answer header by `metadata` on each route that asks the
+  #                      PDP. It comes only from that header, never from a body, so a provider
+  #                      cannot write it. A request the PDP refused has no such line value: the
+  #                      refusal is answered by the gateway from the PDP's answer, and extauthz
+  #                      is not set. The 403 the caller gets carries no id either: the id of a
+  #                      refusal is only in gateway-authz's own log (P1-CO-06).
+  #   tenant_ref         the tenant from the validated token.
+  #   provider_reference_id  ReferenceId in the request body (the number we give the carrier).
+  #   provider_request_id    Data.ProcessCode in the provider's answer (the carrier's number).
+  # The two body values need the gateway to buffer and parse the body, and put two business
+  # numbers into the log (decided by the repository owner, 2026-11-18). Only a string of
+  # 1 to 64 of A-Z a-z 0-9 . _ - is written; any other string is written as (malformed). The log
+  # writes quotes, newlines and tabs escaped but has no length limit, so without this a caller
+  # could put 5000 characters of its choosing into the line. A value that is not a string (a
+  # number, an object) makes `matches` fail and the field is left out. The format is that of
+  # the mock provider; with the real carrier set it from the carrier's own format (plan 3.2).
+  # No tokens: the only header read is the PDP's X-Idp-Decision-Id (by `metadata`), and the JWT
+  # is not in the body.
+  # Not handled here: without a traceparent from the caller the gateway makes no trace id, and
+  # the ExtAuthZ request carries no trace information.
+  accessLog:
+    add:
+      authz_decision_id: 'extauthz.decision_id'
+      tenant_ref: 'jwt.tenant_id'
+      provider_reference_id: 'json(request.body).ReferenceId.matches("^[A-Za-z0-9._-]{1,64}$") ? json(request.body).ReferenceId : "(malformed)"'
+      provider_request_id: 'json(response.body).Data.ProcessCode.matches("^[A-Za-z0-9._-]{1,64}$") ? json(response.body).Data.ProcessCode : "(malformed)"'
+
 gateways:
   # Read-back (G03 §3-4): after publishing, the publisher asks each instance what it runs.
   # Those answers are on the admin address, which must not leave loopback. This listener
@@ -144,6 +177,11 @@ routes:
             x-idp-environment: '"TEST"'
             x-idp-method: request.method
             x-idp-path: request.path
+          # Read out of the PDP's answer for the access log (see accessLog below): the
+          # decision id gateway-authz puts in X-Idp-Decision-Id on an allow. Nothing is
+          # copied onto the upstream request. A denial or an unreachable PDP leaves it unset.
+          metadata:
+            decision_id: 'response.headers["x-idp-decision-id"]'
           # Upstream authentication (G04 §0 item 3): the provider credential the PDP
           # released for this decision is copied onto the upstream request.
           includeResponseHeaders:
@@ -235,6 +273,8 @@ routes:
             x-idp-environment: '"TEST"'
             x-idp-method: request.method
             x-idp-path: request.path
+          metadata:
+            decision_id: 'response.headers["x-idp-decision-id"]'
           includeResponseHeaders:
           - authorization
     urlRewrite:
@@ -315,6 +355,8 @@ routes:
             x-idp-environment: '"TEST"'
             x-idp-method: request.method
             x-idp-path: request.path
+          metadata:
+            decision_id: 'response.headers["x-idp-decision-id"]'
           includeResponseHeaders:
           - authorization
     urlRewrite:
@@ -447,6 +489,7 @@ routes:
           # is read out of it. If the header is absent the expression fails, the gateway
           # logs the failure and extauthz.credential stays unset.
           metadata:
+            decision_id: 'response.headers["x-idp-decision-id"]'
             credential: 'response.headers["authorization"]'
     urlRewrite:
       authority:
@@ -536,6 +579,8 @@ routes:
             x-idp-environment: '"TEST"'
             x-idp-method: request.method
             x-idp-path: request.path
+          metadata:
+            decision_id: 'response.headers["x-idp-decision-id"]'
           includeResponseHeaders:
           - authorization
     urlRewrite:

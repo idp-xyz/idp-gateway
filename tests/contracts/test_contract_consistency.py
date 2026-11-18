@@ -63,6 +63,8 @@ class CredentialRedemption(unittest.TestCase):
         handle = GATEKEEPER['components']['schemas']['CredentialUseResponse']['properties']['secure_binding_handle']
         self.assertTrue(handle.get('deprecated'))
 
+    DECISION_METADATA = {'decision_id': 'response.headers["x-idp-decision-id"]'}
+
     POC_PORTS = {'gatekeeper': '127.0.0.1:27613', 'broker': '127.0.0.1:27618'}
 
     def poc_routes(self):
@@ -82,13 +84,46 @@ class CredentialRedemption(unittest.TestCase):
                 self.assertEqual(sent, documented)
                 self.assertEqual(ext['failureMode'], {'denyWithStatus': 503})
                 # The credential leaves the PDP's answer in exactly one way per route.
+                # Every route also reads the decision id out of the answer, for the access log.
                 copied, read = http.get('includeResponseHeaders'), http.get('metadata')
                 if route['name'].endswith('-expression'):
                     self.assertIsNone(copied)
-                    self.assertEqual(read, {'credential': 'response.headers["authorization"]'})
+                    self.assertEqual(read, {**self.DECISION_METADATA, 'credential': 'response.headers["authorization"]'})
                 else:
                     self.assertEqual(copied, ['authorization'])
-                    self.assertIsNone(read)
+                    self.assertEqual(read, self.DECISION_METADATA)
+
+    def test_poc_decision_id_is_read_the_same_way_on_all_five_routes(self):
+        """Development plan 3.3: the access log line names the gateway-authz decision. The id comes from the PDP's
+        answer header on every route that asks the PDP, written the same way each time, and from nowhere else."""
+        config = text('tests/acceptance/blackbox/agentgateway.poc.yaml')
+        entry = "            decision_id: 'response.headers[\"x-idp-decision-id\"]'\n"
+        self.assertEqual(config.count(entry), 5)
+        for route in self.poc_routes():
+            with self.subTest(route=route['name']):
+                self.assertEqual(route['policies']['extAuthz']['protocol']['http']['metadata']['decision_id'],
+                                 self.DECISION_METADATA['decision_id'])
+
+    ACCESS_LOG_FIELDS = {'authz_decision_id', 'tenant_ref', 'provider_reference_id', 'provider_request_id'}
+    BODY_FORMAT = '.matches("^[A-Za-z0-9._-]{1,64}$")'
+
+    def test_poc_access_log_adds_exactly_the_correlation_fields(self):
+        document = yaml.safe_load(text('tests/acceptance/blackbox/agentgateway.poc.yaml'))
+        added = document['frontendPolicies']['accessLog']['add']
+        self.assertEqual(set(added), self.ACCESS_LOG_FIELDS)
+        self.assertEqual(set(document['frontendPolicies']['accessLog']), {'add'}, 'nothing removed or filtered, no preset')
+        self.assertEqual(added['authz_decision_id'], 'extauthz.decision_id')
+        self.assertEqual(added['tenant_ref'], 'jwt.tenant_id')
+        self.assertNotIn('logging', document.get('config', {}), 'config.logging.fields is deprecated')
+
+    def test_poc_access_log_values_taken_from_bodies_carry_the_format_limit(self):
+        """A value from a body is written only when it is a short string of safe characters, else as (malformed):
+        the log escapes quotes and newlines but does not limit length."""
+        added = yaml.safe_load(text('tests/acceptance/blackbox/agentgateway.poc.yaml'))['frontendPolicies']['accessLog']['add']
+        for field, source in (('provider_reference_id', 'json(request.body).ReferenceId'),
+                              ('provider_request_id', 'json(response.body).Data.ProcessCode')):
+            with self.subTest(field=field):
+                self.assertEqual(added[field], f'{source}{self.BODY_FORMAT} ? {source} : "(malformed)"')
 
     def test_poc_gateway_reaches_gatekeeper_over_mutual_tls_only(self):
         """WorkloadMTLS in the contract: a certificate, a pinned CA and a pinned name, and no bearer key."""
