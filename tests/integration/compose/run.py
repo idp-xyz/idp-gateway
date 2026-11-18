@@ -11,14 +11,17 @@
 配置是一份只有几条路由的小文件，路由的后端是同一个 compose 网络里一个会回话的小服务；没有 JWT、ExtAuthZ
 和凭证，那些由黑盒套件覆盖。
 
-一个池在单机上是什么（deploy/compose/compose.yml 里的五个服务，按启动的先后）：
+一个池在单机上是什么（deploy/compose/compose.yml 里的七个服务，按文件里的先后）：
     netns         什么都不做，只占着网络命名空间和本机上的两个端口。front 和网关都接在它里面，相当于
                   Kubernetes 上的同一个 Pod；两个可以各自重启。
     place         跑完就退出。网关启动之前，把记录里确认过的那一份配置放到位（gateway-control place）。
+    egress        跑完就退出。网关启动之前，在它所在的网络命名空间里装上规则（pin-egress.sh once）：
+                  新的外出连接只许去配置里写着的地址。
     agentgateway  收业务请求的监听、管理和指标端口只绑回环；另开一个回读口（本机回环 27619），要发布器的
                   客户端证书，只转发 /config_dump 和 /api/runtime 两个 GET。配置目录以只读方式挂进容器。
     confirm       跑完就退出。网关起来之后对一次账（gateway-control reconcile）；对上了，front 才启动。
     front         nginx。对外收业务请求的只有它（本机回环 27620）。
+    egress-watch  常驻。每两秒跑一遍同一个脚本：配置里后来多出来的后端靠它放行。看守不数它。
 另有 echo（echo.yml）：路由的后端，不属于部署文件。
 
 SH-01 到 SH-08 由本脚本扮演发布器：往挂载的目录里写文件，从本机经回读口读网关在跑什么。这几条看的是
@@ -32,6 +35,9 @@ SH-16 到 SH-18 看看守（gateway-control keep）：真的看守在本机上�
 SH-19 把两个单元文件里写的命令原样跑一遍，仍然不经 systemd：在一个放着 compose.yml 和 .env 的目录里跑，docker compose
 的项目和文件都不另给，由它自己在那个目录里找。这一条里的池用的是部署文件自己的项目名，不带这套用例的前缀；这台机器上
 已经有叫这个名字的项目时，这一条不动它，也就不通过。
+SH-22 看出口的规则在这个池里是不是真的装上了（它排在 SH-15 后面跑，那时池是好好的）：从网关所在的网络命名空间里
+往外连，配置里写着的连得上，别的被拒绝；断电之后再启动，新的命名空间里规则先于网关装好。名字改指之后会怎样不在
+这里，在 tests/integration/egressnet。
 SH-20 和 SH-21 看告警：看守在一个地址上给出指标（--metrics-listen），SH-20 由本脚本直接去读，看池出了各种事时这些数
 是不是跟着变；SH-21 起一个真的 Prometheus（按摘要引用的镜像，主机网络，只听回环）来读同一个看守，装着部署目录里的
 那份规则，看各条规则对着真的看守响不响，并在同一个镜像里跑 promtool（规则的写法，和 rules.test.yml 里造的数）。
@@ -100,8 +106,9 @@ GATEWAY_FILES = ('gateway-readback.crt', 'gateway-readback.key', 'gateway.crt', 
 RUN_AS = f'{os.getuid()}:{os.getgid()}'
 LOADED = {'synchronized': True, 'lastError': None}
 SESSION_KEY = secrets.token_hex(32)
-SERVICES = ('netns', 'place', 'agentgateway', 'confirm', 'front')   # 部署文件里的五个，按启动的先后
-LONG_RUNNING = ('netns', 'agentgateway', 'front')                   # 其中常驻的三个
+SERVICES = ('netns', 'place', 'egress', 'agentgateway', 'confirm', 'front', 'egress-watch')   # 部署文件里的七个，按文件里的先后
+LONG_RUNNING = ('netns', 'agentgateway', 'front')                   # 其中看守数的那三个常驻的
+EGRESS = ('egress', 'egress-watch')                                 # 装出口规则的两个：一步跑完就退出，一个常驻
 CONFIRM_SECONDS = 10                                                # confirm 这一步等网关的时限
 probe.PORTS = {'front': HOST['front']}   # probe.two_hosts 往哪个端口发
 
@@ -452,17 +459,23 @@ def control_killed(snapshot: Snapshot, during: str = 'swap') -> dict:
 
 
 def restart_killed(snapshot: Snapshot, target: str) -> dict:
-    """让真的发布器做一次带重启的发布；docker 刚把网关容器重新起来（发布器还在等它报告），就把发布器强行杀掉。
-    killed 为假表示没等到那一刻。"""
+    """让真的发布器做一次带重启的发布；docker 刚把网关容器重新起来，并且它在回读口上答得上话了（发布器还在等它
+    报告），就把发布器强行杀掉。killed 为假表示没等到那一刻；answered 是看到网关重新起来之后过了多少秒它在回读口上
+    答话，没等到重启是 None。等到答话才杀，是因为网关刚启动的头几毫秒里，换上去的文件它看不到：看守正好在那时对账的话，
+    要到再下一次对账才收拾好（详见 README）。"""
     def started() -> str:
         return docker('inspect', '-f', '{{.State.StartedAt}}', target).stdout.strip()
     before = started()
     running = subprocess.Popen(restart_command(snapshot, target), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     seen = wait_for(lambda: started() not in ('', before) or running.poll() is not None, 90, every=0.01)
-    killed = seen is not None and running.poll() is None
+    answered = None
+    if seen is not None:
+        answered = wait_for(lambda: read_back(HOST['readback'], '/config_dump')['status'] == 200 or running.poll() is not None,
+                            10, every=0.01)
+    killed = seen is not None and answered is not None and running.poll() is None
     running.kill()
     running.wait(30)
-    return {'killed': killed, 'exit': running.returncode}
+    return {'killed': killed, 'exit': running.returncode, 'answered': answered}
 
 
 def restart_interrupted(snapshot: Snapshot, target: str, after: float, on_swap=None) -> dict:
@@ -656,6 +669,57 @@ def from_another_container() -> dict:
         return {'error': (done.stderr or done.stdout).strip()[-200:]}
 
 
+# 在池的网络命名空间里试着连几个地址（参数，写成 地址:端口），再解析一次后端的名字。connect 的结果：0 是连上了；
+# 113（EHOSTUNREACH）是被 pin-egress.sh 的规则拒绝，IPv6 上是 13（EACCES）；111 是对方自己拒绝。
+CONNECT = r'''
+import json, socket, sys
+seen = {}
+for target in sys.argv[1:]:
+    host, port = target.rsplit(":", 1)
+    with socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET) as s:
+        s.settimeout(3)
+        seen[target] = s.connect_ex((host.strip("[]"), int(port)))
+try:
+    seen["echo"] = socket.gethostbyname("echo")
+except OSError as failed:
+    seen["echo"] = f"{type(failed).__name__}: {failed}"
+print(json.dumps(seen))
+'''
+# 对着一个地址连上若干秒，每种结果各有多少次。
+HAMMER = r'''
+import collections, json, socket, sys, time
+host, port, seconds = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
+seen, end = collections.Counter(), time.time() + seconds
+while time.time() < end:
+    with socket.socket() as s:
+        s.settimeout(0.3)
+        seen[str(s.connect_ex((host, port)))] += 1
+    time.sleep(0.002)
+print(json.dumps(seen))
+'''
+REFUSED_HERE, REFUSED_HERE_V6 = 113, 13
+
+
+def from_the_pool(code: str, *argv: str) -> dict:
+    """在池的网络命名空间里跑一段 Python（一个接在 netns 上的临时容器，不属于这个 compose 项目），它打印一份 JSON。"""
+    done = docker('run', '--rm', '--network', f"container:{container('netns').get('id', '-')}", TOOLS_IMAGE, 'python', '-c', code, *argv)
+    try:
+        return json.loads(done.stdout)
+    except ValueError:
+        return {'error': (done.stderr or done.stdout).strip()[-300:]}
+
+
+def pinned() -> dict:
+    """池的网络命名空间里现在钉着的：{"名字:端口": [地址, …]}。读法是让 egress 这个服务另跑一个临时容器去列规则。"""
+    listed = compose('run', '--rm', '--no-deps', '--entrypoint', 'iptables', 'egress', '-S', 'IDP_EGRESS').stdout
+    found = {}
+    for line in listed.splitlines():
+        words = line.replace('"', '').split()
+        if '--comment' in words and '-d' in words and words[words.index('--comment') + 1].startswith('pin:'):
+            found.setdefault(words[words.index('--comment') + 1][4:], []).append(words[words.index('-d') + 1].split('/')[0])
+    return {key: sorted(addresses) for key, addresses in found.items()}
+
+
 def backend_reachable() -> bool:
     """从网关所在的网络命名空间里（netns 容器）按名字直接去问后端：答了，就是名字解析得了，后端也在。"""
     return docker('exec', container('netns').get('name', '-'), 'wget', '-q', '-T', '3', '-O', '/dev/null',
@@ -671,13 +735,14 @@ def power_cut() -> bool:
 
 
 def pool_events(since: float) -> list[str]:
-    """docker 自 since（Unix 时间）以来给部署文件里的五个容器发过的信号，和它们的退出，按先后：
-    "kill 服务 信号" 和 "die 服务"。"""
+    """docker 自 since（Unix 时间）以来给部署文件里的容器发过的信号，和它们的退出，按先后：
+    "kill 服务 信号" 和 "die 服务"。装出口规则的两个不算：谁都不等它们，它们停在哪一刻与别的没有先后。"""
     done = docker('events', '--since', f'{since:.3f}', '--until', str(int(time.time()) + 1),
                   '--filter', f'label=com.docker.compose.project={PROJECT}', '--format',
                   '{{.TimeNano}} {{.Action}} {{index .Actor.Attributes "com.docker.compose.service"}} {{index .Actor.Attributes "signal"}}')
     rows = [line.split() for line in done.stdout.splitlines()]
-    rows = [row for row in rows if len(row) >= 3 and row[0].isdigit() and row[1] in ('kill', 'die') and row[2] in SERVICES]
+    rows = [row for row in rows if len(row) >= 3 and row[0].isdigit() and row[1] in ('kill', 'die')
+            and row[2] in SERVICES and row[2] not in EGRESS]
     return [' '.join(row[1:]) for row in sorted(rows, key=lambda row: int(row[0]))]
 
 
@@ -1323,6 +1388,9 @@ def cases(r: Results):
     r.check('发布前，锁定的镜像在另一个容器里加载了这份快照', staged.get('loaded'))
     one.expected = staged.get('digest')
     publish(one)   # 第一份文件由本脚本直接放进目录：这个池上还没有确认过任何发布，没有记录
+    # 后端不属于部署文件，先单独起来：egress 这一步只放行它跑的时候解析得了的名字，真的池里后端早就在别处了。
+    # 池启动时后端的名字还解析不了会怎样，是 SH-15。
+    compose('up', '-d', 'echo')
     first = compose('up', '-d')   # 部署文件的启动命令
     if wait_for(lambda: observe()['digest'] is not None, 30) is None:
         die('30 秒内回读口没有给出运行配置：' + first.stderr.strip()[-400:] + compose('logs', '--tail', '20', 'agentgateway').stdout[-600:])
@@ -1347,8 +1415,8 @@ def cases(r: Results):
             and (seen['build'].get('version'), seen['build'].get('gitRevision')) == (LOCK['version'], LOCK['git_revision']))
     policies = {name: json.loads(docker('inspect', '-f', '{{json .HostConfig.RestartPolicy}}', container(name).get('id', '-')).stdout or '{}')
                 for name in SERVICES}
-    r.check('五个容器都没有重启策略：docker 自己不会去起其中任何一个',
-            all(policy.get('Name') in ('no', '') and not policy.get('MaximumRetryCount') for policy in policies.values()) and len(policies) == 5)
+    r.check('七个容器都没有重启策略：docker 自己不会去起其中任何一个',
+            all(policy.get('Name') in ('no', '') and not policy.get('MaximumRetryCount') for policy in policies.values()) and len(policies) == 7)
     mounts = gateway.get('mounts') or {}
     r.note('网关容器的挂载', mounts)
     r.check('配置是整个目录挂进去的，只读；证书目录也只读',
@@ -2055,7 +2123,7 @@ def cases(r: Results):
     pending.start()
     time.sleep(1)
     since, began = time.time(), time.monotonic()
-    stopped = compose('stop', *SERVICES)   # 只点部署文件里的五个：后端 echo 是这套用例自己加的，不跟着停
+    stopped = compose('stop', *SERVICES)   # 只点部署文件里的七个：后端 echo 是这套用例自己加的，不跟着停
     took = round(time.monotonic() - began, 2)
     pending.join(40)
     events, after = pool_events(since), {service: container(service) for service in LONG_RUNNING}
@@ -2132,7 +2200,116 @@ def cases(r: Results):
     r.check('对照：网关启动时后端的名字解析不了，但在第一个请求到来之前它解析得了了。这个请求得到 200：网关是第一次用到这个名字时才去解析的',
             up is not None and back is not None and asked['status'] == 200)
 
+    egress_cases(r)
     keeper_cases(r, fresh)
+
+
+def egress_cases(r: Results):
+    """出口的规则（SH-22）。开始时池好好地在跑，后端也在；结束时也是：三个常驻容器都在，账对得上。
+    最后一段让 egress 这一步失败一次，看网关不启动；原因去掉之后池又是完整的，keeper_cases 接着用它。"""
+    r.case('SH-22', '出口的规则：从网关所在的网络命名空间往外，只连得上配置里写着的地址；断电之后再启动，规则先于网关装好；egress 这一步失败，网关不启动')
+    echo_ip = docker('inspect', '-f', '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}', container('echo').get('id', '-')).stdout.strip()
+    capabilities = {service: docker('inspect', '-f', '{{json .HostConfig.CapAdd}} {{json .HostConfig.CapDrop}} {{.Config.User}}',
+                                    container(service).get('id', '-')).stdout.split() for service in EGRESS}
+    ran, watcher = container('egress'), container('egress-watch')
+    r.note('装规则的两个容器多出来的 capability、去掉的 capability、身份', capabilities)
+    r.check('egress 这一步已经以退出码 0 跑完，egress-watch 在跑；两个都是 root，除了 NET_ADMIN 没有别的 capability',
+            ran.get('running') is False and ran.get('exit') == 0 and bool(watcher.get('running'))
+            and all(found == ['["CAP_NET_ADMIN"]', '["ALL"]', '0:0'] for found in capabilities.values()))   # docker 报告时带 CAP_ 前缀
+
+    backend, callers, admin = f'{echo_ip}:{ECHO_PORT}', f"127.0.0.1:{PORT['callers']}", f"127.0.0.1:{PORT['admin']}"
+    refused = [f'{echo_ip}:{ECHO_PORT + 1}', f"127.0.0.1:{PORT['stats']}", '192.0.2.1:443']   # 最后一个是文档用的地址段，没有人在那里
+    six = f"[::1]:{PORT['stats']}"
+    seen = from_the_pool(CONNECT, backend, callers, admin, *refused, six)
+    held = pinned()
+    r.note('从池的网络命名空间里 connect 的结果（0 连上了，113 和 13 是被规则拒绝，111 是对方拒绝）', seen)
+    r.note('规则里钉着的', held)
+    r.check('钉着的是配置里写着的两处：后端的名字（钉在它的地址上）和回读路由转给的管理地址',
+            held == {f'echo:{ECHO_PORT}': [echo_ip], admin: ['127.0.0.1']})
+    r.check('后端的名字解析得了，后端连得上；回环上，front 转给网关的那个端口和配置里写着的管理地址连得上',
+            seen.get('echo') == echo_ip and [seen.get(target) for target in (backend, callers, admin)] == [0, 0, 0])
+    r.check('后端那个地址的另一个端口、回环上网关的指标端口（它在听，但配置里没有写它）、一个不相干的地址：都被规则拒绝；IPv6 的回环也是',
+            [seen.get(target) for target in refused] == [REFUSED_HERE] * 3 and seen.get(six) == REFUSED_HERE_V6)
+    counted = from_the_pool(HAMMER, echo_ip, str(ECHO_PORT + 1), '8')
+    r.note('egress-watch 每两秒重写一遍规则的 8 秒里，连后端那个地址的另一个端口，各种结果的次数', counted)
+    r.check('这 8 秒里连了不少于 500 次，每一次都被规则拒绝：规则被重写的时候没有空档',
+            sum(counted.values()) >= 500 and set(counted) == {str(REFUSED_HERE)})
+
+    forgot = compose('run', '--rm', '--no-deps', 'egress', 'forget')
+    r.note('docker compose run --rm --no-deps egress forget 说了什么', forgot.stdout.strip().splitlines())
+    r.check('部署说明里写的那条重新解析的命令（docker compose run --rm --no-deps egress forget）：退出码 0，两处都重新钉过，'
+            '钉着的没有变，请求照常',
+            forgot.returncode == 0 and f'pinned echo:{ECHO_PORT} -> {echo_ip}' in forgot.stdout and pinned() == held
+            and get('a.test', '/quick')['status'] == 200)
+
+    cut = power_cut()   # netns 没了，它的网络命名空间连同里面的规则也就没了
+    died = wait_for(lambda: not container('egress-watch').get('running'), 5)
+    dead, since = container('egress-watch'), time.time()
+    up = compose('up', '-d')
+    back = wait_for(lambda: get('a.test', '/quick')['status'] == 200, 30)
+    ran, watcher, gateway, holder = (container(service) for service in ('egress', 'egress-watch', 'agentgateway', 'netns'))
+    r.note('断电之后 egress-watch 过了多少秒停的，它的退出码', [died, dead.get('exit')])
+    r.check('断电（三个常驻容器被强行杀掉）：egress-watch 跟着 netns 死了，没有留在已经没用的那个命名空间里', cut and died is not None)
+    r.check('再跑启动命令：退出码 0；egress 这一步在这次启动里重新跑了，在网关启动之前以 0 跑完；egress-watch 是在新的 netns 之后起来的；请求照常',
+            up.returncode == 0 and back is not None and ran.get('exit') == 0
+            and since <= moment(ran.get('started') or '') <= moment(ran.get('finished') or '') <= moment(gateway.get('started') or '')
+            and bool(watcher.get('running')) and moment(watcher.get('started') or '') >= moment(holder.get('started') or '') >= since)
+    seen = from_the_pool(CONNECT, backend, refused[0], refused[1])
+    r.note('再启动之后从新的网络命名空间里 connect 的结果', seen)
+    r.check('新的网络命名空间里规则在：后端连得上，它的另一个端口和网关的指标端口被拒绝；钉着的还是那两处',
+            seen.get(backend) == 0 and [seen.get(target) for target in refused[:2]] == [REFUSED_HERE] * 2
+            and pinned() == held and outcome(step('confirm')) == (0, 'IN_SYNC'))
+
+    # egress 这一步失败，网关就不启动：compose.yml 里 agentgateway 等 egress 以退出码 0 跑完（service_completed_successfully）。
+    # 让它失败的办法，是运维真会碰到的一种：egress 是 root，除了 NET_ADMIN 没有别的 capability（上面查过），读配置靠的是
+    # 文件对所有人可读；配置文件改成 0600（属主是跑这套用例的用户），它就读不了，脚本说 cannot read 然后以 1 退出。
+    # place 是以属主的身份跑的，读得了这个文件，而且内容已经是记录的那一份，它不会重写文件，所以每次 up 里 place 都抹不掉这个办法。
+    config_file = POOL / 'config' / 'config.yaml'
+    written, content = config_file.stat(), config_file.read_text(encoding='utf-8')
+    mode = stat.S_IMODE(written.st_mode)
+    r.check('egress 读配置靠的是文件对所有人可读：配置文件现在是 0644（发布器写的就是这个）', mode == 0o644)
+    cut = power_cut()
+    died = wait_for(lambda: not container('egress-watch').get('running'), 5)
+    since = time.time()
+    os.chmod(config_file, 0o600)
+    try:
+        failed = compose('up', '-d')
+        names = ('netns', 'egress', 'agentgateway', 'confirm', 'front', 'egress-watch')
+        stopped = {service: container(service) for service in names}
+        said, placed = step('egress'), step('place')
+        closed = get('a.test', '/quick')
+        left, left_content = config_file.stat(), config_file.read_text(encoding='utf-8')
+    finally:
+        os.chmod(config_file, mode)   # 不管上面出了什么错，目录里的文件都要回到原样
+    r.note('egress 失败时 docker compose up -d 的退出码，和它最后说的', [failed.returncode, (failed.stderr.strip().splitlines() or [''])[-1].strip()])
+    r.note('egress 失败时：egress 容器的退出码，和它写到标准错误上的', [said['exit'], said['stderr']])
+    r.note('egress 失败时：place 的退出码和结局，配置文件的模式', [outcome(placed), oct(stat.S_IMODE(left.st_mode))])
+    r.note('egress 失败时：netns、egress、网关、confirm、front、egress-watch 是不是在跑',
+           {service: stopped[service].get('running') for service in names})
+    r.check('egress 读不了配置（配置文件是 0600）：docker compose up -d 以非零码结束；egress 容器以非零码退出，在标准错误上说了为什么（cannot read）',
+            cut and died is not None and failed.returncode != 0 and said['exit'] not in (None, 0) and 'cannot read' in said['stderr'])
+    r.check('网关没有被这次 up 启动：它的启动时刻不晚于命令开始的时刻，它没在跑；confirm、egress-watch 也没有启动；front 没在跑，业务端口上没有人应答',
+            all(not stopped[service].get('running') and moment(stopped[service].get('started') or '') <= since
+                for service in ('agentgateway', 'confirm', 'front', 'egress-watch'))
+            and closed['status'] is None)
+    r.check('这个办法是确定的：place 在这次 up 里照常以 0 跑完（IN_PLACE），在 egress 之前；配置文件没有被动过：还是那个文件，'
+            '内容、属主、修改时刻都不变，模式还是 0600',
+            outcome(placed) == (0, 'IN_PLACE') and since <= placed['started'] <= placed['finished'] <= said['started']
+            and stat.S_IMODE(left.st_mode) == 0o600 and left_content == content
+            and (left.st_ino, left.st_uid, left.st_mtime_ns) == (written.st_ino, written.st_uid, written.st_mtime_ns))
+
+    # 去掉原因：池又是完整的。
+    since = time.time()
+    again = compose('up', '-d')
+    back = wait_for(lambda: get('a.test', '/quick')['status'] == 200, 30)
+    ran, watcher, gateway = (container(service) for service in ('egress', 'egress-watch', 'agentgateway'))
+    r.check('配置文件改回 0644 再跑启动命令：退出码 0；egress 在这次启动里重新跑了，以 0 跑完，网关在它之后才启动；confirm 是 IN_SYNC；请求照常',
+            stat.S_IMODE(config_file.stat().st_mode) == 0o644 and again.returncode == 0 and back is not None and ran.get('exit') == 0
+            and since <= moment(ran.get('started') or '') <= moment(ran.get('finished') or '') <= moment(gateway.get('started') or '')
+            and outcome(step('confirm')) == (0, 'IN_SYNC'))
+    r.check('池又是完整的：三个常驻容器和后端 echo 都在跑，egress-watch 在跑；钉着的和之前一样',
+            all(container(service).get('running') for service in (*LONG_RUNNING, 'echo')) and bool(watcher.get('running'))
+            and pinned() == held)
 
 
 def keeper_cases(r: Results, confirmed: Snapshot):
@@ -2210,8 +2387,8 @@ def keeper_cases(r: Results, confirmed: Snapshot):
             and bool(after['front'].get('running')) and after['front'].get('id') == before['front'].get('id')
             and after['front'].get('pid') != before['front'].get('pid')
             and all(same_process(before[service], after[service]) for service in ('netns', 'agentgateway')) and healed is not None)
-    r.check('看守的环境里带着部署文件的各个变量（它的单元里就是这样），它跑的启动命令没有因此重建哪个容器：五个容器都还是原来那五个',
-            ids == {service: container(service).get('id') for service in SERVICES} and len(set(ids.values())) == 5)
+    r.check('看守的环境里带着部署文件的各个变量（它的单元里就是这样），它跑的启动命令没有因此重建哪个容器：七个容器都还是原来那七个',
+            ids == {service: container(service).get('id') for service in SERVICES} and len(set(ids.values())) == 7)
     stopped = keeper.stop()
     r.check('叫停看守（SIGTERM）：它以 0 退出，标准错误上什么都没有说', stopped['exit'] == 0 and stopped['seconds'] < 5 and not stopped['stderr'])
 
@@ -2397,6 +2574,8 @@ def keeper_cases(r: Results, confirmed: Snapshot):
             and now['config'].get(key) == '46s' and on_disk() == tuned.text and record().get('snapshot') == tuned.sha256)
 
     # 带重启的发布做到一半，发布器被强行杀掉：docker 已经把网关带着新设置重新起来，记录里仍是上一份（SH-11）。
+    # 等网关在回读口上答得上话才杀：刚启动的头几毫秒里它看不到换上去的文件，看守正好在那时把记录的那一份放回去的话，
+    # 那一次对账是 UNKNOWN，要下一次才是 RESTART_PENDING。
     half = Snapshot([*routes, 'w', 'z'], deadline=47)
     mark = keeper.mark()
     for _ in range(3):   # 发布器一开始正好撞上看守在对账时，它什么都没做就退出了：再来
@@ -2407,6 +2586,7 @@ def keeper_cases(r: Results, confirmed: Snapshot):
     pending = keeper.next(lambda line: reconciled(line).get('outcome') == 'RESTART_PENDING', 20, mark)
     time.sleep(7)   # 看守又对了一次账还多
     lines, now = list(keeper.lines[mark:]), observe()
+    r.note('带重启的发布做到一半：网关重新起来之后过了多少秒在回读口上答话，这时才杀发布器', killed.get('answered'))
     r.note('带重启的发布做到一半发布器被杀掉：这期间看守写的', [brief(line) for line in lines])
     r.check('带重启的发布做到一半，发布器被强行杀掉：网关已经带着新设置起来了。看守在下一次对账时把记录的那一份放回去，'
             '报告启动设置还差一次重启（RESTART_PENDING），指出是哪一项',
@@ -2600,7 +2780,7 @@ def unit_command_case(r: Results, confirmed: Snapshot):
     if not r.check(f'这台机器上没有叫 {DEPLOYED_PROJECT} 的 compose 项目（部署文件自己的项目名）。有的话这一条不动它，后面的也就没有跑', not others):
         return
     HOSTED.mkdir()
-    for name in ('compose.yml', 'front.nginx.conf'):
+    for name in ('compose.yml', 'front.nginx.conf', 'pin-egress.sh'):
         shutil.copy2(DEPLOY / name, HOSTED / name)
     shutil.copy2(POOL_ENV, HOSTED / '.env')
     HOSTED_MARK.write_text(DEPLOYED_PROJECT + '\n', encoding='utf-8')
@@ -2612,7 +2792,7 @@ def unit_command_case(r: Results, confirmed: Snapshot):
     r.note('池的单元的启动命令和停止命令（原样）', [pool_unit.get('ExecStart'), pool_unit.get('ExecStop')])
     r.note('docker compose 记在容器上的项目目录和它用的 compose 文件', sorted({(c['directory'], c['files']) for c in first.values()}))
     r.check('池的单元的启动命令（ExecStart=，原样）在安装目录里跑：退出码 0。命令里没有给项目和文件，docker compose 自己找到了'
-            '那个目录里的 compose.yml 和 .env：项目名是部署文件里写的那个，五个服务各一个容器',
+            '那个目录里的 compose.yml 和 .env：项目名是部署文件里写的那个，七个服务各一个容器',
             up.returncode == 0 and pool_unit.get('ExecStart', [''])[0] == '/usr/bin/docker'
             and not any(word.startswith('-') and word != '-d' for word in pool_unit['ExecStart'])
             and sorted(first) == sorted(SERVICES)
@@ -2662,9 +2842,9 @@ def unit_command_case(r: Results, confirmed: Snapshot):
             and back.get('why') == 'the gateway is not running (exited (137))' and back.get('repaired') is True
             and back.get('start_error') == '' and reconciled(back).get('outcome') == 'IN_SYNC' and healed is not None
             and now['reload'] == LOADED and now['digest'] == record().get('digest'))
-    r.check('这条命令拿到的设置与池的单元的启动命令拿到的相同：没有哪个容器被重建，五个还是原来那五个；netns 和 front 没有被动过，'
+    r.check('这条命令拿到的设置与池的单元的启动命令拿到的相同：没有哪个容器被重建，七个还是原来那七个；netns 和 front 没有被动过，'
             '网关换了一个进程；place 和 confirm 各又跑了一遍（IN_PLACE、IN_SYNC）',
-            len(after) == 5 and {service: c['id'] for service, c in after.items()} == {service: c['id'] for service, c in before.items()}
+            len(after) == 7 and {service: c['id'] for service, c in after.items()} == {service: c['id'] for service, c in before.items()}
             and all(same_process(before[service], after[service]) for service in ('netns', 'front'))
             and bool(after['agentgateway']['running']) and after['agentgateway']['pid'] != before['agentgateway']['pid']
             and outcome(step_of(after['place'])) == (0, 'IN_PLACE') and outcome(step_of(after['confirm'])) == (0, 'IN_SYNC')
@@ -2676,7 +2856,7 @@ def unit_command_case(r: Results, confirmed: Snapshot):
     resting = hosted()
     r.check('停，照 systemctl stop 池的单元时的先后（units.py 的 UN-03）：先叫停看守，它以 0 退出；再跑池的单元的停止命令'
             '（ExecStop=，原样）：退出码 0，三个常驻容器都停了，过了 3 秒还停着',
-            stopped['exit'] == 0 and not stopped['stderr'] and halted.returncode == 0 and len(resting) == 5
+            stopped['exit'] == 0 and not stopped['stderr'] and halted.returncode == 0 and len(resting) == 7
             and not any(c['running'] for c in resting.values()))
     down = run_in_place(['docker', 'compose', 'down', '--volumes', '--timeout', '2'])
     left = sorted(c['name'] for c in hosted().values()) + hosted_networks()

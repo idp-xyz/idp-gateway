@@ -1,0 +1,79 @@
+# An isolated network for run.py: a stand-in resolver, two stand-in servers, and the pinned gateway in the
+# network namespace of a holder, as in deploy/compose. Nothing here is a third party.
+name: idp-gw-egressnet
+
+networks:
+  n:
+    ipam:
+      config:
+        - subnet: 10.31.32.0/24
+
+x-stand-in: &stand-in
+  image: public.ecr.aws/docker/library/python:3.13-alpine@sha256:1e1f6334529d1fb26a2ef619d7cffb30a7c7d7cc1cc7338ebee283a58d1aeaca
+  stop_grace_period: 1s
+
+services:
+  dns:
+    <<: *stand-in
+    command: ["python", "-u", "/opt/dns.py"]
+    volumes:
+      - ./dns.py:/opt/dns.py:ro
+      - ./.run/answers:/answers:ro
+    networks:
+      n:
+        ipv4_address: 10.31.32.53
+
+  # Where the name points at first.
+  registered:
+    <<: *stand-in
+    command: ["python", "-u", "/opt/hit.py"]
+    volumes:
+      - ./hit.py:/opt/hit.py:ro
+      - ./.run/hits/registered:/hits
+    networks:
+      n:
+        ipv4_address: 10.31.32.10
+
+  # Where it is made to point later.
+  evil:
+    <<: *stand-in
+    command: ["python", "-u", "/opt/hit.py"]
+    volumes:
+      - ./hit.py:/opt/hit.py:ro
+      - ./.run/hits/evil:/hits
+    networks:
+      n:
+        ipv4_address: 10.31.32.20
+
+  # Holds the network namespace, like netns in deploy/compose: the gateway can be restarted without the
+  # rules in the namespace going away. Names it does not know itself, Docker's resolver asks the stand-in.
+  netns:
+    image: public.ecr.aws/nginx/nginx-unprivileged:stable-alpine@sha256:c3fc8fa482be50ef709c6438eb1bc98d50dbfe5a9b48be90711b8814f4dfd701
+    container_name: idp-gw-egressnet-netns
+    entrypoint: ["sleep", "infinity"]
+    user: "65534:65534"
+    stop_signal: SIGKILL
+    dns:
+      - 10.31.32.53
+    ports:
+      - "127.0.0.1:27630:8080"
+    networks:
+      n:
+        ipv4_address: 10.31.32.30
+    depends_on:
+      - dns
+      - registered
+      - evil
+
+  gw:
+    image: cr.agentgateway.dev/agentgateway@sha256:60216aafb03d37f94e952ff3d51d2f630a65b10ecaebdc0a864882f92610c45b
+    container_name: idp-gw-egressnet-gw
+    network_mode: "service:netns"
+    command: ["-f", "/work/config.yaml"]
+    environment:
+      # Not a secret: this gateway holds no session worth protecting. Without it the binary writes one into its file.
+      SESSION_KEY: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+    volumes:
+      - ./config.yaml:/work/config.yaml:ro
+    depends_on:
+      - netns

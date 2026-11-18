@@ -9,8 +9,9 @@
 
 | 文件 | 是什么 |
 |---|---|
-| `compose.yml` | 一个池：五个服务，和它们启动的先后 |
+| `compose.yml` | 一个池：七个服务，和它们启动的先后 |
 | `front.nginx.conf` | 网关前面那层 nginx 的配置。各条指令与黑盒套件跑过的那一份相同，只差两个地址 |
+| `pin-egress.sh` | 装出口规则的脚本：网关所在的网络命名空间里，新的外出连接只许去配置里写着的地址（见"出口的规则"） |
 | `.env.example` | 要填的变量，每一项的意思写在里面。复制成 `.env` 再填 |
 | `idp-gateway-pool.service` | systemd 单元：开机时启动这个池，关机时停下它 |
 | `idp-gateway-pool-keep.service` | systemd 单元：看守。池里的容器死了把它们起回来，平时每分钟对一次账（见"看守"） |
@@ -24,13 +25,35 @@
 |---|---|---|
 | `netns` | 常驻 | 什么都不做，只占着网络命名空间和本机上的两个端口。`front` 和网关都接在它里面，相当于 Kubernetes 上同一个 Pod 里的两个容器；两个可以各自重启 |
 | `place` | 跑完就退出 | 网关启动之前，把这个池上最后一次得到确认的那份配置放回目录里（`gateway-control place`）。它失败，网关不启动 |
+| `egress` | 跑完就退出 | 网关启动之前，在它所在的网络命名空间里装上出口的规则（`pin-egress.sh once`）。它失败，网关不启动 |
 | `agentgateway` | 常驻 | 网关：锁定的上游镜像，按摘要引用。配置目录和证书目录都是只读挂进去的 |
 | `confirm` | 跑完就退出 | 网关起来之后对一次账（`gateway-control reconcile`）：经回读口确认网关在跑的就是那一份。它的退出码不是 0，`front` 不启动 |
 | `front` | 常驻 | nginx。对外收业务请求的只有它；它没有启动时，业务端口上没有人应答 |
+| `egress-watch` | 常驻 | 每两秒跑一遍同一个脚本（`pin-egress.sh watch`）：发布换上来的配置里多出来的后端，靠它放行。看守不数它 |
 
-`docker compose up -d` 启动：`netns` 和 `place` 一起开始，两个之间没有先后；`netns` 起来了、`place` 也以退出码 0 跑完了，网关才启动；然后是 `confirm`；它的退出码是 0，才是 `front`。`docker compose stop` 停下。本机上只映射两个端口：业务端口（`CALLERS_LISTEN`），和只在回环上的回读口（`READBACK_PORT`）。
+`docker compose up -d` 启动：`netns` 和 `place` 一起开始，两个之间没有先后；`netns` 起来了、`place` 也以退出码 0 跑完了，才是 `egress`；它也以 0 跑完了，网关才启动；然后是 `confirm`；它的退出码是 0，才是 `front`。`egress-watch` 在 `egress` 跑完之后启动，别的都不等它。`docker compose stop` 停下。本机上只映射两个端口：业务端口（`CALLERS_LISTEN`），和只在回环上的回读口（`READBACK_PORT`）。
 
-五个容器都没有重启策略（`restart: "no"`），docker 自己不去起其中任何一个：由 docker 起来的网关不经过 `place`，读到的是目录里当时放着的文件，不管有没有人确认过它。容器死了，把它们起回来的是看守：它跑的也是 `docker compose up -d`。
+七个容器都没有重启策略（`restart: "no"`），docker 自己不去起其中任何一个：由 docker 起来的网关不经过 `place` 和 `egress`，读到的是目录里当时放着的文件，不管有没有人确认过它。容器死了，把它们起回来的是看守：它跑的也是 `docker compose up -d`。
+
+## 出口的规则
+
+锁定的网关按名字找后端，名字后来指到哪里它就去哪里，没有哪项设置能让它不跟（[`tests/integration/egressnet`](../../tests/integration/egressnet/README.md)）。所以限制放在它所在的网络命名空间里：`pin-egress.sh` 读配置目录里的 `config.yaml`，新的外出连接只放行下面这些，别的一律拒绝，IPv6 的也是。
+
+- 配置里每一处 `host: 名字:端口`：那个名字**第一次**解析到的各个 IPv4 地址，只在那个端口上。写的是 IPv4 地址时照写的放行；回读路由转给的管理地址 `127.0.0.1:<管理端口>` 就是这样放行的。
+- 解析器：Docker 给容器的那一个，和它去问的上游解析器（`resolv.conf` 里 `# ExtServers:` 那一行写着的）。
+- 回环上的 `127.0.0.1:8081`：`front` 把业务请求转给网关。回环上别的端口（网关的指标、就绪端口）与别的地址一样被拒绝。
+- 已经建立的连接上的往来。
+
+用的时候要知道：
+
+- **一个名字只解析一次。** 钉住的地址记在规则里，跟着这个网络命名空间走：网关重启、`egress-watch` 重启、再跑 `docker compose up -d`，都不重新解析；`netns` 换过（停了再起，机器重启），才从头来。还没解析出来过的名字会接着试。
+- **后端的地址真的换了**，要人来说一声：`docker compose run --rm --no-deps egress forget`。它丢掉全部钉住的地址，按现在的解析重新钉。在那之前，去那个后端的请求得到 503。地址经常变的后端（CDN、多地域）不合用。
+- **钉的是第一次解析到的地址**，信的是那一刻的解析器；没有一份独立的"登记的地址"可以对照。它防的是之后被改指。
+- **发布换上来的配置里多了一个后端**，要等 `egress-watch` 下一遍（两秒之内）才连得通。它没在跑时，新的后端一直连不通，已经放行的不受影响；谁都不会因此收到通知，看守不数它。`docker compose up -d` 会把它起回来。
+- **被规则拒绝的连接**，网关那边看到的是"no route to host"，不是"connection refused"。
+- **只认这一种写法**：一行一个 `host: 名字:端口`。别的写法（写在花括号里的，带协议前缀的）认不出来，认不出来的不放行。
+- 装规则的两个容器以 root 运行，除了 `NET_ADMIN` 没有别的 capability，所以读配置靠的是文件对所有人可读：发布器写的是 0644，目录要 0755。镜像（`EGRESS_IMAGE`）只用里面的 iptables。
+- `egress-watch` 与 `netns` 共用 PID 命名空间：`netns` 一死它就跟着死，不会留在已经没用的那个网络命名空间里。
 
 ## 准备
 
@@ -60,7 +83,7 @@
 ## 头一次安装
 
 1. 把第一份快照放到 `POOL_DIR/config/config.yaml`，权限 0644。
-2. `docker compose up -d agentgateway`。只起 `netns`、`place` 和网关。这个池还没有记录，`place` 没有可放的（`NO_RECORD`），网关从放着的那个文件启动；`front` 没有启动，请求进不来。
+2. `docker compose up -d agentgateway`。只起 `netns`、`place`、`egress` 和网关。这个池还没有记录，`place` 没有可放的（`NO_RECORD`），网关从放着的那个文件启动；`front` 没有启动，请求进不来。
 3. 用发布器把同一份快照发布一次：`gateway-control publish --snapshot <那份文件> …`。放着的正是它，网关也报告它在生效，发布器只把它记下来（`ACTIVE`，不再写文件）。从这以后这个池有了记录。
 4. `docker compose up -d`。`confirm` 对上了，`front` 启动，请求进得来了。
 5. 要开机自己起来、容器死了自己起回来，再装两个单元：`idp-gateway-pool.service` 和 `idp-gateway-pool-keep.service`，做法写在各自文件的开头。
@@ -127,7 +150,7 @@ STAGING="--image <compose.yml 里网关用的那个镜像，按摘要>
 
 `gateway-control keep` 是常驻的，守着这一个池；由 `idp-gateway-pool-keep.service` 跑，身份是 `CONTROL_USER` 那个账号。它做两件事：
 
-- **每 5 秒看一眼三个常驻容器。** 有没在跑的，它跑启动命令 `docker compose up -d`。这与开机时是同一条命令，所以照样是 `place` 在先，`confirm` 对上了才开 `front`。它自己不直接启动哪个容器，也不重启在跑着的容器。
+- **每 5 秒看一眼三个常驻容器**：`netns`、网关和 `front`。下文说的"三个常驻容器"都是这三个；第四个常驻的 `egress-watch` 它不看。有没在跑的，它跑启动命令 `docker compose up -d`。这与开机时是同一条命令，所以照样是 `place` 和 `egress` 在先，`confirm` 对上了才开 `front`。它自己不直接启动哪个容器，也不重启在跑着的容器。
 - **网关在跑时每分钟对一次账**，做的就是 `gateway-control reconcile`。发布器死在半路留下的文件、有人绕过发布器写的文件，到这时被收回去。
 
 | 它看到的 | 它做什么 |
@@ -258,8 +281,10 @@ scrape_configs:
 - **`netns` 这个容器单独死了，池就断了，只跑 `up -d` 修不好。** 网关和 `front` 还在跑，却连不到了；`up -d` 把 `netns` 重新起来，那两个仍接在原来的命名空间里，`confirm` 读不到网关，`front` 的端口上没有人应答。看守遇到这种情况会先把那两个停下再启动（`SH-16`）；没有看守时要先 `docker compose stop` 再 `docker compose up -d`。
 - **发布器死在半路留下的文件，最长要过一分钟才被收回去。** 那份没有人确认过的文件，网关加载得了的话已经在跑它，直到看守下一次对账。没有看守时没有谁会自动去对账：启动这个池时会对一次，平时要有人跑 `gateway-control reconcile` 或 `docker compose up -d`。
 - **看守只管把容器起回来和对账，别的它不做。** 启动设置还差一次重启（`RESTART_PENDING`），读不到网关（`UNKNOWN`），怎么试都起不来：它写在自己的输出里，也在它给出的指标里。有没有人知道，看 Prometheus 接没接上、告警送不送得出去（见"告警"）；送出去的那一半不在这个仓库里。
+- **网关刚启动的头几毫秒里，换上去的文件它看不到。** 看守的对账正好落在那时（见过的情形是带重启的发布做到一半、发布器被强行杀掉），那一次的结局是 `UNKNOWN`；下一次对账（默认一分钟一次）把同一份再放一遍就好了，不用人管。`UNKNOWN` 的告警要连着 5 分钟才响。
 - **看守自己停了，池照常跑，只是没有人守着了。** 它被杀掉由 systemd 重新起来；它的单元是 `failed` 时（`.env` 或命令行写得不对）不会。Prometheus 接上了的话，1 分钟之后 `GatewayKeeperDown` 响；没有接上，就没有谁知道。
 - **后端的名字，要在网关第一次用到它之前就解析得了。** 网关是在第一个请求用到一个后端的名字时才去解析它的。那一次解析不了（名字还不存在），这条路由就一直答 `503 dns resolution failed`，名字解析得了之后也不恢复：测试里等了 20 秒，另一次单独的实验里等了 240 秒，都没有恢复；重启网关之后立刻就好。多久会自己恢复没有量到。解析器够不着（而不是名字不存在）时是不是也这样，没有测。
+- **出口的规则是 `docker compose up -d` 装的，绕过它起来的网关没有规则管着。** `netns` 换过之后，新的网络命名空间里什么规则都没有；`up -d` 每次都先跑 `egress` 再起网关，所以经它起来的没有这个问题。手工 `docker start` 或 `docker restart` 把 `netns` 和网关一起重启，网关就在一个没有规则的命名空间里了，和绕过 `place` 是同一类事。只重启网关不要紧：命名空间没有换，规则还在。
 - **映射出来的端口不经过本机防火墙的 INPUT 规则。** 这是 docker 的做法，这里没有测。`CALLERS_LISTEN` 写成 `0.0.0.0:端口` 就是对所有网卡开放；要限制来源，把地址写成具体的网卡地址，或者在 docker 自己的规则链里限制。
 - **`place` 和 `confirm` 每次启动各留一份 JSON 在自己容器的日志里**（`docker compose logs place confirm`）。日志写到哪里、留多久、容器的资源上限，都没有定：用的是 docker 的默认值。
 - **一台机器上不止一个池**没有做：`compose.yml` 里的项目名是固定的，发布器做离线加载用的临时容器、端口和目录也要每个池各一套；两个单元也是照一个池写的。
@@ -272,6 +297,9 @@ scrape_configs:
 - **看守正跑着启动命令时被强行杀掉。** 被叫停（SIGTERM）时它把这条命令跑完才退出（`SH-18`）。被强行杀掉时那条命令会不会留下一个起了一半的池，没有看过；照它的做法，重新起来之后它会看到没在跑的容器，再跑一次启动命令。
 - **看守在跑时有人手工动容器**：`docker restart` 网关，或者手工跑的 `docker compose up -d` 与看守跑的那一条同时进行。
 - **`netns` 被重新启动过、而网关和 `front` 一直在跑**时看守的处理（它也当成接错了命名空间，先停再启动）只有单元测试；跑过的是 `netns` 死着的那一种。
+- **出口的规则对着真实的外部后端。** 池里试过的后端是同一个 compose 网络里的名字，由 Docker 的解析器自己答；要去问上游解析器的名字，只在 `tests/integration/egressnet` 里对着替身解析器试过。放行上游解析器靠的是 Docker 写在 `resolv.conf` 里的一行注释，放行 Docker 的解析器靠的是它改写查询端口的做法：换了 docker 版本这两样变了会怎样没有试，测的是 29.8.1。
+- **`egress` 这一步失败。** 它失败网关就不启动，靠的是与 `place` 相同的启动条件；试过的是 `place` 失败（`SH-13`），和 `egress` 读不了配置（配置文件是 0600，`SH-22`）：`docker compose up -d` 以非零码结束，`egress` 在标准错误上说 `cannot read`，网关、`confirm`、`front`、`egress-watch` 都没有启动；改回 0644 再跑启动命令就好了。`egress` 的别的失败方式（比如 iptables 装不上）没有试。
+- **`egress-watch` 死了而 `netns` 还在。** 照做法，装好的规则还在，新的后端不再被放行；没有试，也没有告警看着它。
 - 换镜像（升级 agentgateway）在这个部署上怎么做。
 - `GATEWAY_USER` 和 `CONTROL_USER` 是两个不同的账号时，文件的属主和权限怎么定。
 - 启动时本机上还没有镜像：`up -d` 会先去拉。镜像仓库那时够不着会怎样没有试过，测试时镜像已经在本机上。

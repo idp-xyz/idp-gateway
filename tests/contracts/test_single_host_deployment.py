@@ -80,15 +80,94 @@ class Images(unittest.TestCase):
             with self.subTest(service=name):
                 self.assertEqual(SERVICES[name]['image'], '${FRONT_IMAGE:-' + front_image() + '}')
 
+    def test_the_egress_rules_are_installed_from_the_image_the_suites_ran_them_with(self):
+        """Only its iptables is used. By digest, like the other two, and the same one in both suites."""
+        used = re.search(r'^IPTABLES = "(docker@sha256:[0-9a-f]{64})"$', text('tests/integration/egressnet/run.py'), re.M)
+        self.assertIsNotNone(used)
+        for name in ('egress', 'egress-watch'):
+            with self.subTest(service=name):
+                self.assertEqual(SERVICES[name]['image'], '${EGRESS_IMAGE:-' + used[1] + '}')
+
 
 class StartOrder(unittest.TestCase):
     """compose starts a service once what it depends on is in the stated condition. This order is the boot gate."""
 
-    def test_the_pool_is_these_five_services(self):
-        self.assertEqual(list(SERVICES), ['netns', 'place', 'agentgateway', 'confirm', 'front'])
+    def test_the_pool_is_these_services(self):
+        self.assertEqual(list(SERVICES), ['netns', 'place', 'egress', 'agentgateway', 'confirm', 'front', 'egress-watch'])
 
-    def test_the_gateway_starts_after_the_confirmed_snapshot_is_in_place(self):
-        self.assertEqual(SERVICES['agentgateway']['depends_on'], {'netns': STARTED, 'place': COMPLETED})
+    def test_the_gateway_starts_after_the_confirmed_snapshot_is_in_place_and_the_egress_rules_are_in(self):
+        """A gateway that starts before the rules are in its network namespace can connect anywhere."""
+        self.assertEqual(SERVICES['agentgateway']['depends_on'], {'netns': STARTED, 'place': COMPLETED, 'egress': COMPLETED})
+
+    def test_the_egress_rules_are_installed_from_the_placed_snapshot_on_every_start(self):
+        """egress runs to completion like place: `up -d` runs it again, so a namespace that replaced the old one
+        gets its rules before the gateway is started in it."""
+        egress = SERVICES['egress']
+        self.assertEqual(egress['command'], ['once'])
+        self.assertEqual(egress['depends_on'], {'netns': STARTED, 'place': COMPLETED})
+        self.assertNotIn('pid', egress)
+
+    def test_the_egress_watcher_cannot_outlive_the_namespace_it_was_started_in(self):
+        """It shares the holder's PID namespace: when the holder dies it dies, and the next `up -d` starts it in the
+        new network namespace. Left running in the old one it would add nothing where the gateway is."""
+        watcher = SERVICES['egress-watch']
+        self.assertEqual(watcher['command'], ['watch'])
+        self.assertEqual(watcher['pid'], 'service:netns')
+        self.assertEqual(watcher['depends_on'], {'egress': COMPLETED})
+        self.assertNotIn('egress-watch', {name for service in SERVICES.values() for name in service.get('depends_on', {})},
+                         'nothing waits for the watcher')
+
+    def test_both_egress_services_run_the_script_in_the_namespace_of_the_holder(self):
+        for name in ('egress', 'egress-watch'):
+            service = SERVICES[name]
+            with self.subTest(service=name):
+                self.assertEqual(service['network_mode'], 'service:netns')
+                self.assertEqual(service['entrypoint'], ['/bin/sh', '/opt/pin-egress.sh'])
+                self.assertEqual(service['user'], '0:0')
+                self.assertEqual(service['volumes'], ['./pin-egress.sh:/opt/pin-egress.sh:ro',
+                                                      '${POOL_DIR:?see .env.example}/config:/work/config:ro'])
+                self.assertEqual(service['tmpfs'], ['/tmp'])
+                self.assertEqual(service['environment'], {'CONFIG': '/work/config/config.yaml', 'LOOP_ALLOW': '127.0.0.1:8081'})
+        # The one loopback destination allowed besides what the snapshot names is where the front proxy sends requests.
+        self.assertIn('proxy_pass http://127.0.0.1:8081;', text('deploy/compose/front.nginx.conf'))
+        script = text('deploy/compose/pin-egress.sh')
+        for mode in ('once', 'watch', 'forget'):
+            self.assertRegex(script, r'(?m)^    ' + mode + r'\)$')
+        # Replaced in one transaction, and the jump is added only after the chain is filled.
+        self.assertIn('iptables-restore --noflush < "$rules"', script)
+        self.assertNotIn('iptables -F', script)
+        self.assertLess(script.index('iptables-restore --noflush < "$rules"'), script.index('iptables -I OUTPUT 1 -j "$CHAIN"'))
+
+    def test_what_the_egress_script_remembers_sits_in_a_chain_that_nothing_jumps_to(self):
+        """A backend the configuration stops naming is not allowed but stays remembered, so that a name is still resolved
+        once. The memory is a chain of its own, written in the same transaction as the one in force. Only the latter may
+        be jumped to; and what is in the memory would allow nothing even if a jump to it were ever added by mistake."""
+        script = text('deploy/compose/pin-egress.sh')
+        self.assertIn('KEPT=${CHAIN}_KEPT', script)
+        self.assertEqual(set(re.findall(r'-j\s+"?\$\{?(\w+)', script)), {'CHAIN'})
+        remembered = re.findall(r'echo "-A \$KEPT .*"', script)
+        self.assertTrue(remembered)
+        for line in remembered:
+            self.assertTrue(line.endswith('-j RETURN"'), line)
+        commit = script.index('echo COMMIT')
+        self.assertLess(script.index('echo ":$KEPT - [0:0]"'), commit)
+        self.assertLess(script.index('echo "-A $KEPT '), commit)
+
+    def test_a_pass_of_the_egress_script_is_never_run_where_errexit_is_ignored(self):
+        """In POSIX sh `set -e` is ignored inside whatever runs as the condition of `if` or `while`, on the left of `||`
+        or `&&`, or after `!`, a subshell or a function included. A pass called that way goes on after its first failing
+        command: a failed read of the configuration would be followed by rules built from an empty list. So each of the
+        three appears only as a command on a line of its own, and the subshell that survives a failed pass in watch mode
+        sets `set -e` itself. (EG-08 in tests/integration/egressnet shows the behaviour; this keeps the text from drifting.)"""
+        script = text('deploy/compose/pin-egress.sh')
+        for name in ('apply', 'write_rules', 'one_pass'):
+            with self.subTest(function=name):
+                calls = [line.strip() for line in script.splitlines()
+                         if not line.strip().startswith(('#', name + '()')) and re.search(r'\b' + name + r'\b', line)]
+                self.assertTrue(calls)
+                for call in calls:
+                    self.assertEqual(call, name)
+        self.assertRegex(script, r'(?m)^    \(\n        set -e\n(?:        .*\n)*?        apply\n    \) 2> "\$WORK/said"\n    status=\$\?\n')
 
     def test_the_front_proxy_starts_after_the_read_back_was_confirmed(self):
         self.assertEqual(SERVICES['confirm']['depends_on'], {'agentgateway': STARTED})
@@ -159,7 +238,11 @@ class Exposure(unittest.TestCase):
                 self.assertEqual(service['cap_drop'], ['ALL'])
                 self.assertEqual(service['security_opt'], ['no-new-privileges:true'])
                 self.assertNotIn('privileged', service)
-                self.assertNotIn('cap_add', service)
+                if name in ('egress', 'egress-watch'):
+                    # Installing the rules takes this one capability, and no other.
+                    self.assertEqual(service['cap_add'], ['NET_ADMIN'])
+                else:
+                    self.assertNotIn('cap_add', service)
 
 
 class Variables(unittest.TestCase):
@@ -347,9 +430,13 @@ class KeeperUnit(unittest.TestCase):
 
     def test_the_keeper_knows_the_long_running_services_by_their_names(self):
         names = [go_constant(POOL_ADAPTER, name) for name in ('HolderService', 'GatewayService', 'FrontService')]
-        self.assertEqual(names, [name for name in SERVICES if name not in STEPS])
-        # What it stops before starting over: the two that sit in the network namespace of the holder.
-        self.assertEqual({name for name, service in SERVICES.items() if service.get('network_mode') == f'service:{names[0]}'}, set(names[1:]))
+        self.assertEqual(names, ['netns', 'agentgateway', 'front'])
+        # What it stops before starting over: the two that sit in the network namespace of the holder and outlive it.
+        # The two egress services sit there too and the keeper does not know them: one has exited by then, and the
+        # other dies with the holder (it shares the holder's PID namespace).
+        sharing = {name for name, service in SERVICES.items() if service.get('network_mode') == f'service:{names[0]}'}
+        self.assertEqual(sharing, set(names[1:]) | {'egress', 'egress-watch'})
+        self.assertEqual(SERVICES['egress-watch']['pid'], f'service:{names[0]}')
         self.assertIn('p.compose(ctx, "stop", FrontService, GatewayService)', POOL_ADAPTER)
         self.assertIn('p.compose(ctx, "up", "-d")', POOL_ADAPTER)
         for name in names:
@@ -518,7 +605,7 @@ class ComposeSuite(unittest.TestCase):
         self.assertIn("argv = filled_in(keep_unit.get('ExecStart') or ['false'], settings)", self.RUNNER)
         self.assertIn("keeper = Keeper(command=argv, cwd=HOSTED, environment={**plain, **settings})", self.RUNNER)
         # The directory holds the deployment's own files, and the pool it starts carries the project name they give.
-        self.assertIn("for name in ('compose.yml', 'front.nginx.conf'):\n        shutil.copy2(DEPLOY / name, HOSTED / name)", self.RUNNER)
+        self.assertIn("for name in ('compose.yml', 'front.nginx.conf', 'pin-egress.sh'):\n        shutil.copy2(DEPLOY / name, HOSTED / name)", self.RUNNER)
         self.assertIn("DEPLOYED_PROJECT = yaml.safe_load((DEPLOY / 'compose.yml').read_text(encoding='utf-8'))['name']", self.RUNNER)
         # Cut the way the suite cuts it, the keeper's command is the one KeeperUnit checks.
         joined = text('deploy/compose/idp-gateway-pool-keep.service').replace('\\\n', ' ')

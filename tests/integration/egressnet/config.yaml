@@ -1,0 +1,24 @@
+# The pinned agentgateway, one route, no credentials. lookupFamily is V4Only because the stand-in resolver
+# has A records only. upstream.idp.test is not an address anyone registered: it is a name, and this suite
+# is about what happens when the name is made to point somewhere else.
+config:
+  adminAddr: 127.0.0.1:15000
+  statsAddr: 127.0.0.1:15020
+  readinessAddr: 127.0.0.1:15021
+  storage:
+    mode: readOnly
+  dns:
+    lookupFamily: V4Only
+gateways:
+  callers:
+    port: 8080
+    protocol: HTTP
+routes:
+- name: upstream
+  gateways: [callers]
+  hostnames: ["egress.idp.test"]
+  matches:
+  - path:
+      pathPrefix: /
+  backends:
+  - host: upstream.idp.test:8080
