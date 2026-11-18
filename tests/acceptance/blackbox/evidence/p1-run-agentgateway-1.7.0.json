@@ -1,12 +1,12 @@
 {
   "title": "IDP Gateway black-box suite: real agentgateway, gateway-authz (acceptance build), mock provider",
-  "started_at_utc": "2026-11-18T16:56:23.551988+00:00",
-  "finished_at_utc": "2026-11-18T16:57:19.923082+00:00",
+  "started_at_utc": "2026-11-18T17:50:34.671613+00:00",
+  "finished_at_utc": "2026-11-18T17:51:47.417664+00:00",
   "operator": "tops",
   "host": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "python": "3.12.3",
   "command": ".venv/bin/python tests/acceptance/blackbox/run.py",
-  "repository_commit": "cc98574f9f42104cbee79f918b34d4de768d84b0",
+  "repository_commit": "9147657ae1ca3aa9bbd726288f0984b6cf35dda4",
   "repository_dirty_files": 0,
   "repository_dirty_files_ignores": "tests/acceptance/blackbox/evidence/",
   "agentgateway": {
@@ -105,17 +105,17 @@
       "lines_the_gateway_logged_beside_the_request_line": 0
     }
   },
-  "policy_sha256": "49d0f2f15583466032ca59f4f742953463594e0ea66e171be80d882a12b851e3",
-  "runner_sha256": "67e2e4af79c98a9ae918aa618183c0b0f17132befed83f05a9987b640c24cb0c",
+  "policy_sha256": "9a3b0317caadad03aebbdbebbf1ef624b2c5fe122e52e1796dd80c70d0739ef4",
+  "runner_sha256": "1a56c59edfcb67314df0c9f5e791cbe6096f1176fe71a9b6c9e06308c1cfa07a",
   "gateway_authz": {
     "what_ran": "cmd/gateway-authz built with the acceptance tag; not the product build",
     "build_command": "go build -trimpath -tags acceptance -o tests/acceptance/blackbox/.run/gateway-authz ./cmd/gateway-authz",
     "go": "go version go1.26.8 linux/amd64",
-    "source_sha256": "bae17b437a1d993792f2c091e93fb5ab4c9249a8b99ba67321827b12dda532f6",
+    "source_sha256": "4142000d848c7c07ce0a895648d40593e4dbdcc03956a543d8d24a95c37eb29d",
     "source_sha256_covers": "go.mod and every non-test .go file under cmd/ and internal/",
-    "binary_sha256": "b7a6d1fb1f7e80fabd7422405df57c7800bf5a1b3df4c55913a90a6344e90829",
+    "binary_sha256": "02ea3df39f9660048301f49fe0ba1e7af350166e0cbb3ddbf08ba4f03f3980aa",
     "policy_from": "tests/acceptance/blackbox/policy.poc.json",
-    "credentials_from": "two files written for the run, not recorded: Bearer tokens (--credentials), and account numbers with developer tokens (--developer-tokens)",
+    "credentials_from": "three files written for the run, not recorded: Bearer tokens (--credentials), account numbers with developer tokens (--developer-tokens), and OAuth2 clients (--oauth-clients)",
     "revocations": "a file written for the run (--revocations), empty at the start; changed through the acceptance controls and, in P1-RV-02 to 05, through the product interface",
     "http_versions_seen_from_the_gateway": [
       "HTTP/2.0"
@@ -123,7 +123,7 @@
   },
   "mocks_sha256": {
     "mock_broker.py": "2eed2fca25e57907ccfb7a45acb0c77974cf3597a80fa9600a90699fe3cfff02",
-    "mock_provider.py": "4cc67a6e4d8e92575e1ca204933edc2e7d2e26d4daf9d7f842191cf58e5ba353",
+    "mock_provider.py": "1a907e5403c4c123b2e8a6ec869218ae068c8f1ae45497963311a3b24103ece6",
     "pki.py": "c7e5f82dfba769f0f804b09cb2856452426c9849acc182c9701666165e746955",
     "pin.py": "3138647b47d8de2792d656388c94fb07f114a35883d7f3e0a21eccd442c110a5"
   },
@@ -173,14 +173,15 @@
   ],
   "ports_left_open_after_run": [],
   "summary": {
-    "cases": 82,
-    "pass": 81,
+    "cases": 90,
+    "pass": 89,
     "fail": 1
   },
   "scope_limits": [
     "The PDP is this repository's gateway-authz, built with the `acceptance` tag: the product code plus the test controls this runner uses (request log, fault modes, revoke/restore). The product build, which has none of them, is not what ran. Where a case says \"Gatekeeper\" or \"PDP\" it means this process.",
     "gateway-authz reads its policy and its credentials from files written for the run and keeps its revocations in a file made for the run; the certificate of the one workload that may change them is made for the run as well. No identity provider, grants store, Secret Manager or provider token endpoint is involved, and the deployed Gatekeeper is not called: the caller tokens are signed by a key made for the run.",
     "The provider is a loopback mock; no carrier sandbox was called. That includes the developer-token route (P1-DT-*): the scheme is one carrier's, taken from its public integration guide, and what answers here is a mock that checks the form of the header, knows the run's account numbers and tokens, and refuses a nonce twice. The carrier was not called.",
+    "The token endpoint of the P1-OA cases is a mock on the provider's own loopback port, over plain HTTP: it checks the client in Basic and the form of the request, and answers as each case tells it to. No real token endpoint, no HTTPS to one, no Secret Manager and no other client authentication method than client_secret_basic is involved.",
     "Mutual TLS is real on the gateway-to-PDP and broker-to-PDP hops only, with a CA and certificates made for the run: no SPIFFE Workload API, no rotation, no certificate revocation. Caller-to-gateway and gateway-to-provider are plain HTTP.",
     "The local broker (Mode B) is a mock with a JSON file as its store. The gateway reaches it over loopback HTTP and proves itself with a key file, standing in for a Unix socket or pod-local restriction; that restriction itself is untested.",
     "The front proxy is one nginx build with a minimal configuration, there to show that a component in front can refuse what the gateway accepts (P1-SS-04). Four cases go through it; the others address the gateway listener directly, on loopback, which is the only place it listens (P1-NL-01). Whether the eventual entry component behaves like this nginx has to be tested on that component.",
@@ -1115,7 +1116,7 @@
           "x-client-trace"
         ],
         "traceparent_the_provider_received": [
-          "00-0af7651916cd43dd8537bf50925c1ba0-10a75394e97b625a-01"
+          "00-0af7651916cd43dd8537bf50925c1ba0-577d7586666e7628-01"
         ]
       },
       "indicative_for": [
@@ -1592,7 +1593,7 @@
       ],
       "observed": {
         "status": 503,
-        "seconds": 1.002
+        "seconds": 1.003
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1757,7 +1758,7 @@
         },
         "pdp_slower_than_the_timeout": {
           "status": 503,
-          "seconds": 1.002
+          "seconds": 1.003
         },
         "gateway_log_line_when_the_pdp_cannot_be_asked": {
           "level": "info",
@@ -1835,7 +1836,7 @@
       ],
       "observed": {
         "status": 504,
-        "seconds": 2.012,
+        "seconds": 2.001,
         "provider_hits": 1
       },
       "indicative_for": [
@@ -2677,11 +2678,11 @@
       "observed": {
         "Gatekeeper answers 500": {
           "status": 503,
-          "seconds": 0.045
+          "seconds": 0.005
         },
         "Gatekeeper slower than the broker waits": {
           "status": 503,
-          "seconds": 0.748
+          "seconds": 0.747
         },
         "Gatekeeper down": {
           "status": 503,
@@ -2689,7 +2690,7 @@
         },
         "broker down": {
           "status": 503,
-          "seconds": 0.001
+          "seconds": 0.002
         }
       },
       "indicative_for": [
@@ -3327,7 +3328,7 @@
           "revoked_accounts": [
             {
               "account_id": "account-blue",
-              "revoked_at": "2026-11-18T16:57:01Z",
+              "revoked_at": "2026-11-18T17:51:12Z",
               "revoked_by": "spiffe://idp.test/egress/revoker",
               "reason": "black-box: credential reported leaked"
             }
@@ -3633,7 +3634,7 @@
         }
       ],
       "observed": {
-        "seconds_until_the_new_route_was_served": 0.31,
+        "seconds_until_the_new_route_was_served": 0.41,
         "seconds_until_the_route_was_gone_again": 0.34
       },
       "indicative_for": [
@@ -3691,7 +3692,7 @@
           "lastError": "routes[8]: unknown field `notAFieldOfARoute` at line 529 column 3"
         },
         "api_config_effective_shows_the_rejected_file": true,
-        "seconds_until_the_reload_was_reported_applied_again": 0.41
+        "seconds_until_the_reload_was_reported_applied_again": 0.3
       },
       "indicative_for": [
         "GW-AT-014",
@@ -3888,7 +3889,7 @@
         }
       ],
       "observed": {
-        "log_lines": 264,
+        "log_lines": 265,
         "routes_exercised": 4
       },
       "indicative_for": [
@@ -4027,10 +4028,10 @@
         "gateway_line_fields": {
           "route": "default/mockcarrier-labels-create",
           "http.status": "201",
-          "authz_decision_id": "dec-9666bad8b47f",
+          "authz_decision_id": "dec-d4a24435adf7",
           "tenant_ref": "tenant-blue",
-          "provider_reference_id": "CO-16bbe25bd1",
-          "provider_request_id": "PC-5da6899c9312"
+          "provider_reference_id": "CO-84119e9a21",
+          "provider_request_id": "PC-f72b5273052f"
         },
         "gateway_authz_lines_with_the_decision": 1
       },
@@ -4397,36 +4398,36 @@
         "a tenant with no grant: the gateway line": {
           "http.status": "403",
           "reason": "DirectResponse",
-          "authz_decision_id": "dec-5473cc310c75",
+          "authz_decision_id": "dec-f25d94848b18",
           "tenant_ref": "tenant-red",
           "provider_reference_id": null
         },
         "a tenant with no grant: the 403 body": {
-          "decision_id": "dec-5473cc310c75",
+          "decision_id": "dec-f25d94848b18",
           "result": "DENY",
           "reason_code": "TENANT_NOT_GRANTED",
           "policy_version": "poc-p1",
           "revocation_epoch": 16
         },
         "a tenant with no grant: the X-Idp-Decision-Id header of the 403": [
-          "dec-5473cc310c75"
+          "dec-f25d94848b18"
         ],
         "a revoked account: the gateway line": {
           "http.status": "403",
           "reason": "DirectResponse",
-          "authz_decision_id": "dec-36f3d92ff2bb",
+          "authz_decision_id": "dec-9cabaa07833c",
           "tenant_ref": "tenant-blue",
           "provider_reference_id": null
         },
         "a revoked account: the 403 body": {
-          "decision_id": "dec-36f3d92ff2bb",
+          "decision_id": "dec-9cabaa07833c",
           "result": "DENY",
           "reason_code": "ACCOUNT_REVOKED",
           "policy_version": "poc-p1",
           "revocation_epoch": 17
         },
         "a revoked account: the X-Idp-Decision-Id header of the 403": [
-          "dec-36f3d92ff2bb"
+          "dec-9cabaa07833c"
         ],
         "the PDP cannot be asked: the gateway line": {
           "http.status": "503",
@@ -4575,12 +4576,638 @@
         },
         "header_forged_after_allow_gateway_line_fields": {
           "route": "default/mockcarrier-tracking-get",
-          "authz_decision_id": "dec-f48bfee4445a",
+          "authz_decision_id": "dec-f0eefbc6be7d",
           "tenant_ref": "tenant-blue"
         }
       },
       "indicative_for": [
         "GW-FR-017"
+      ]
+    },
+    {
+      "id": "P1-OA-01",
+      "title": "OAuth client credentials: two accounts, each with the token of its own",
+      "expectation": "each account's request reaches the provider with the access token issued to that account's client and to no other; the token endpoint is asked once for each, with the grant, the scope and the audience the file names",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "both answered 200, each by the provider as its own account",
+          "ok": true
+        },
+        {
+          "check": "the provider received exactly those two, the logical path rewritten to the provider path",
+          "ok": true
+        },
+        {
+          "check": "each carries exactly one Authorization header, \"Bearer <token>\"",
+          "ok": true
+        },
+        {
+          "check": "the first carries the token issued to account-oauth-1's client, the second the one issued to account-oauth-2's",
+          "ok": true
+        },
+        {
+          "check": "the two tokens are different",
+          "ok": true
+        },
+        {
+          "check": "the token endpoint was asked once for each client, with the first secret of each",
+          "ok": true
+        },
+        {
+          "check": "the request had grant_type=client_credentials, and the scope and audience of the file where it names them",
+          "ok": true
+        },
+        {
+          "check": "nothing of the caller's IDP token reached the provider, and neither answer carries a credential",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "statuses": [
+          200,
+          200
+        ],
+        "fetches": {
+          "account-oauth-1": 1,
+          "account-oauth-2": 1
+        }
+      },
+      "indicative_for": [
+        "GW-AT-006",
+        "GW-NAT-001",
+        "GW-FR-006",
+        "GW-FR-018",
+        "GW-FR-033"
+      ]
+    },
+    {
+      "id": "P1-OA-02",
+      "title": "OAuth client credentials: several requests in a row use the cached token",
+      "expectation": "five requests for one account leave with the same access token and the token endpoint is asked once",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "five requests, each answered 200 as account-oauth-1",
+          "ok": true
+        },
+        {
+          "check": "all five left with the same access token",
+          "ok": true
+        },
+        {
+          "check": "the token endpoint was asked once for that client, and not at all for the other",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "fetches": 1
+      },
+      "indicative_for": [
+        "GW-FR-018",
+        "GW-FR-006"
+      ]
+    },
+    {
+      "id": "P1-OA-03",
+      "title": "OAuth client credentials: a token is renewed before it expires",
+      "expectation": "with a short-lived token, a request inside the last tenth of its life leaves with a new token, which the endpoint issued while the first was still valid; before that, the first was still the one used",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "all three answered 200 as account-oauth-1",
+          "ok": true
+        },
+        {
+          "check": "two seconds into a five-second life the first token was still the one used, the endpoint asked once",
+          "ok": true
+        },
+        {
+          "check": "at 4.7 seconds the request left with a different token, and the endpoint was asked a second time",
+          "ok": true
+        },
+        {
+          "check": "the second fetch came before the first token's five seconds were over (renewed, not replaced after it had expired)",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "seconds_between_the_two_fetches": 4.7
+      },
+      "indicative_for": [
+        "GW-FR-018",
+        "GW-FR-006"
+      ]
+    },
+    {
+      "id": "P1-OA-04",
+      "title": "OAuth client credentials: concurrent requests for one account ask the endpoint once",
+      "expectation": "twelve requests at once for one account, the token endpoint slowed down, all get 200 with the same token and the endpoint is asked once",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "twelve answers, all 200 as account-oauth-1",
+          "ok": true
+        },
+        {
+          "check": "the token endpoint was asked once",
+          "ok": true
+        },
+        {
+          "check": "all twelve requests reached the provider with that one token",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "statuses": [
+          200,
+          200,
+          200,
+          200,
+          200,
+          200,
+          200,
+          200,
+          200,
+          200,
+          200,
+          200
+        ],
+        "seconds_slowest": 0.485
+      },
+      "indicative_for": [
+        "GW-FR-018",
+        "GW-FR-006"
+      ]
+    },
+    {
+      "id": "P1-OA-05",
+      "title": "OAuth client credentials: the token endpoint cannot be used",
+      "expectation": "unreachable, too slow, or answering wrongly in each of the ways tried: the caller is refused with 503 CREDENTIAL_UNAVAILABLE and the provider receives nothing; so too when a cached token has not expired but is due to be renewed; the next request after the endpoint is well again is served",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "the endpoint answers 500: 503 INDETERMINATE CREDENTIAL_UNAVAILABLE, the endpoint was asked, the provider received nothing, nothing was followed",
+          "ok": true
+        },
+        {
+          "check": "the endpoint answers 500: the answer carries no credential",
+          "ok": true
+        },
+        {
+          "check": "the endpoint answers 500: the endpoint is well again: the next request is served with a token it issued",
+          "ok": true
+        },
+        {
+          "check": "the endpoint answers 401: 503 INDETERMINATE CREDENTIAL_UNAVAILABLE, the endpoint was asked, the provider received nothing, nothing was followed",
+          "ok": true
+        },
+        {
+          "check": "the endpoint answers 401: the answer carries no credential",
+          "ok": true
+        },
+        {
+          "check": "the endpoint answers 401: the endpoint is well again: the next request is served with a token it issued",
+          "ok": true
+        },
+        {
+          "check": "the endpoint redirects: 503 INDETERMINATE CREDENTIAL_UNAVAILABLE, the endpoint was asked, the provider received nothing, nothing was followed",
+          "ok": true
+        },
+        {
+          "check": "the endpoint redirects: the answer carries no credential",
+          "ok": true
+        },
+        {
+          "check": "the endpoint redirects: the endpoint is well again: the next request is served with a token it issued",
+          "ok": true
+        },
+        {
+          "check": "token_type is not Bearer: 503 INDETERMINATE CREDENTIAL_UNAVAILABLE, the endpoint was asked, the provider received nothing, nothing was followed",
+          "ok": true
+        },
+        {
+          "check": "token_type is not Bearer: the answer carries no credential",
+          "ok": true
+        },
+        {
+          "check": "token_type is not Bearer: the endpoint is well again: the next request is served with a token it issued",
+          "ok": true
+        },
+        {
+          "check": "there is no token_type: 503 INDETERMINATE CREDENTIAL_UNAVAILABLE, the endpoint was asked, the provider received nothing, nothing was followed",
+          "ok": true
+        },
+        {
+          "check": "there is no token_type: the answer carries no credential",
+          "ok": true
+        },
+        {
+          "check": "there is no token_type: the endpoint is well again: the next request is served with a token it issued",
+          "ok": true
+        },
+        {
+          "check": "there is no expires_in: 503 INDETERMINATE CREDENTIAL_UNAVAILABLE, the endpoint was asked, the provider received nothing, nothing was followed",
+          "ok": true
+        },
+        {
+          "check": "there is no expires_in: the answer carries no credential",
+          "ok": true
+        },
+        {
+          "check": "there is no expires_in: the endpoint is well again: the next request is served with a token it issued",
+          "ok": true
+        },
+        {
+          "check": "expires_in is 0: 503 INDETERMINATE CREDENTIAL_UNAVAILABLE, the endpoint was asked, the provider received nothing, nothing was followed",
+          "ok": true
+        },
+        {
+          "check": "expires_in is 0: the answer carries no credential",
+          "ok": true
+        },
+        {
+          "check": "expires_in is 0: the endpoint is well again: the next request is served with a token it issued",
+          "ok": true
+        },
+        {
+          "check": "expires_in is a string: 503 INDETERMINATE CREDENTIAL_UNAVAILABLE, the endpoint was asked, the provider received nothing, nothing was followed",
+          "ok": true
+        },
+        {
+          "check": "expires_in is a string: the answer carries no credential",
+          "ok": true
+        },
+        {
+          "check": "expires_in is a string: the endpoint is well again: the next request is served with a token it issued",
+          "ok": true
+        },
+        {
+          "check": "the access token is empty: 503 INDETERMINATE CREDENTIAL_UNAVAILABLE, the endpoint was asked, the provider received nothing, nothing was followed",
+          "ok": true
+        },
+        {
+          "check": "the access token is empty: the answer carries no credential",
+          "ok": true
+        },
+        {
+          "check": "the access token is empty: the endpoint is well again: the next request is served with a token it issued",
+          "ok": true
+        },
+        {
+          "check": "the answer is not JSON: 503 INDETERMINATE CREDENTIAL_UNAVAILABLE, the endpoint was asked, the provider received nothing, nothing was followed",
+          "ok": true
+        },
+        {
+          "check": "the answer is not JSON: the answer carries no credential",
+          "ok": true
+        },
+        {
+          "check": "the answer is not JSON: the endpoint is well again: the next request is served with a token it issued",
+          "ok": true
+        },
+        {
+          "check": "the answer is a JSON array: 503 INDETERMINATE CREDENTIAL_UNAVAILABLE, the endpoint was asked, the provider received nothing, nothing was followed",
+          "ok": true
+        },
+        {
+          "check": "the answer is a JSON array: the answer carries no credential",
+          "ok": true
+        },
+        {
+          "check": "the answer is a JSON array: the endpoint is well again: the next request is served with a token it issued",
+          "ok": true
+        },
+        {
+          "check": "the endpoint closes the connection without answering: 503 INDETERMINATE CREDENTIAL_UNAVAILABLE, the endpoint was asked, the provider received nothing, nothing was followed",
+          "ok": true
+        },
+        {
+          "check": "the endpoint closes the connection without answering: the answer carries no credential",
+          "ok": true
+        },
+        {
+          "check": "the endpoint closes the connection without answering: the endpoint is well again: the next request is served with a token it issued",
+          "ok": true
+        },
+        {
+          "check": "the endpoint answers after the timeout: 503 INDETERMINATE CREDENTIAL_UNAVAILABLE, the endpoint was asked, the provider received nothing, nothing was followed",
+          "ok": true
+        },
+        {
+          "check": "the endpoint answers after the timeout: the answer carries no credential",
+          "ok": true
+        },
+        {
+          "check": "the endpoint answers after the timeout: refused after about the timeout, not after the endpoint's own delay",
+          "ok": true
+        },
+        {
+          "check": "the endpoint answers after the timeout: the endpoint is well again: the next request is served with a token it issued",
+          "ok": true
+        },
+        {
+          "check": "nobody listens at the token endpoint: 503 INDETERMINATE CREDENTIAL_UNAVAILABLE, the provider received nothing",
+          "ok": true
+        },
+        {
+          "check": "the file names an endpoint that answers again: the next request is served",
+          "ok": true
+        },
+        {
+          "check": "the first request got a token and the provider accepted it",
+          "ok": true
+        },
+        {
+          "check": "the token was due for renewal and the endpoint was broken: both requests refused with 503 CREDENTIAL_UNAVAILABLE",
+          "ok": true
+        },
+        {
+          "check": "the provider received neither: the token that had not yet expired was not used",
+          "ok": true
+        },
+        {
+          "check": "...though that token had not expired at the provider (it answers 200 to it, direct)",
+          "ok": true
+        },
+        {
+          "check": "the endpoint was asked on each of the refusals (the first, and one each time after)",
+          "ok": true
+        },
+        {
+          "check": "the endpoint is well again: served, with a new token and not the old one",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "the endpoint answers 500": {
+          "status": 503,
+          "reason_code": "CREDENTIAL_UNAVAILABLE",
+          "seconds": 0.003,
+          "endpoint_asked": 1
+        },
+        "the endpoint answers 401": {
+          "status": 503,
+          "reason_code": "CREDENTIAL_UNAVAILABLE",
+          "seconds": 0.004,
+          "endpoint_asked": 1
+        },
+        "the endpoint redirects": {
+          "status": 503,
+          "reason_code": "CREDENTIAL_UNAVAILABLE",
+          "seconds": 0.003,
+          "endpoint_asked": 1
+        },
+        "token_type is not Bearer": {
+          "status": 503,
+          "reason_code": "CREDENTIAL_UNAVAILABLE",
+          "seconds": 0.003,
+          "endpoint_asked": 1
+        },
+        "there is no token_type": {
+          "status": 503,
+          "reason_code": "CREDENTIAL_UNAVAILABLE",
+          "seconds": 0.047,
+          "endpoint_asked": 1
+        },
+        "there is no expires_in": {
+          "status": 503,
+          "reason_code": "CREDENTIAL_UNAVAILABLE",
+          "seconds": 0.048,
+          "endpoint_asked": 1
+        },
+        "expires_in is 0": {
+          "status": 503,
+          "reason_code": "CREDENTIAL_UNAVAILABLE",
+          "seconds": 0.046,
+          "endpoint_asked": 1
+        },
+        "expires_in is a string": {
+          "status": 503,
+          "reason_code": "CREDENTIAL_UNAVAILABLE",
+          "seconds": 0.049,
+          "endpoint_asked": 1
+        },
+        "the access token is empty": {
+          "status": 503,
+          "reason_code": "CREDENTIAL_UNAVAILABLE",
+          "seconds": 0.045,
+          "endpoint_asked": 1
+        },
+        "the answer is not JSON": {
+          "status": 503,
+          "reason_code": "CREDENTIAL_UNAVAILABLE",
+          "seconds": 0.047,
+          "endpoint_asked": 1
+        },
+        "the answer is a JSON array": {
+          "status": 503,
+          "reason_code": "CREDENTIAL_UNAVAILABLE",
+          "seconds": 0.048,
+          "endpoint_asked": 1
+        },
+        "the endpoint closes the connection without answering": {
+          "status": 503,
+          "reason_code": "CREDENTIAL_UNAVAILABLE",
+          "seconds": 0.004,
+          "endpoint_asked": 1
+        },
+        "the endpoint answers after the timeout": {
+          "status": 503,
+          "reason_code": "CREDENTIAL_UNAVAILABLE",
+          "seconds": 0.804,
+          "endpoint_asked": 1
+        },
+        "nobody listens at the token endpoint": {
+          "status": 503,
+          "reason_code": "CREDENTIAL_UNAVAILABLE",
+          "seconds": 0.002
+        },
+        "cached token due for renewal, endpoint broken": {
+          "statuses": [
+            503,
+            503
+          ],
+          "endpoint_asked": 3,
+          "seconds_into_its_life_when_asked": 5.85
+        }
+      },
+      "indicative_for": [
+        "GW-AT-018",
+        "GW-ST-009",
+        "GW-FR-018",
+        "GW-FR-043",
+        "GW-FR-006"
+      ]
+    },
+    {
+      "id": "P1-OA-06",
+      "title": "OAuth client credentials: the client secret is replaced while gateway-authz runs",
+      "expectation": "after the clients file is replaced with a new secret and key_version, the next request is served with a token fetched with the new secret, without a restart; a replacement that does not load changes nothing",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "before: served, with a token fetched with the first secret",
+          "ok": true
+        },
+        {
+          "check": "the file is replaced: the very next request is served, with a different token than before",
+          "ok": true
+        },
+        {
+          "check": "the endpoint reports that second fetch as made with the new secret, and refused nothing",
+          "ok": true
+        },
+        {
+          "check": "account-oauth-2, whose entry changed too, is served with a token fetched with its new secret",
+          "ok": true
+        },
+        {
+          "check": "replaced by a file that does not load (plain http beyond loopback; readable by others): served as before, with the token it held",
+          "ok": true
+        },
+        {
+          "check": "...and the endpoint was not asked again",
+          "ok": true
+        },
+        {
+          "check": "gateway-authz said so twice, and is the same process throughout",
+          "ok": true
+        },
+        {
+          "check": "the good file is put back: still served, from the cache",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "secret generations the endpoint saw": [
+          "g1",
+          "g2"
+        ]
+      },
+      "indicative_for": [
+        "GW-AT-018",
+        "GW-FR-018",
+        "GW-FR-006"
+      ]
+    },
+    {
+      "id": "P1-OA-07",
+      "title": "OAuth client credentials: a revoked account gets no cached token",
+      "expectation": "with its token in the cache, the revoked account is refused 403 ACCOUNT_REVOKED; the provider receives nothing and the token endpoint is not asked; restored, it is served again",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "before: served, and the token is in the cache (one fetch)",
+          "ok": true
+        },
+        {
+          "check": "revoked: 403 ACCOUNT_REVOKED",
+          "ok": true
+        },
+        {
+          "check": "the provider received nothing",
+          "ok": true
+        },
+        {
+          "check": "the token endpoint was not asked again",
+          "ok": true
+        },
+        {
+          "check": "the other OAuth account is served",
+          "ok": true
+        },
+        {
+          "check": "restored: served, with the token that was cached, and the endpoint still asked once",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "after revocation": {
+          "status": 403,
+          "reason_code": "ACCOUNT_REVOKED"
+        }
+      },
+      "indicative_for": [
+        "GW-AT-026",
+        "GW-FR-026",
+        "GW-FR-018"
+      ]
+    },
+    {
+      "id": "P1-OA-08",
+      "title": "OAuth client credentials: what the gateway and gateway-authz have written to their logs, and what the callers got",
+      "expectation": "no client secret, no access token and no Basic header in any line of either log or in any answer a caller got in the P1-OA cases, refusals included; gateway-authz's log has a line for each time it asked the endpoint",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "there is something to look at: tokens were issued, and the callers got both answers that served and answers that refused",
+          "ok": true
+        },
+        {
+          "check": "gateway-authz's log has the line for each fetch, the lines for a fetch that failed, and for the files that loaded and did not",
+          "ok": true
+        },
+        {
+          "check": "the gateway's log has lines for the Bearer route these accounts use, served and refused",
+          "ok": true
+        },
+        {
+          "check": "agentgateway log: no client secret",
+          "ok": true
+        },
+        {
+          "check": "agentgateway log: no access token issued by the endpoint",
+          "ok": true
+        },
+        {
+          "check": "agentgateway log: no Basic header, neither as one of this run's nor of any form",
+          "ok": true
+        },
+        {
+          "check": "gateway-authz log: no client secret",
+          "ok": true
+        },
+        {
+          "check": "gateway-authz log: no access token issued by the endpoint",
+          "ok": true
+        },
+        {
+          "check": "gateway-authz log: no Basic header, neither as one of this run's nor of any form",
+          "ok": true
+        },
+        {
+          "check": "the callers' answers: no client secret",
+          "ok": true
+        },
+        {
+          "check": "the callers' answers: no access token issued by the endpoint",
+          "ok": true
+        },
+        {
+          "check": "the callers' answers: no Basic header, neither as one of this run's nor of any form",
+          "ok": true
+        },
+        {
+          "check": "the log of gateway-authz has no body of the endpoint's answers (the 500 answer carried one with a client_secret field)",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "log_lines": {
+          "agentgateway": 352,
+          "gateway-authz": 369
+        },
+        "answers_looked_at": {
+          "count": 64,
+          "refused": 16,
+          "served": 47
+        }
+      },
+      "indicative_for": [
+        "GW-AT-007",
+        "GW-FR-007",
+        "GW-NFR-05"
       ]
     }
   ]
