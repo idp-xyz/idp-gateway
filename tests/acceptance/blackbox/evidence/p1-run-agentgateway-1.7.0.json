@@ -1,12 +1,12 @@
 {
   "title": "IDP Gateway black-box suite: real agentgateway, gateway-authz (acceptance build), mock provider",
-  "started_at_utc": "2026-11-18T04:03:27.823124+00:00",
-  "finished_at_utc": "2026-11-18T04:04:03.141225+00:00",
+  "started_at_utc": "2026-11-18T06:20:27.525001+00:00",
+  "finished_at_utc": "2026-11-18T06:21:03.727162+00:00",
   "operator": "tops",
   "host": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "python": "3.12.3",
   "command": ".venv/bin/python tests/acceptance/blackbox/run.py",
-  "repository_commit": "ece169abecd752b285138b6c1665f939da565737",
+  "repository_commit": "33e46040ef79da7b560b1a84f2274694081a02ae",
   "repository_dirty_files": 0,
   "repository_dirty_files_ignores": "tests/acceptance/blackbox/evidence/",
   "agentgateway": {
@@ -88,17 +88,17 @@
     }
   },
   "policy_sha256": "49d0f2f15583466032ca59f4f742953463594e0ea66e171be80d882a12b851e3",
-  "runner_sha256": "4b9e9a7c9aecaa94178f5aa5f28c88c27aa1260c4187d2cb04280898dd9efaa4",
+  "runner_sha256": "0825ad26f277fa7108f1f8d9440a39d201136d8e92e625e1bde8c9ca4c690113",
   "gateway_authz": {
     "what_ran": "cmd/gateway-authz built with the acceptance tag; not the product build",
     "build_command": "go build -trimpath -tags acceptance -o tests/acceptance/blackbox/.run/gateway-authz ./cmd/gateway-authz",
     "go": "go version go1.26.8 linux/amd64",
-    "source_sha256": "e62df89a28428c039569193ec2bdb4201719ddf622958cfce8a215846e36c2b3",
+    "source_sha256": "8e3bd17830060a2194805b2e4db810a9078686587984f3a3b63ef55cdbcea210",
     "source_sha256_covers": "go.mod and every non-test .go file under cmd/ and internal/",
-    "binary_sha256": "eea6aba125ada2007710ab876eb73b381cde843b183aa59a9129367c2baee073",
+    "binary_sha256": "71887d9b984ccf31f2ca67bda54e74ef88d6ac638dcfd7490a206210f70c8550",
     "policy_from": "tests/acceptance/blackbox/policy.poc.json",
     "credentials_from": "two files written for the run, not recorded: Bearer tokens (--credentials), and account numbers with developer tokens (--developer-tokens)",
-    "revocations": "in memory",
+    "revocations": "a file written for the run (--revocations), empty at the start; changed through the acceptance controls and, in P1-RV-02 to 05, through the product interface",
     "http_versions_seen_from_the_gateway": [
       "HTTP/2.0"
     ]
@@ -106,7 +106,7 @@
   "mocks_sha256": {
     "mock_broker.py": "13566ddb1dd1f7da5e43e38b9f7d5199c1f2c903d95d2029b60df9fa675c1000",
     "mock_provider.py": "cc415d4516ee57fbcd59cf488133afe522ac6eaddbf6cda4fe4b5fe162c94584",
-    "pki.py": "8f2129ac939f76ad6f2dbd37eeef29af88573980d9b127bbaa599734a6e19f44",
+    "pki.py": "c7e5f82dfba769f0f804b09cb2856452426c9849acc182c9701666165e746955",
     "pin.py": "3138647b47d8de2792d656388c94fb07f114a35883d7f3e0a21eccd442c110a5"
   },
   "front_proxy": {
@@ -122,7 +122,8 @@
     "broker": "spiffe://idp.test/egress/credential-broker",
     "operator": "spiffe://idp.test/poc/operator",
     "business-app": "spiffe://idp.test/apps/parcel-service",
-    "publisher": "spiffe://idp.test/gateway-control/publisher"
+    "publisher": "spiffe://idp.test/gateway-control/publisher",
+    "revoker": "spiffe://idp.test/egress/revoker"
   },
   "ports": {
     "gateway": 27611,
@@ -154,13 +155,13 @@
   ],
   "ports_left_open_after_run": [],
   "summary": {
-    "cases": 64,
-    "pass": 63,
+    "cases": 68,
+    "pass": 67,
     "fail": 1
   },
   "scope_limits": [
     "The PDP is this repository's gateway-authz, built with the `acceptance` tag: the product code plus the test controls this runner uses (request log, fault modes, revoke/restore). The product build, which has none of them, is not what ran. Where a case says \"Gatekeeper\" or \"PDP\" it means this process.",
-    "gateway-authz reads its policy and its credentials from files written for the run and keeps revocations in memory. No identity provider, grants store, Secret Manager or provider token endpoint is involved, and the deployed Gatekeeper is not called: the caller tokens are signed by a key made for the run.",
+    "gateway-authz reads its policy and its credentials from files written for the run and keeps its revocations in a file made for the run; the certificate of the one workload that may change them is made for the run as well. No identity provider, grants store, Secret Manager or provider token endpoint is involved, and the deployed Gatekeeper is not called: the caller tokens are signed by a key made for the run.",
     "The provider is a loopback mock; no carrier sandbox was called. That includes the developer-token route (P1-DT-*): the scheme is one carrier's, taken from its public integration guide, and what answers here is a mock that checks the form of the header, knows the run's account numbers and tokens, and refuses a nonce twice. The carrier was not called.",
     "Mutual TLS is real on the gateway-to-PDP and broker-to-PDP hops only, with a CA and certificates made for the run: no SPIFFE Workload API, no rotation, no certificate revocation. Caller-to-gateway and gateway-to-provider are plain HTTP.",
     "The local broker (Mode B) is a mock with a JSON file as its store. The gateway reaches it over loopback HTTP and proves itself with a key file, standing in for a Unix socket or pod-local restriction; that restriction itself is untested.",
@@ -1215,7 +1216,7 @@
       ],
       "observed": {
         "status": 403,
-        "seconds": 1.003
+        "seconds": 1.002
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1869,7 +1870,7 @@
             503
           ]
         },
-        "seconds_slow": 2.002,
+        "seconds_slow": 2.003,
         "provider_hits": 3
       },
       "indicative_for": [
@@ -2225,7 +2226,7 @@
       "observed": {
         "Gatekeeper answers 500": {
           "status": 503,
-          "seconds": 0.005
+          "seconds": 0.004
         },
         "Gatekeeper slower than the broker waits": {
           "status": 503,
@@ -2742,6 +2743,355 @@
       ]
     },
     {
+      "id": "P1-RV-02",
+      "title": "an account is revoked through gateway-authz's own interface",
+      "expectation": "the next request for that account is refused on every route and not forwarded; the other account is unaffected; a mistyped account is an error, not a silent success; lifting the revocation lets the account through again",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "before: nothing is revoked and blue is allowed",
+          "ok": true
+        },
+        {
+          "check": "the revoker revokes account-blue: 200, the account is revoked, the epoch is one higher",
+          "ok": true
+        },
+        {
+          "check": "the very next blue request on the Bearer route: 403 ACCOUNT_REVOKED",
+          "ok": true
+        },
+        {
+          "check": "the very next blue request on the developer-token route: 403 ACCOUNT_REVOKED",
+          "ok": true
+        },
+        {
+          "check": "the very next blue request on the key.expression route: 403 ACCOUNT_REVOKED",
+          "ok": true
+        },
+        {
+          "check": "the very next blue request on the Mode B route: 403 ACCOUNT_REVOKED",
+          "ok": true
+        },
+        {
+          "check": "...and the provider received none of them",
+          "ok": true
+        },
+        {
+          "check": "green still allowed with its own account",
+          "ok": true
+        },
+        {
+          "check": "revoking it again changes nothing: 200, not changed, the same epoch",
+          "ok": true
+        },
+        {
+          "check": "the table has that one account, with the identity that revoked it and the reason given",
+          "ok": true
+        },
+        {
+          "check": "an account the policy does not name: 422 unknown_account, and nothing changes",
+          "ok": true
+        },
+        {
+          "check": "none of these answers carries a provider credential",
+          "ok": true
+        },
+        {
+          "check": "the revocation is lifted: 200, the account is not revoked, the epoch is one higher again",
+          "ok": true
+        },
+        {
+          "check": "blue is allowed again",
+          "ok": true
+        },
+        {
+          "check": "the file gateway-authz keeps says the same: nothing revoked, at that epoch",
+          "ok": true
+        },
+        {
+          "check": "gateway-authz logged the revocation with who made it and why",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "epoch_before": 8,
+        "revoke": {
+          "status": 200,
+          "body": {
+            "account_id": "account-blue",
+            "revoked": true,
+            "changed": true,
+            "revocation_epoch": 9
+          }
+        },
+        "table": {
+          "revocation_epoch": 9,
+          "revoked_accounts": [
+            {
+              "account_id": "account-blue",
+              "revoked_at": "2026-11-18T06:20:58Z",
+              "revoked_by": "spiffe://idp.test/egress/revoker",
+              "reason": "black-box: credential reported leaked"
+            }
+          ]
+        },
+        "mistyped": {
+          "status": 422,
+          "body": {
+            "account_id": "account-bleu",
+            "revoked": false,
+            "changed": false,
+            "revocation_epoch": 9,
+            "error": "unknown_account"
+          }
+        }
+      },
+      "indicative_for": [
+        "GW-AT-026",
+        "GW-ST-026",
+        "GW-AT-047",
+        "GW-FR-026",
+        "GW-FR-047"
+      ]
+    },
+    {
+      "id": "P1-RV-03",
+      "title": "who may change the revocations",
+      "expectation": "only the revoker's workload certificate: every other workload of the trust domain is answered 401 and is told nothing, without a certificate of the workload CA there is no TLS session, and nothing changes",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "the revoker revokes account-blue",
+          "ok": true
+        },
+        {
+          "check": "the gateway, which is given credentials: 401 to each of read the table, lift the revocation, revoke another account",
+          "ok": true
+        },
+        {
+          "check": "the gateway, which is given credentials: told nothing of the table",
+          "ok": true
+        },
+        {
+          "check": "the local broker: 401 to each of read the table, lift the revocation, revoke another account",
+          "ok": true
+        },
+        {
+          "check": "the local broker: told nothing of the table",
+          "ok": true
+        },
+        {
+          "check": "a business app: 401 to each of read the table, lift the revocation, revoke another account",
+          "ok": true
+        },
+        {
+          "check": "a business app: told nothing of the table",
+          "ok": true
+        },
+        {
+          "check": "the publisher: 401 to each of read the table, lift the revocation, revoke another account",
+          "ok": true
+        },
+        {
+          "check": "the publisher: told nothing of the table",
+          "ok": true
+        },
+        {
+          "check": "this suite's operator, with the secret of the acceptance controls: 401 to each of read the table, lift the revocation, revoke another account",
+          "ok": true
+        },
+        {
+          "check": "this suite's operator, with the secret of the acceptance controls: told nothing of the table",
+          "ok": true
+        },
+        {
+          "check": "no client certificate: no HTTP response",
+          "ok": true
+        },
+        {
+          "check": "a certificate with the revoker's identity from another CA: no HTTP response",
+          "ok": true
+        },
+        {
+          "check": "after all of that the table and the epoch are as they were",
+          "ok": true
+        },
+        {
+          "check": "...blue is still refused, green still served",
+          "ok": true
+        },
+        {
+          "check": "the revoker is given no decision and no credential",
+          "ok": true
+        },
+        {
+          "check": "the revoker lifts the revocation: blue allowed again",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "the gateway, which is given credentials": [
+          401,
+          401,
+          401
+        ],
+        "the local broker": [
+          401,
+          401,
+          401
+        ],
+        "a business app": [
+          401,
+          401,
+          401
+        ],
+        "the publisher": [
+          401,
+          401,
+          401
+        ],
+        "this suite's operator, with the secret of the acceptance controls": [
+          401,
+          401,
+          401
+        ]
+      },
+      "indicative_for": [
+        "GW-ST-018",
+        "GW-AT-021",
+        "GW-FR-021",
+        "GW-FR-047"
+      ]
+    },
+    {
+      "id": "P1-RV-04",
+      "title": "a revocation outlives a restart of gateway-authz",
+      "expectation": "after the restart the account is still refused, the epoch has not started again, and the table still says who revoked it and why",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "the revoker revokes account-blue",
+          "ok": true
+        },
+        {
+          "check": "gateway-authz is another process now",
+          "ok": true
+        },
+        {
+          "check": "first blue request after the restart: 403 ACCOUNT_REVOKED",
+          "ok": true
+        },
+        {
+          "check": "...and the provider did not receive it",
+          "ok": true
+        },
+        {
+          "check": "the epoch is the one from before the restart, not 0",
+          "ok": true
+        },
+        {
+          "check": "the table read after the restart still has the account, who revoked it and why",
+          "ok": true
+        },
+        {
+          "check": "green is served after the restart",
+          "ok": true
+        },
+        {
+          "check": "the revocation is lifted: blue allowed again",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "epoch_at_revocation": 13,
+        "first_request_after_restart": {
+          "status": 403,
+          "reason_code": "ACCOUNT_REVOKED",
+          "revocation_epoch": 13
+        }
+      },
+      "indicative_for": [
+        "GW-AT-026",
+        "GW-AT-047",
+        "GW-FR-026",
+        "GW-FR-047"
+      ]
+    },
+    {
+      "id": "P1-RV-05",
+      "title": "gateway-authz without a revocation file it can read",
+      "expectation": "it does not start, so every request is rejected at the gateway; a missing file is not read as \"nothing revoked\"; with the file back it starts and the earlier revocation is still in force",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "the revoker revokes account-blue",
+          "ok": true
+        },
+        {
+          "check": "the file is missing: gateway-authz gives up instead of listening",
+          "ok": true
+        },
+        {
+          "check": "the file is cut short: gateway-authz gives up instead of listening",
+          "ok": true
+        },
+        {
+          "check": "the file says nothing of the table: gateway-authz gives up instead of listening",
+          "ok": true
+        },
+        {
+          "check": "the file is readable by others: gateway-authz gives up instead of listening",
+          "ok": true
+        },
+        {
+          "check": "while it is not running a request for an account that was never revoked is rejected too",
+          "ok": true
+        },
+        {
+          "check": "...and the provider received nothing",
+          "ok": true
+        },
+        {
+          "check": "with the file back gateway-authz starts, and blue is still refused as revoked",
+          "ok": true
+        },
+        {
+          "check": "green is served again",
+          "ok": true
+        },
+        {
+          "check": "the revocation is lifted: blue allowed again",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "the file is missing": {
+          "exited": 1,
+          "said": "gateway-authz: revocations: open .run/authz-revocations.json: no such file or directory"
+        },
+        "the file is cut short": {
+          "exited": 1,
+          "said": "gateway-authz: revocations .run/authz-revocations.json: not a JSON object of \"epoch\" and \"revoked_accounts\""
+        },
+        "the file says nothing of the table": {
+          "exited": 1,
+          "said": "gateway-authz: revocations .run/authz-revocations.json: \"epoch\" and \"revoked_accounts\" are both required; with nothing revoked, \"revoked_accounts\" is {}"
+        },
+        "the file is readable by others": {
+          "exited": 1,
+          "said": "gateway-authz: revocations .run/authz-revocations.json: mode 0644 is readable by others; want 0600 or stricter"
+        },
+        "status_while_it_is_not_running": 403
+      },
+      "indicative_for": [
+        "GW-ST-008",
+        "GW-NAT-006",
+        "GW-AT-047",
+        "GW-FR-026",
+        "GW-FR-047"
+      ]
+    },
+    {
       "id": "P1-RB-01",
       "title": "the published file is replaced by one with one more route",
       "expectation": "the new route is served without a restart; the gateway reports the reload as applied, and what it reports running changes with the file and returns when the file does",
@@ -2785,7 +3135,7 @@
         }
       ],
       "observed": {
-        "seconds_until_the_new_route_was_served": 0.31,
+        "seconds_until_the_new_route_was_served": 0.41,
         "seconds_until_the_route_was_gone_again": 0.34
       },
       "indicative_for": [
@@ -3040,7 +3390,7 @@
         }
       ],
       "observed": {
-        "log_lines": 212,
+        "log_lines": 230,
         "routes_exercised": 4
       },
       "indicative_for": [

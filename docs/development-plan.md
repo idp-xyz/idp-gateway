@@ -12,7 +12,7 @@
 
 ## 现在在哪
 
-- 阶段 P1 的内容跑过了：黑盒套件在锁定的 agentgateway 1.7.0 上 63/64，令牌是套件自己签的，Provider 是替身（[报告](../tests/acceptance/blackbox/README.md)）；另有与本机起的一套真实 Gatekeeper 的联调，Provider 同样是替身（[报告](../tests/integration/gatekeeper/README.md)）。两者都不是验收证据。
+- 阶段 P1 的内容跑过了：黑盒套件在锁定的 agentgateway 1.7.0 上 67/68，令牌是套件自己签的，Provider 是替身（[报告](../tests/acceptance/blackbox/README.md)）；另有与本机起的一套真实 Gatekeeper 的联调，Provider 同样是替身（[报告](../tests/integration/gatekeeper/README.md)）。两者都不是验收证据。
 - 请求路径：`cmd/gateway-authz` 按请求判定并发放凭证。登记表和凭证来自文件，是占位（[ADR-0009](adr/ADR-0009.md)）；撤销表原先只在内存里，2026-11-18 起落在一个文件里，由一个工作负载身份经接口改（[ADR-0012](adr/ADR-0012.md)）。凭证从哪里来的提案是 [ADR-0011](adr/ADR-0011.md)；仓库所有者在 2026-11-18 同意照它动手，它仍是 Proposed。它的第一步（固定令牌加每个请求一个随机数）已经有了实现，只对着替身验证过。
 - 控制面：`cmd/gateway-control` 管单机上的一个池：发布、对账、启动的先后、看守和告警用的指标（[ADR-0010](adr/ADR-0010.md)）。
 - 正式的记录：95 条验收用例、15 项缺口、六个门禁全部是 `NOT_RUN`。
