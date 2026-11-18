@@ -324,22 +324,101 @@ func TestNewRefusesAnUnsafeOrIncompleteConfiguration(t *testing.T) {
 	}
 }
 
+// serviceSection 从 compose 文件文本里切出 services: 下名为 name 的服务的那一段：
+// 从行 "  name:"（两个空格缩进）起，到下一个同样缩进的服务名那一行之前。
+// 切不出来（没有 services:、没有这个服务）时 ok 为 false。
+func serviceSection(compose, name string) (section string, ok bool) {
+	lines := strings.Split(compose, "\n")
+	var out []string
+	inServices, inSection := false, false
+	for _, l := range lines {
+		l = strings.TrimRight(l, "\r")
+		switch {
+		case l == "services:":
+			inServices = true
+		case !inServices:
+		case inSection && isServiceHeader(l):
+			return strings.Join(out, "\n"), true
+		case l == "  "+name+":":
+			inSection = true
+			out = append(out, l)
+		case inSection:
+			if l != "" && l[0] != ' ' && l[0] != '#' { // 回到顶层，services 结束
+				return strings.Join(out, "\n"), true
+			}
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out, "\n"), inSection
+}
+
+// isServiceHeader：恰好两个空格缩进、以冒号结尾的服务名那一行。
+func isServiceHeader(l string) bool {
+	if len(l) < 4 || !strings.HasPrefix(l, "  ") || l[2] == ' ' || l[2] == '#' || l[2] == '-' {
+		return false
+	}
+	return strings.Contains(l, ":")
+}
+
+// missingExactlyOnce 列出在 name 服务的那一段里没有恰好出现一次的文本；
+// 切不出这一段时返回错误。
+func missingExactlyOnce(compose, name string, wants []string) ([]string, error) {
+	section, ok := serviceSection(compose, name)
+	if !ok {
+		return nil, errors.New("切不出 services: 下的 " + name + " 服务")
+	}
+	var bad []string
+	for _, w := range wants {
+		if strings.Count(section, w) != 1 {
+			bad = append(bad, w)
+		}
+	}
+	return bad, nil
+}
+
+func TestServiceSectionCounting(t *testing.T) {
+	const want = `    - "${X}/config:/work/config:ro"`
+	const head = "name: pool\nx-a: &a\n  volumes:\n    - \"${X}/config:/work/config:ro\"\n\nservices:\n"
+	for name, c := range map[string]struct {
+		compose string
+		bad     bool
+		err     bool
+	}{
+		"恰好一处，别的服务也有":        {head + "  egress:\n    volumes:\n" + want + "\n  agentgateway:\n    volumes:\n" + want + "\n  front:\n    volumes:\n" + want + "\n", false, false},
+		"agentgateway 是最后一个": {head + "  agentgateway:\n    volumes:\n" + want + "\n", false, false},
+		"agentgateway 里没有":   {head + "  egress:\n" + want + "\n  agentgateway:\n    image: x\n  front:\n" + want + "\n", true, false},
+		"agentgateway 里两处":   {head + "  agentgateway:\n" + want + "\n" + want + "\n  front:\n", true, false},
+		"只出现在别的服务里":          {head + "  agentgateway:\n    image: x\n  egress:\n" + want + "\n", true, false},
+		"没有 agentgateway 服务": {head + "  egress:\n" + want + "\n", false, true},
+		"没有 services:":       {"  agentgateway:\n" + want + "\n", false, true},
+	} {
+		bad, err := missingExactlyOnce(c.compose, "agentgateway", []string{want})
+		if (err != nil) != c.err || (len(bad) > 0) != c.bad {
+			t.Errorf("%s：bad=%v err=%v", name, bad, err)
+		}
+	}
+}
+
 // 离线加载用的容器，布局必须和池里的网关容器相同。池的布局写在部署文件里
 // （deploy/compose/compose.yml）；compose 套件跑的也是那个文件。
+// 只看 agentgateway 这个服务：池里别的服务（egress、egress-watch）也把同一个
+// 配置目录挂在 /work/config，按整个文件数会数到不止一处。
 func TestTheLayoutIsTheOneThePoolUses(t *testing.T) {
 	raw, err := os.ReadFile("../../../../deploy/compose/compose.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, line := range []string{
+	bad, err := missingExactlyOnce(string(raw), "agentgateway", []string{
 		"working_dir: " + WorkingDirectory,
 		`command: ["-f", "` + ConfigArgument + `"]`,
 		`}/config:` + ConfigMount + `:ro"`,
 		`}/tls:` + TLSMount + `:ro"`,
-	} {
-		if strings.Count(string(raw), line) != 1 {
-			t.Errorf("deploy/compose/compose.yml 里没有恰好一处 %s", line)
-		}
+	})
+	if err != nil {
+		t.Fatalf("deploy/compose/compose.yml：%v", err)
+	}
+	for _, line := range bad {
+		t.Errorf("deploy/compose/compose.yml 的 agentgateway 服务里没有恰好一处 %s", line)
 	}
 	if ConfigArgument != strings.TrimPrefix(ConfigMount, WorkingDirectory+"/")+"/"+ConfigFile {
 		t.Errorf("%s 不是 %s 里的 %s", ConfigArgument, ConfigMount, ConfigFile)
