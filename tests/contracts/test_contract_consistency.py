@@ -80,7 +80,7 @@ class CredentialRedemption(unittest.TestCase):
             sent = set(http['addRequestHeaders']) | set(ext['includeRequestHeaders'])
             with self.subTest(route=route['name']):
                 self.assertEqual(sent, documented)
-                self.assertEqual(ext['failureMode'], 'deny')
+                self.assertEqual(ext['failureMode'], {'denyWithStatus': 503})
                 # The credential leaves the PDP's answer in exactly one way per route.
                 copied, read = http.get('includeResponseHeaders'), http.get('metadata')
                 if route['name'].endswith('-expression'):
@@ -118,6 +118,48 @@ class CredentialRedemption(unittest.TestCase):
                     self.assertEqual(rules, [{'allow': f'has(extauthz.credential) && extauthz.credential.startsWith("{word} ")'}])
                 else:
                     self.assertEqual(rules, [{'allow': f'request.headers["authorization"].startsWith("{word} ")'}])
+
+    def test_poc_provider_backends_share_one_header_allow_list(self):
+        """G03 §5: every provider backend rebuilds headers from the same allow list.
+
+        The expression is compared as text: a typo on one route would otherwise only show up
+        when that route is exercised. Removals stay as a second line for headers the allow list
+        must not keep if the expression ever fails to evaluate.
+        """
+        routes = yaml.safe_load(text('tests/acceptance/blackbox/agentgateway.poc.yaml'))['routes']
+        provider = [r for r in routes if r['name'] != 'read-back']
+        self.assertEqual(len(provider), 6)
+        expected = 'request.headers.filterKeys(k, k in ["accept", "authorization", "content-type", "idempotency-key", "traceparent", "x-client-trace"])'
+        # The list the black-box cases hold the provider's headers against is the list in the expression.
+        runner = re.search(r'^HEADER_ALLOW = \(([^)]*)\)$', text('tests/acceptance/blackbox/run.py'), re.M)
+        self.assertIsNotNone(runner)
+        allowed = re.findall(r'"([^"]+)"', runner[1])
+        self.assertEqual(expected, 'request.headers.filterKeys(k, k in [' + ', '.join(f'"{name}"' for name in allowed) + '])')
+        self.assertEqual(allowed, [name.lower() for name in allowed], 'the gateway compares lower-case names')
+        self.assertIn('authorization', allowed, 'the credential is placed before the list is applied')
+        for route in provider:
+            policies = route['backends'][0]['policies']
+            with self.subTest(route=route['name']):
+                self.assertEqual(policies['transformations'], {'request': {'replace': expected}})
+                removed = policies['requestHeaderModifier']['remove']
+                self.assertIn('x-provider-account', removed)
+                self.assertIn('cookie', removed)
+                # What is removed by name must never be registered as well.
+                self.assertEqual(set(removed) & set(allowed), set())
+
+    def test_gatekeeper_suite_can_still_derive_its_gateway_configuration(self):
+        """tests/integration/gatekeeper starts the gateway from the black-box configuration with a few pieces of
+        text replaced, and refuses to run when one of them does not occur as often as it expects. That suite needs
+        a local Gatekeeper and is run by hand, so a change here that breaks it would otherwise go unnoticed."""
+        tree = ast.parse(text('tests/integration/gatekeeper/run.py'))
+        differences = next(node.value for node in tree.body if isinstance(node, ast.Assign)
+                           and getattr(node.targets[0], 'id', None) == 'GATEWAY_DIFFERENCES')
+        config = text('tests/acceptance/blackbox/agentgateway.poc.yaml')
+        self.assertGreaterEqual(len(differences.elts), 3)
+        for element in differences.elts:
+            old, times = ast.literal_eval(element.elts[0]), ast.literal_eval(element.elts[2])
+            with self.subTest(replaced=old.strip()):
+                self.assertEqual(config.count(old), times)
 
     def test_broker_decision_request_is_the_documented_one(self):
         """What the mock broker sends to /v1/egress/authorizations/decision must fit DecisionRequest."""

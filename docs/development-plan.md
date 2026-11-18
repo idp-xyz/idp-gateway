@@ -13,7 +13,7 @@
 ## 现在在哪
 
 - 阶段 P1 的内容跑过了：黑盒套件在锁定的 agentgateway 1.7.0 上 67/68，令牌是套件自己签的，Provider 是替身（[报告](../tests/acceptance/blackbox/README.md)）；另有与本机起的一套真实 Gatekeeper 的联调，Provider 同样是替身（[报告](../tests/integration/gatekeeper/README.md)）。两者都不是验收证据。
-- 请求路径：`cmd/gateway-authz` 按请求判定并发放凭证。登记表和凭证来自文件，是占位（[ADR-0009](adr/ADR-0009.md)）；撤销表原先只在内存里，2026-11-18 起落在一个文件里，由一个工作负载身份经接口改（[ADR-0012](adr/ADR-0012.md)）。凭证从哪里来的提案是 [ADR-0011](adr/ADR-0011.md)；仓库所有者在 2026-11-18 同意照它动手，它仍是 Proposed。它的第一步（固定令牌加每个请求一个随机数）已经有了实现，只对着替身验证过。
+- 请求路径：`cmd/gateway-authz` 按请求判定并发放凭证。登记表和凭证来自文件，是占位（[ADR-0009](adr/ADR-0009.md)）；撤销表原先只在内存里，2026-11-18 起落在一个文件里，由一个工作负载身份经接口改（[ADR-0012](adr/ADR-0012.md)）。凭证从哪里来的提案是 [ADR-0011](adr/ADR-0011.md)；仓库所有者在 2026-11-18 同意照它动手，它仍是 Proposed。它的第一步（固定令牌加每个请求一个随机数）已经有了实现，只对着替身验证过。黑盒的评审配置只放行登记过的请求头；问不到 PDP 时调用方得到 503，策略拒绝仍是 403（2.4）。
 - 控制面：`cmd/gateway-control` 管单机上的一个池：发布、对账、启动的先后、看守和告警用的指标（[ADR-0010](adr/ADR-0010.md)）。
 - 正式的记录：95 条验收用例、15 项缺口、六个门禁全部是 `NOT_RUN`。
 
@@ -23,10 +23,10 @@
 flowchart TD
   closeOut["0 收尾：告警 V1.7"] --> credSource["2.1 凭证来源"]
   credSource --> revocation["2.2 撤销"]
-  revocation --> realGatekeeper["2.3 对着真实的 Gatekeeper"]
-  realGatekeeper --> openItems["2.4 失败来源和请求头"]
+  revocation --> openItems["2.4 失败来源和请求头"]
   openItems --> egressGuard["3.1 出口的网络防护"]
   egressGuard --> carrierConfig["3.2 承运商沙箱的出站配置"]
+  realGatekeeper["2.3 对着真实的 Gatekeeper"] --> carrierConfig
   carrierConfig --> correlation["3.3 一次调用对得上"]
   correlation --> sandboxSuite["3.4 P2 套件和证据"]
   sandboxSuite --> controlPlane["4 控制面"]
@@ -148,6 +148,7 @@ flowchart TD
 - **依据**：`GW-GAP-11`、`GW-FR-043`；`GW-FR-008`，[G03](G03_Routing_and_Configuration.md) 第 5 节。[ADR-0008](adr/ADR-0008.md) 写明这两条在批准之前要处置或接受。
 - **等**：不等别人。
 - **做完的标准**：每一条要么有处理，并且有黑盒用例把关；要么写明在锁定的版本上做不到、留下什么风险，交给批准人去接受。
+- **到哪了（2026-11-18）**：两条都在锁定的 1.7.0 上做了处理，黑盒有用例，没有改 `gateway-authz` 的代码。失败来源：问 PDP 的路由用 `failureMode.denyWithStatus: 503`。策略拒绝仍是 403 加 PDP 的原因；问不到（超时、进程不在、证书不接受、模式 B 的 Broker 不在）是网关自己的 503，不转发（[黑盒](../tests/acceptance/blackbox/README.md)的 `P1-FO-01`）。PDP 答了 500，或答了定不了（503 `INDETERMINATE`），调用方拿到的是 PDP 的状态和原因（`P1-FO-01`、`P1-FO-02`）。请求头：六条后端用同一份名单重建请求头，没登记的不到 Provider（`P1-HD-01` 至 `04`），这是"默认配置不安全的地方"的第 9 项。留下的：网关访问日志里，问不到和 PDP 自己的 503 都是 info、`reason=DirectResponse`，不再有 `reason=ExtAuth` 的错误行，调用方靠正文区分；表达式求值不了时校验照样通过，请求带着没登记的头继续走，所以按名字删除还留着。`denyWithStatus: 200` 这个二进制会当成成功应答，评审配置钉在 503。对照把配置和 `gateway-authz` 改坏 17 处，16 处有新用例不通过；剩下的一处是名单还在时去掉按名字删除，黑盒看不出来，`tests/contracts` 不通过。一次调用在日志里对起来仍是 3.3。工作区上的黑盒是 73/74，失败的仍只有 `P1-SS-04`；原有 68 个用例的 418 项检查逐项相同。干净工作区上的证据还没有重跑。
 
 ### 2.5 委托身份
 
@@ -176,15 +177,15 @@ flowchart TD
 
 ### 3.2 承运商沙箱的出站配置
 
-- **做什么**：为 1.1 的承运商手写一份 agentgateway 配置和一份登记表：创建包裹和查询包裹两个操作，上游是它的沙箱。调用方令牌按 P2 的 Gatekeeper 验证；到 `gateway-authz` 是 mTLS；黑盒报告"默认配置不安全的地方"的八项逐项处理。经 `gateway-control publish` 发布到 [deploy/compose](../deploy/compose/README.md) 描述的那个池上。这一轮不做编译器：配置是手写、评审过的。
+- **做什么**：为 1.1 的承运商手写一份 agentgateway 配置和一份登记表：创建包裹和查询包裹两个操作，上游是它的沙箱。调用方令牌按 P2 的 Gatekeeper 验证；到 `gateway-authz` 是 mTLS；黑盒报告"默认配置不安全的地方"的九项逐项处理。经 `gateway-control publish` 发布到 [deploy/compose](../deploy/compose/README.md) 描述的那个池上。这一轮不做编译器：配置是手写、评审过的。
 - **这一家要留意的**：
   - 业务上的错误它也答 HTTP 200，成没成要看应答正文里的 `Succeeded`。网关原样透传，所以调用方拿到 200 不等于业务上成了；这一点写进给调用方的说明。
-  - 八项里的第 3 项，评审过的配置是在按请求取凭证的路由的后端上放一条规则，只放行以 `Bearer ` 开头的 `Authorization`。这一家的凭证以 `Hc-OweDeveloper ` 开头（[ADR-0011](adr/ADR-0011.md)），规则的前缀要跟着换，不然请求全部被网关拒绝。换了之后，这一项要在这份配置上重新有用例检查。
+  - 九项里的第 3 项，评审过的配置是在按请求取凭证的路由的后端上放一条规则，只放行以 `Bearer ` 开头的 `Authorization`。这一家的凭证以 `Hc-OweDeveloper ` 开头（[ADR-0011](adr/ADR-0011.md)），规则的前缀要跟着换，不然请求全部被网关拒绝。换了之后，这一项要在这份配置上重新有用例检查。
   - 文档要求每个请求的 `Accept` 是 `application/json`。这个头由网关在路由上写上，还是要求调用方自己带，评审这份配置时定。
 - **沙箱上验不了的**：沙箱只有明文 HTTP，所以到承运商的 TLS（证书、SNI）在这里验不了，留到第 5 节。
 - **依据**：`GW-GAP-01`；`GW-FR-002`、`GW-FR-023`、`GW-FR-039`；[deploy/agentgateway/README.md](../deploy/agentgateway/README.md)。
 - **等**：1.2、1.5，和 2.1 的第一步。
-- **做完的标准**：这份配置通过发布器的离线加载和回读确认；八项处理在这份配置上逐项有用例检查，对着替身跑通之后才连沙箱；快照里没有密钥，也没有对环境变量的引用（ADR-0010 第 11 条）。
+- **做完的标准**：这份配置通过发布器的离线加载和回读确认；九项处理在这份配置上逐项有用例检查，对着替身跑通之后才连沙箱；快照里没有密钥，也没有对环境变量的引用（ADR-0010 第 11 条）。
 
 ### 3.3 一次调用对得上
 

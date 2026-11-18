@@ -11,11 +11,12 @@ The gateway is the one build pinned in deploy/agentgateway/agentgateway.lock.jso
 the pinned container image, taken out of the image and started on this host. A binary that is
 not that build (version, git revision and SHA-256; see pin.py) is not started.
 
-Before the cases the binary is started three more times, briefly, from the reviewed
-configuration with its mitigations taken out: once with no session key, and once to see what
-it then lets through (observe_unmitigated); and once from the reviewed configuration itself
-with no session key. What the unmitigated starts show is written to the evidence as
-observations about the binary. They are not checks.
+Before the cases the binary is started four more times, briefly: twice from the reviewed
+configuration with its mitigations taken out, once with no session key and once to see what
+it then lets through (observe_unmitigated); once from the reviewed configuration itself with
+no session key; and once from the reviewed configuration with the header allow list replaced
+by an expression it cannot evaluate (observe_unevaluable_allow_list). What these starts show
+is written to the evidence as observations about the binary. They are not checks.
 
 The PDP on the "gatekeeper" port is gateway-authz built with the `acceptance` tag: the same
 code as the product build plus the controls this runner needs (see what it received, make it
@@ -71,6 +72,15 @@ PARCELS_ROUTE = 'mockcarrier-parcels-get-developer-token'
 DEVELOPER_TOKENS = RUN / 'authz-developer-tokens.json'
 REVOCATIONS = RUN / 'authz-revocations.json'          # gateway-authz's own table of revoked accounts (ADR-0012)
 NOTHING_REVOKED = '{"epoch": 0, "revoked_accounts": {}}\n'
+
+# Headers the reviewed configuration registers for every provider backend (G03 §5). Same names,
+# lower case, as the transformations.request.replace expression on each backend; tests/contracts
+# compares the two. Host and the framing headers are the gateway's own and are not listed there.
+HEADER_ALLOW = ("accept", "authorization", "content-type", "idempotency-key", "traceparent", "x-client-trace")
+# Caller headers that no removal names and that are not on the allow list. Without the allow list
+# they reach the provider (unmitigated_defaults); with it they must not (P1-HD-02).
+UNREGISTERED = [("X-Evil-Probe", "must-not-reach"), ("X-Custom-Stuff", "also-not"),
+                ("X-Internal-Hint", "drop-me")]
 
 # --------------------------------------------------------------------------------------
 # keys, tokens
@@ -701,6 +711,118 @@ def _(c):
             not any(n in names for n in ('x-forwarded-host', 'x-forwarded-for', 'forwarded')))
 
 
+# ---- the provider receives the headers registered for it, and no other (G03 §5) ------------------------
+# P1-CR-01 above is from before the allow list: what it calls the caller's "ordinary header",
+# X-Client-Trace, is a registered header now, and that is why it is still passed on.
+def outside_the_allow_list(hit: dict) -> list:
+    """Names of the headers the provider recorded that are neither registered nor the gateway's own."""
+    return sorted({k.lower() for k, _ in hit['headers']} - set(HEADER_ALLOW) - {'host', 'content-length'})
+
+
+@case('P1-HD-01', 'registered request headers reach the provider',
+      'every header on the allow list that the caller sent is present; the provider credential is still Authorization',
+      ('GW-AT-008', 'GW-FR-008'))
+def _(c):
+    trace_id = '0af7651916cd43dd8537bf50925c1ba0'
+    r = gw('GET', TRACKING + '/TRK-1', blue(),
+           [('Accept', 'application/json'), ('X-Client-Trace', 'keep-me'),
+            ('Idempotency-Key', 'idem-1'), ('Traceparent', f'00-{trace_id}-b7ad6b7169203331-01')])
+    hits = provider_hits()
+    if not c.check('request reached the provider once', r['status'] == 200 and len(hits) == 1):
+        return
+    hs = hits[0]['headers']
+    c.note('provider_saw_header_names', sorted({k.lower() for k, _ in hs}))
+    c.check('Accept preserved', header(hs, 'accept') == ['application/json'])
+    c.check('X-Client-Trace preserved', header(hs, 'x-client-trace') == ['keep-me'])
+    c.check('Idempotency-Key preserved', header(hs, 'idempotency-key') == ['idem-1'])
+    # The name is on the allow list, so a Traceparent reaches the provider. The gateway may
+    # rewrite the value for its own span; that is still correlation, not a dropped header.
+    c.note('traceparent_the_provider_received', header(hs, 'traceparent'))
+    c.check('Traceparent reaches the provider', bool(header(hs, 'traceparent')))
+    c.check('...and it still carries the caller\'s trace id', [v.split('-')[1:2] for v in header(hs, 'traceparent')] == [[trace_id]])
+    c.check('provider credential is present as Authorization',
+            bool(header(hs, 'authorization')) and header(hs, 'authorization')[0].startswith('Bearer '))
+    c.check('the provider received no header outside the registered set', outside_the_allow_list(hits[0]) == [])
+
+
+@case('P1-HD-02', 'headers not on the allow list do not reach the provider',
+      'caller-supplied headers outside the registered set are dropped; removals still drop Cookie and X-Forwarded-*',
+      ('GW-AT-008', 'GW-FR-008'))
+def _(c):
+    r = gw('GET', TRACKING + '/TRK-1', blue(),
+           list(UNREGISTERED) + [('Cookie', 'session=caller-session'), ('X-Forwarded-For', '10.1.2.3'),
+                                 ('X-Client-Trace', 'keep-me')])
+    hits = provider_hits()
+    if not c.check('request reached the provider once', r['status'] == 200 and len(hits) == 1):
+        return
+    hs = hits[0]['headers']
+    names = {k.lower() for k, _ in hs}
+    c.note('provider_saw_header_names', sorted(names))
+    c.check('no unregistered caller header reached the provider',
+            not any(k.lower() in names for k, _ in UNREGISTERED))
+    c.check('Cookie still removed', 'cookie' not in names)
+    c.check('X-Forwarded-For still removed', 'x-forwarded-for' not in names)
+    c.check('registered X-Client-Trace still present', header(hs, 'x-client-trace') == ['keep-me'])
+    c.check('the provider received no header outside the registered set', outside_the_allow_list(hits[0]) == [])
+
+
+@case('P1-HD-03', 'the allow list on every provider route',
+      'on each of the six routes the provider receives one request whose headers are registered ones or the gateway\'s own, '
+      'with exactly one credential; headers a client commonly sends without being asked are not among them',
+      ('GW-AT-008', 'GW-FR-008'))
+def _(c):
+    sent = list(UNREGISTERED) + [('X-Client-Trace', 'keep-me'), ('User-Agent', 'blackbox/1'), ('Accept-Encoding', 'gzip'),
+                                 ('Accept-Language', 'en'), ('Baggage', 'k=v')]
+    routes = [('Mode A', 'GET', TRACKING + '/TRK-1', None), ('Mode A, a write', 'POST', LABELS, LABEL_BODY),
+              ('Mode B', 'GET', MANIFESTS + '/MAN-1', None), ('Mode C', 'GET', RATES, None),
+              ('Mode A with key.expression', 'GET', PICKUPS + '/PCK-1', None),
+              ('Mode A with a developer token', 'GET', PARCELS + '/PRC-1', None)]
+    seen = {}
+    for label, method, target, body in routes:
+        send(PORTS['provider'], 'POST', '/admin/reset', ADMIN(), b'')
+        r = gw(method, target, blue(), sent + (JSON_CT if body else []), body)
+        hits = provider_hits()
+        seen[label] = sorted({k.lower() for k, _ in hits[0]['headers']}) if len(hits) == 1 else {'status': r['status'], 'provider_hits': len(hits)}
+        if not c.check(f'{label}: served, and the provider received one request', r['status'] in (200, 201) and len(hits) == 1):
+            continue
+        hs = hits[0]['headers']
+        c.check(f'{label}: no header outside the registered set', outside_the_allow_list(hits[0]) == [])
+        c.check(f'{label}: the registered header the caller sent, and exactly one credential',
+                header(hs, 'x-client-trace') == ['keep-me'] and len(header(hs, 'authorization')) == 1)
+    c.note('provider_saw_header_names', seen)
+
+
+@case('P1-HD-04', 'requests made to get a header past the allow list',
+      'none does: with a value that is not UTF-8, a name in another letter case, a header named in Connection, a registered header '
+      'sent twice or a second Authorization, the provider is left with registered headers only and the one credential',
+      ('GW-AT-008', 'GW-ST-001', 'GW-FR-008'))
+def _(c):
+    planted = ('X-Evil-Probe', 'must-not-reach')
+    attempts = [
+        ('an unregistered header whose value is not UTF-8', [('X-Bin', '\xff\xfe'), planted]),
+        ('a registered header whose value is not UTF-8', [('X-Client-Trace', 'caf\xe9'), planted]),
+        ('names in other letter cases', [('X-EVIL-PROBE', 'must-not-reach'), ('x-CLIENT-trace', 'keep-me')]),
+        ('the header named in Connection', [('Connection', 'keep-alive, X-Evil-Probe'), planted]),
+        ('a registered header sent twice', [('X-Client-Trace', 'one'), ('X-Client-Trace', 'two'), planted]),
+        ('a second Authorization after the caller\'s token', [('Authorization', 'Basic Y2FsbGVyOnBsYW50ZWQ='), planted]),
+    ]
+    seen = {}
+    for label, headers in attempts:
+        send(PORTS['provider'], 'POST', '/admin/reset', ADMIN(), b'')
+        r = gw('GET', TRACKING + '/TRK-1', blue(), headers)
+        hits = provider_hits()
+        if not c.check(f'{label}: served, and the provider received one request', r['status'] == 200 and len(hits) == 1):
+            seen[label] = {'status': r['status'], 'provider_hits': len(hits)}
+            continue
+        hs = hits[0]['headers']
+        # What became of the registered header in each attempt is an observation, not a check.
+        seen[label] = {'names': sorted({k.lower() for k, _ in hs}), 'x-client-trace': header(hs, 'x-client-trace')}
+        c.check(f'{label}: no header outside the registered set', outside_the_allow_list(hits[0]) == [])
+        c.check(f'{label}: exactly one Authorization, account-blue\'s credential',
+                header(hs, 'authorization') == ['Bearer ' + S.token['account-blue']])
+    c.note('provider_saw', seen)
+
+
 @case('P1-CR-02', 'what the caller receives', 'the provider credential appears nowhere in the response', ('GW-AT-007', 'GW-FR-007'))
 def _(c):
     r = gw('GET', TRACKING + '/TRK-1', blue())
@@ -814,6 +936,95 @@ def _(c):
     c.check('caller JWT did not reach the provider', all(tok not in v for h in hits for _, v in h['headers']))
     c.check('no Authorization header reached the provider', all(header(h['headers'], 'authorization') == [] for h in hits))
     c.check('provider received nothing (rejected at the gateway)', len(hits) == 0)
+
+
+# ---- where a refusal comes from: the PDP refused, or the PDP could not be asked ---------------------
+# With failureMode `deny` the gateway answered 403 in both cases. The reviewed configuration says
+# `denyWithStatus: 503`. P1-FC-01 to 03 and P1-TL-01 above keep the expectation they had before that
+# (the request is rejected and nothing is forwarded); which status the caller gets is pinned here.
+def answered_by_the_gateway(r: dict) -> bool:
+    """A refusal the gateway made itself: not relayed from the PDP (no decision in the body), not from the provider."""
+    body = body_json(r)
+    return r['status'] is not None and not header(r, 'x-mock-provider') and 'result' not in body and 'reason_code' not in body
+
+
+def gateway_log_size() -> int:
+    return (RUN / 'agentgateway.log').stat().st_size
+
+
+def gateway_logged(since: int) -> dict:
+    """Level, status, reason and error of the last request line the gateway wrote after byte `since` of its log."""
+    time.sleep(0.4)
+    with open(RUN / 'agentgateway.log', 'rb') as f:
+        f.seek(since)
+        lines = [l for l in f.read().decode(errors='replace').splitlines() if '\trequest ' in l]
+    if not lines:
+        return {}
+
+    def field(key: str) -> str | None:
+        found = re.search(rf' {re.escape(key)}=("[^"]*"|\S+)', lines[-1])
+        return found[1].strip('"') if found else None
+
+    return {'level': lines[-1].split('\t')[1], 'http.status': field('http.status'), 'reason': field('reason'), 'error': field('error')}
+
+
+@case('P1-FO-01', 'the PDP refuses, and the PDP cannot be asked',
+      'the caller can tell them apart: a policy denial is 403 with the PDP\'s reason; when the PDP cannot be asked the gateway '
+      'answers 503 itself, on every route, and forwards nothing; an answer the PDP did give keeps the PDP\'s status',
+      ('GW-AT-043', 'GW-ST-008', 'GW-FR-043', 'GW-FR-047'))
+def _(c):
+    track = lambda: gw('GET', TRACKING + '/TRK-1', blue())
+
+    denied = gw('GET', TRACKING + '/TRK-1', blue(), [('X-Provider-Account', 'account-green')])
+    c.note('policy_denial', {'status': denied['status'], 'reason_code': body_json(denied).get('reason_code')})
+    c.check('a policy denial: 403, with the PDP\'s reason', denied['status'] == 403 and body_json(denied).get('reason_code') == 'ACCOUNT_NOT_GRANTED')
+
+    pdp_admin('/admin/mode?value=error500')
+    answered = track()
+    c.note('pdp_answered_500', {'status': answered['status']})
+    c.check('an error the PDP answered with keeps its status: 500', answered['status'] == 500)
+
+    pdp_admin('/admin/mode?value=slow')
+    slow = track()
+    c.note('pdp_slower_than_the_timeout', {'status': slow['status'], 'seconds': slow['seconds']})
+    c.check('the PDP does not answer within the gateway\'s 1s timeout: 503, from the gateway itself',
+            slow['status'] == 503 and answered_by_the_gateway(slow))
+    pdp_admin('/admin/mode?value=normal')
+
+    stop('gateway-authz', PORTS['gatekeeper'])
+    try:
+        mark = gateway_log_size()
+        down = track()
+        # Observation, not a check: with denyWithStatus the gateway's own log line for this request is
+        # no longer an error line with reason=ExtAuth; it reads like an answer relayed from the PDP.
+        c.note('gateway_log_line_when_the_pdp_cannot_be_asked', gateway_logged(mark))
+        c.check('the PDP is down: 503, from the gateway itself', down['status'] == 503 and answered_by_the_gateway(down))
+        others = {'labels, a write': gw('POST', LABELS, blue(), JSON_CT, LABEL_BODY),
+                  'pickups, key.expression': gw('GET', PICKUPS + '/PCK-1', blue()),
+                  'parcels, developer token': gw('GET', PARCELS + '/PRC-1', blue())}
+        c.note('other_routes_while_the_pdp_is_down', {name: r['status'] for name, r in others.items()})
+        c.check('the same on the other routes that ask the PDP: 503, from the gateway itself',
+                all(r['status'] == 503 and answered_by_the_gateway(r) for r in others.values()))
+        impostor = Impostor()
+        try:
+            fake = track()
+            c.check('a server on the PDP port whose certificate the gateway does not accept: 503 from the gateway, which sent it nothing',
+                    fake['status'] == 503 and answered_by_the_gateway(fake) and impostor.requests == [])
+        finally:
+            impostor.close()
+    finally:
+        start_gatekeeper()
+    stop('broker', PORTS['broker'])
+    try:
+        b = gw('GET', MANIFESTS + '/MAN-1', blue())
+        c.note('mode_b_while_the_broker_is_down', b['status'])
+        c.check('the Mode B route while the local broker is down: 503, from the gateway itself',
+                b['status'] == 503 and answered_by_the_gateway(b))
+    finally:
+        start_broker()
+    c.check('the provider received none of these requests', len(provider_hits()) == 0)
+    c.check('after the PDP and the broker are back: allowed again',
+            track()['status'] == 200 and gw('GET', MANIFESTS + '/MAN-1', blue())['status'] == 200)
 
 
 # ---- writes -----------------------------------------------------------------------------------
@@ -1425,6 +1636,33 @@ def _(c):
         c.check(f'{name}: no developer account number, no developer token, no Authorization value of that scheme', not developer_in(text))
 
 
+# The third kind of refusal beside P1-FO-01's two: the PDP was asked and answered that it cannot decide.
+# It comes after the developer-token cases because it replaces their token file, and P1-DT-04 counts
+# every time gateway-authz has read that file.
+@case('P1-FO-02', 'the PDP answers that it cannot decide',
+      'holding no credential for an account its policy grants, gateway-authz answers 503 INDETERMINATE itself: the caller gets '
+      'that answer and its reason, not a 403; nothing is forwarded; the other account is served',
+      ('GW-AT-043', 'GW-ST-009', 'GW-FR-043', 'GW-FR-006'))
+def _(c):
+    try:
+        write_developer_tokens({'account-green': S.developer['account-green']})
+        mark = gateway_log_size()
+        r = gw('GET', PARCELS + '/PRC-1', blue())
+        answer = body_json(r)
+        c.note('answer', {'status': r['status'], 'result': answer.get('result'), 'reason_code': answer.get('reason_code')})
+        # Observation: next to the one P1-FO-01 records, the gateway's log line has the same shape.
+        c.note('gateway_log_line_when_the_pdp_cannot_decide', gateway_logged(mark))
+        c.check('503, and the answer is the PDP\'s own: INDETERMINATE, CREDENTIAL_UNAVAILABLE',
+                r['status'] == 503 and answer.get('result') == 'INDETERMINATE' and answer.get('reason_code') == 'CREDENTIAL_UNAVAILABLE')
+        c.check('the answer carries no credential', not carries_credential(r) and not developer_in(r['body'].decode(errors='replace') + json.dumps(r['headers'])))
+        c.check('the provider received nothing', len(provider_hits()) == 0)
+        g = gw('GET', PARCELS + '/PRC-2', green())
+        c.check('green, whose credential it holds, is served', g['status'] == 200 and body_json(g).get('account') == 'account-green')
+    finally:
+        write_developer_tokens(S.developer)
+    c.check('with the credential back: blue is served again', gw('GET', PARCELS + '/PRC-1', blue())['status'] == 200)
+
+
 # ---- revocation through the product's own interface (ADR-0012) --------------------------------------------
 # The cases above revoke through the controls that only the acceptance build has. These go the way a
 # deployment would: a POST to gateway-authz from the one workload identity it was told may change its
@@ -1924,7 +2162,7 @@ def stage_config(binary: str) -> tuple[bool, str]:
 # What the reviewed configuration sets because the binary, left to itself, does something unsafe.
 LEFT_OUT = ['urlRewrite.authority', 'the canonical-path authorization rule on each route',
             'the credential-present authorization rule on each backend', 'responseHeaderModifier', 'requestHeaderModifier',
-            'config.storage.mode', 'bindAddress on the callers\' listener']
+            'the header allow list on each backend (transformations)', 'config.storage.mode', 'bindAddress on the callers\' listener']
 
 
 def unmitigated_config() -> bytes:
@@ -1939,7 +2177,7 @@ def unmitigated_config() -> bytes:
             policies.pop(key, None)
         policies.get('urlRewrite', {}).pop('authority', None)
         for backend in route['backends']:
-            for key in ('authorization', 'requestHeaderModifier'):
+            for key in ('authorization', 'requestHeaderModifier', 'transformations'):
                 backend.get('policies', {}).pop(key, None)
             if backend.get('policies') == {}:
                 del backend['policies']
@@ -1976,6 +2214,12 @@ def observe_unmitigated(binary: str) -> dict:
         names = {k.lower() for h in hits for k, _ in h['headers']}
         seen['host_header_the_provider_received'] = sorted({v for h in hits for v in header(h['headers'], 'host')})
         seen['caller_headers_the_provider_received'] = sorted(k.lower() for k, _ in sent if k.lower() in names)
+
+        # Without the allow list: headers that no removal names either.
+        reset_all()
+        gw('GET', TRACKING + '/TRK-1', tok, UNREGISTERED)
+        names = {k.lower() for h in provider_hits() for k, _ in h['headers']}
+        seen['unregistered_caller_headers_the_provider_received'] = sorted(k.lower() for k, _ in UNREGISTERED if k.lower() in names)
 
         # Without the canonical-path rule, on the route that has no PDP behind it.
         targets = {}
@@ -2016,6 +2260,56 @@ def observe_unmitigated(binary: str) -> dict:
         seen['not_observed'] = f'{type(e).__name__}: {e}'
     finally:
         stop('agentgateway-unmitigated', PORTS['gateway'])
+        probe.unlink(missing_ok=True)
+    return seen
+
+
+def observe_unevaluable_allow_list(binary: str) -> dict:
+    """Start the binary once from the reviewed configuration with the allow-list expression on every
+    backend replaced by one it cannot evaluate, and record what the provider then receives.
+
+    An observation, not a check, like observe_unmitigated(). It is why the removals by name stay beside
+    the allow list and why P1-HD-03 sends a request through every route: on the build under test such an
+    expression passes validation and stops nothing. A new release may refuse it, or refuse the request;
+    then what is recorded here changes. No case runs against this configuration."""
+    probe = RUN / 'unevaluable.yaml'
+    broken = 'request.headers.noSuchFunction(k, true)'
+    seen: dict = {'configuration': 'the reviewed configuration with every allow-list expression replaced by: ' + broken}
+    try:
+        doc = yaml.safe_load(CONFIG.read_bytes())
+        replaced = 0
+        for route in doc['routes']:
+            for backend in route['backends']:
+                request = backend.get('policies', {}).get('transformations', {}).get('request', {})
+                if 'replace' in request:
+                    request['replace'], replaced = broken, replaced + 1
+        seen['expressions_replaced'] = replaced
+        probe.write_bytes(yaml.safe_dump(doc, sort_keys=False).encode())
+        os.chmod(probe, 0o600)
+        v = subprocess.run([binary, '--validate-only', '-f', f'.run/{probe.name}'], cwd=HERE, capture_output=True, text=True)
+        seen['accepted_by_the_validator'] = v.returncode == 0
+        if v.returncode != 0:
+            seen['the_validator_said'] = ' '.join((v.stdout + v.stderr).split())[:300]
+            return seen
+        start('agentgateway-unevaluable', [binary, '-f', f'.run/{probe.name}'], PORTS['gateway'], env=gateway_env(S.session_key))
+        reset_all()
+        removed_by_name = [('Cookie', 'session=caller-session'), ('X-Forwarded-For', '10.1.2.3'), ('X-Provider-Account', 'account-blue')]
+        log = RUN / 'agentgateway-unevaluable.log'
+        before = log.stat().st_size
+        r = gw('GET', TRACKING + '/TRK-1', blue(), UNREGISTERED + removed_by_name)
+        time.sleep(0.4)
+        names = {k.lower() for h in provider_hits() for k, _ in h['headers']}
+        written = log.read_bytes()[before:].decode(errors='replace').splitlines()
+        seen.update({
+            'status': r['status'],
+            'unregistered_caller_headers_the_provider_received': sorted(k.lower() for k, _ in UNREGISTERED if k.lower() in names),
+            'headers_removed_by_name_the_provider_received': sorted(k.lower() for k, _ in removed_by_name if k.lower() in names),
+            'lines_the_gateway_logged_beside_the_request_line': len([l for l in written if '\trequest ' not in l]),
+        })
+    except Exception as e:
+        seen['not_observed'] = f'{type(e).__name__}: {e}'
+    finally:
+        stop('agentgateway-unevaluable', PORTS['gateway'])
         probe.unlink(missing_ok=True)
     return seen
 
@@ -2105,7 +2399,7 @@ def main() -> int:
         return 2
 
     started = datetime.datetime.now(datetime.timezone.utc)
-    results, listeners, unmitigated = [], '', {}
+    results, listeners, unmitigated, unevaluable = [], '', {}, {}
     try:
         mock = lambda name, port: start(name, [sys.executable, str(HERE / 'mock_provider.py'), '--port', str(port),
                                                 '--name', name, '--state', str(RUN / 'state.json')], port)
@@ -2116,6 +2410,7 @@ def main() -> int:
         start_gatekeeper()
         start_broker()
         unmitigated = observe_unmitigated(binary)
+        unevaluable = observe_unevaluable_allow_list(binary)
         start('agentgateway', [binary, '-f', str(RUN_CONFIG.relative_to(HERE))], PORTS['gateway'], env=gateway_env(S.session_key))
         start_front()
         listeners = sh(['ss', '-ltnH'])
@@ -2175,7 +2470,8 @@ def main() -> int:
                          'session_key_supplied_by': 'SESSION_KEY environment variable, generated per run, not recorded',
                          'start_without_session_key_rewrites_config_file': S.default_start_rewrites,
                          'start_without_session_key_rewrites_config_file_with_storage_read_only': S.read_only_start_rewrites,
-                         'unmitigated_defaults': unmitigated},
+                         'unmitigated_defaults': unmitigated,
+                         'allow_list_expression_that_cannot_be_evaluated': unevaluable},
         'policy_sha256': hashlib.sha256((HERE / 'policy.poc.json').read_bytes()).hexdigest(),
         'runner_sha256': hashlib.sha256(Path(__file__).resolve().read_bytes()).hexdigest(),
         'gateway_authz': {'what_ran': 'cmd/gateway-authz built with the acceptance tag; not the product build',

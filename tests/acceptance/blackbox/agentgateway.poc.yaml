@@ -103,7 +103,17 @@ routes:
       - allow: 'request.path.matches("^(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$")'
     extAuthz:
       host: 127.0.0.1:27613
-      failureMode: deny
+      # When the PDP cannot be asked (no connection, no answer within requestTimeout below, a
+      # certificate the gateway does not accept) the request is refused, as with `deny`, and
+      # the caller is answered 503 instead of the 403 that a policy denial gets. An answer
+      # the PDP did give reaches the caller with the PDP's own status and body (P1-FO-01, 02).
+      # The price is in the gateway's own log: with `deny` such a request is an error line with
+      # reason=ExtAuth; with this it is an info line with reason=DirectResponse, the same as
+      # for an answer relayed from the PDP.
+      # Not `allow`, and no status below 400: the binary accepts `denyWithStatus: 200`, and then
+      # answers 200 to a request it has not forwarded.
+      failureMode:
+        denyWithStatus: 503
       # The only caller-supplied header the PDP sees. It is a *request* for an account,
       # never an authorization fact; the PDP re-checks it against the tenant's grants.
       includeRequestHeaders:
@@ -159,6 +169,22 @@ routes:
       authorization:
         rules:
         - allow: 'request.headers["authorization"].startsWith("Bearer ")'
+      # G03 §5: the provider receives the request headers registered for it and no other.
+      # `replace` rebuilds the header set from this expression. Names are lower case in it:
+      # one written here with a capital letter matches nothing. It runs after the rule above
+      # and after backendAuth, so `authorization` has to be listed; by then that header can
+      # only be the provider credential. Host and the headers that frame the body are the
+      # gateway's own and need no entry. A listed header whose value is not UTF-8 is dropped
+      # (cases P1-HD-01 to 04).
+      # An expression the gateway cannot evaluate does NOT stop anything: --validate-only
+      # accepts it, the request goes on with every header the caller sent, and nothing is
+      # logged. That is why the removals below stay (requestHeaderModifier runs after this,
+      # whether or not the expression could be evaluated), why the list is the same text on
+      # every route (tests/contracts checks it), and why P1-HD-03 sends a request through
+      # each route.
+      transformations:
+        request:
+          replace: 'request.headers.filterKeys(k, k in ["accept", "authorization", "content-type", "idempotency-key", "traceparent", "x-client-trace"])'
       requestHeaderModifier:
         remove:
         - x-provider-account
@@ -184,7 +210,8 @@ routes:
       - allow: 'request.path.matches("^(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$")'
     extAuthz:
       host: 127.0.0.1:27613
-      failureMode: deny
+      failureMode:
+        denyWithStatus: 503
       includeRequestHeaders:
       - x-provider-account
       policies:
@@ -228,6 +255,9 @@ routes:
       authorization:
         rules:
         - allow: 'request.headers["authorization"].startsWith("Bearer ")'
+      transformations:
+        request:
+          replace: 'request.headers.filterKeys(k, k in ["accept", "authorization", "content-type", "idempotency-key", "traceparent", "x-client-trace"])'
       requestHeaderModifier:
         remove:
         - x-provider-account
@@ -259,7 +289,8 @@ routes:
       - allow: 'request.path.matches("^(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$")'
     extAuthz:
       host: 127.0.0.1:27618
-      failureMode: deny
+      failureMode:
+        denyWithStatus: 503
       includeRequestHeaders:
       - x-provider-account
       policies:
@@ -303,6 +334,9 @@ routes:
       authorization:
         rules:
         - allow: 'request.headers["authorization"].startsWith("Bearer ")'
+      transformations:
+        request:
+          replace: 'request.headers.filterKeys(k, k in ["accept", "authorization", "content-type", "idempotency-key", "traceparent", "x-client-trace"])'
       requestHeaderModifier:
         remove:
         - x-provider-account
@@ -348,6 +382,10 @@ routes:
       backendAuth:
         key:
           file: .run/static-provider.key
+      # backendAuth has put the credential on the request by the time this runs.
+      transformations:
+        request:
+          replace: 'request.headers.filterKeys(k, k in ["accept", "authorization", "content-type", "idempotency-key", "traceparent", "x-client-trace"])'
       requestHeaderModifier:
         remove:
         - x-provider-account
@@ -380,7 +418,8 @@ routes:
       - allow: 'request.path.matches("^(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$")'
     extAuthz:
       host: 127.0.0.1:27613
-      failureMode: deny
+      failureMode:
+        denyWithStatus: 503
       includeRequestHeaders:
       - x-provider-account
       policies:
@@ -435,6 +474,10 @@ routes:
           location:
             header:
               name: authorization
+      # backendAuth has put the credential on the request by the time this runs.
+      transformations:
+        request:
+          replace: 'request.headers.filterKeys(k, k in ["accept", "authorization", "content-type", "idempotency-key", "traceparent", "x-client-trace"])'
       requestHeaderModifier:
         remove:
         - x-provider-account
@@ -468,7 +511,8 @@ routes:
       - allow: 'request.path.matches("^(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$")'
     extAuthz:
       host: 127.0.0.1:27613
-      failureMode: deny
+      failureMode:
+        denyWithStatus: 503
       includeRequestHeaders:
       - x-provider-account
       policies:
@@ -514,6 +558,9 @@ routes:
       authorization:
         rules:
         - allow: 'request.headers["authorization"].startsWith("Hc-OweDeveloper ")'
+      transformations:
+        request:
+          replace: 'request.headers.filterKeys(k, k in ["accept", "authorization", "content-type", "idempotency-key", "traceparent", "x-client-trace"])'
       requestHeaderModifier:
         remove:
         - x-provider-account

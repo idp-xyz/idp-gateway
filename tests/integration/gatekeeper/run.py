@@ -51,7 +51,8 @@ GATEWAY_DIFFERENCES = [
     ('        file: .run/jwks.json\n', f'        url: {ISSUER}/.well-known/jwks.json\n', 1),
     # Gatekeeper 的令牌里没有 env 声明。这里的"Token 环境"是这个网关实例的常量：
     # 它只信一个签发者，签发者属于哪个环境是部署时定下的。
-    ("x-idp-verified-env: jwt.env\n", "x-idp-verified-env: '\"TEST\"'\n", 4),
+    # 黑盒配置里每条问 PDP 的路由各有一处，一共五条；联调只走其中一条，五处都要换，配置才是一致的。
+    ("x-idp-verified-env: jwt.env\n", "x-idp-verified-env: '\"TEST\"'\n", 5),
 ]
 
 
