@@ -1,12 +1,12 @@
 {
   "title": "IDP Gateway black-box suite: real agentgateway, gateway-authz (acceptance build), mock provider",
-  "started_at_utc": "2026-11-18T08:07:52.730165+00:00",
-  "finished_at_utc": "2026-11-18T08:08:36.016883+00:00",
+  "started_at_utc": "2026-11-18T14:39:44.399229+00:00",
+  "finished_at_utc": "2026-11-18T14:40:25.197475+00:00",
   "operator": "tops",
   "host": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "python": "3.12.3",
   "command": ".venv/bin/python tests/acceptance/blackbox/run.py",
-  "repository_commit": "17aeed91ab7abf1bd4dd6f30bee663b6dc1a1413",
+  "repository_commit": "48c0b23e2f3168b06222685e460d532be88cbe9f",
   "repository_dirty_files": 0,
   "repository_dirty_files_ignores": "tests/acceptance/blackbox/evidence/",
   "agentgateway": {
@@ -113,7 +113,7 @@
     "go": "go version go1.26.8 linux/amd64",
     "source_sha256": "8e3bd17830060a2194805b2e4db810a9078686587984f3a3b63ef55cdbcea210",
     "source_sha256_covers": "go.mod and every non-test .go file under cmd/ and internal/",
-    "binary_sha256": "d911ced454681ca65ea5eb127cf0328df1930f91d439909048fed8e79bf26764",
+    "binary_sha256": "f714fb0bf1090953af33b1741e8db6d878a40b351e8e45b4279466533dae5a5d",
     "policy_from": "tests/acceptance/blackbox/policy.poc.json",
     "credentials_from": "two files written for the run, not recorded: Bearer tokens (--credentials), and account numbers with developer tokens (--developer-tokens)",
     "revocations": "a file written for the run (--revocations), empty at the start; changed through the acceptance controls and, in P1-RV-02 to 05, through the product interface",
@@ -1115,7 +1115,7 @@
           "x-client-trace"
         ],
         "traceparent_the_provider_received": [
-          "00-0af7651916cd43dd8537bf50925c1ba0-6982cbcff7450696-01"
+          "00-0af7651916cd43dd8537bf50925c1ba0-ed6ec732d6a7ec0a-01"
         ]
       },
       "indicative_for": [
@@ -1592,7 +1592,7 @@
       ],
       "observed": {
         "status": 503,
-        "seconds": 1.003
+        "seconds": 1.002
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1757,7 +1757,7 @@
         },
         "pdp_slower_than_the_timeout": {
           "status": 503,
-          "seconds": 1.003
+          "seconds": 1.002
         },
         "gateway_log_line_when_the_pdp_cannot_be_asked": {
           "level": "info",
@@ -1835,7 +1835,7 @@
       ],
       "observed": {
         "status": 504,
-        "seconds": 2.004,
+        "seconds": 2.002,
         "provider_hits": 1
       },
       "indicative_for": [
@@ -2321,7 +2321,7 @@
             503
           ]
         },
-        "seconds_slow": 2.005,
+        "seconds_slow": 2.003,
         "provider_hits": 3
       },
       "indicative_for": [
@@ -2681,7 +2681,7 @@
         },
         "Gatekeeper slower than the broker waits": {
           "status": 503,
-          "seconds": 0.746
+          "seconds": 0.745
         },
         "Gatekeeper down": {
           "status": 503,
@@ -3327,7 +3327,7 @@
           "revoked_accounts": [
             {
               "account_id": "account-blue",
-              "revoked_at": "2026-11-18T08:08:30Z",
+              "revoked_at": "2026-11-18T14:40:20Z",
               "revoked_by": "spiffe://idp.test/egress/revoker",
               "reason": "black-box: credential reported leaked"
             }
@@ -3685,7 +3685,7 @@
         }
       ],
       "observed": {
-        "seconds_until_the_failure_was_reported": 0.4,
+        "seconds_until_the_failure_was_reported": 0.3,
         "configReload": {
           "synchronized": false,
           "lastError": "routes[8]: unknown field `notAFieldOfARoute` at line 505 column 3"
