@@ -156,6 +156,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
 17. `gateway-control` 多了 `reconcile` 和 `restart` 两条命令，`internal/gatewayconfig` 跟着多了记录和重启网关容器的部分；`gateway-authz` 自己的代码没有动。证据的源码哈希覆盖 `cmd/` 和 `internal/` 下所有非测试的 Go 文件，所以重跑一次。`run.py`、配置和期望都没有动：仍是 58/59，326 项检查的结果与上一份证据逐项相同。
 18. `gateway-control` 多了第四条命令 `place`（网关启动之前把记录的那一份配置放到位），是随单机的部署文件 `deploy/compose` 一起加的；`gateway-authz` 自己的代码没有动。证据的源码哈希覆盖 `cmd/` 和 `internal/` 下所有非测试的 Go 文件，所以重跑一次。`run.py`、配置和期望都没有动：仍是 58/59，326 项检查的结果与上一份证据逐项相同。
 19. `gateway-control` 多了第五条命令 `keep`（常驻的看守：池里的容器死了，它跑启动命令把它们起回来，平时定时对账），`internal/gatewayconfig` 跟着多了看一个池的容器、跑它的启动命令的部分；`gateway-authz` 自己的代码没有动。证据的源码哈希覆盖 `cmd/` 和 `internal/` 下所有非测试的 Go 文件，所以重跑一次。`run.py`、配置和期望都没有动：仍是 58/59，326 项检查的结果与上一份证据逐项相同。这一次记到的本机临时端口范围是 52810–56905，此前各次都是 44620–48715；端口段仍然低于它。
+20. `gateway-control keep` 每看完一眼在 `--metrics-listen` 上给出指标，`internal/gatewayconfig` 多了记这些数的部分；`gateway-authz` 自己的代码没有动。证据的源码哈希覆盖 `cmd/` 和 `internal/` 下所有非测试的 Go 文件，所以重跑一次。`run.py`、配置和期望都没有动：仍是 58/59，326 项检查的结果与上一份证据逐项相同。`P1-CR-04` 记到的日志行数从 186 到 188，那一条的检查没有变。本机临时端口范围仍是 52810–56905。
 
 没有任何期望被放宽过。
 

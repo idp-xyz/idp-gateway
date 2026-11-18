@@ -1,12 +1,12 @@
 {
   "title": "IDP Gateway black-box suite: real agentgateway, gateway-authz (acceptance build), mock provider",
-  "started_at_utc": "2026-11-17T05:37:28.620770+00:00",
-  "finished_at_utc": "2026-11-17T05:38:05.896186+00:00",
+  "started_at_utc": "2026-11-18T03:04:46.674632+00:00",
+  "finished_at_utc": "2026-11-18T03:05:21.313753+00:00",
   "operator": "tops",
   "host": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "python": "3.12.3",
   "command": ".venv/bin/python tests/acceptance/blackbox/run.py",
-  "repository_commit": "977b0e27bb55b98d10661a29994f76ba33b58a91",
+  "repository_commit": "7dca246c8a6bba8eae80c69f54fb4c4d7e5fae19",
   "repository_dirty_files": 0,
   "repository_dirty_files_ignores": "tests/acceptance/blackbox/evidence/",
   "agentgateway": {
@@ -93,9 +93,9 @@
     "what_ran": "cmd/gateway-authz built with the acceptance tag; not the product build",
     "build_command": "go build -trimpath -tags acceptance -o tests/acceptance/blackbox/.run/gateway-authz ./cmd/gateway-authz",
     "go": "go version go1.26.8 linux/amd64",
-    "source_sha256": "3b729475a8b5763abf00707c23b267ce871bc06e230d2fcfc26b9b87bfa40212",
+    "source_sha256": "a05d846cb7f31c1a6c4e0fdf419490008242de0275f707b4531c05f8b4702524",
     "source_sha256_covers": "go.mod and every non-test .go file under cmd/ and internal/",
-    "binary_sha256": "c6e683ae4303eee5f562cfde901e779eabc0777aa023018165d9cbfff1777498",
+    "binary_sha256": "8a0eb086c1bd1edc49fb0d0aa9f75d3ad4dbb9b9514f5424994205cab8e93ab9",
     "policy_from": "tests/acceptance/blackbox/policy.poc.json",
     "credentials_from": "a file written for the run, not recorded",
     "revocations": "in memory",
@@ -1215,7 +1215,7 @@
       ],
       "observed": {
         "status": 403,
-        "seconds": 1.003
+        "seconds": 1.002
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1383,7 +1383,7 @@
       ],
       "observed": {
         "status": 504,
-        "seconds": 2.034,
+        "seconds": 2.002,
         "provider_hits": 1
       },
       "indicative_for": [
@@ -1869,7 +1869,7 @@
             503
           ]
         },
-        "seconds_slow": 2.002,
+        "seconds_slow": 2.003,
         "provider_hits": 3
       },
       "indicative_for": [
@@ -2225,11 +2225,11 @@
       "observed": {
         "Gatekeeper answers 500": {
           "status": 503,
-          "seconds": 0.003
+          "seconds": 0.004
         },
         "Gatekeeper slower than the broker waits": {
           "status": 503,
-          "seconds": 0.748
+          "seconds": 0.747
         },
         "Gatekeeper down": {
           "status": 503,
@@ -2490,7 +2490,7 @@
       ],
       "observed": {
         "seconds_until_the_new_route_was_served": 0.31,
-        "seconds_until_the_route_was_gone_again": 0.33
+        "seconds_until_the_route_was_gone_again": 0.34
       },
       "indicative_for": [
         "GW-AT-014",
@@ -2744,7 +2744,7 @@
         }
       ],
       "observed": {
-        "log_lines": 186,
+        "log_lines": 188,
         "routes_exercised": 4
       },
       "indicative_for": [
