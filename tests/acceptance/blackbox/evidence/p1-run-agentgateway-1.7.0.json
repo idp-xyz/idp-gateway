@@ -1,12 +1,12 @@
 {
   "title": "IDP Gateway black-box suite: real agentgateway, gateway-authz (acceptance build), mock provider",
-  "started_at_utc": "2026-11-18T03:04:46.674632+00:00",
-  "finished_at_utc": "2026-11-18T03:05:21.313753+00:00",
+  "started_at_utc": "2026-11-18T04:03:27.823124+00:00",
+  "finished_at_utc": "2026-11-18T04:04:03.141225+00:00",
   "operator": "tops",
   "host": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "python": "3.12.3",
   "command": ".venv/bin/python tests/acceptance/blackbox/run.py",
-  "repository_commit": "7dca246c8a6bba8eae80c69f54fb4c4d7e5fae19",
+  "repository_commit": "ece169abecd752b285138b6c1665f939da565737",
   "repository_dirty_files": 0,
   "repository_dirty_files_ignores": "tests/acceptance/blackbox/evidence/",
   "agentgateway": {
@@ -25,7 +25,7 @@
     "pinned_by": "deploy/agentgateway/agentgateway.lock.json",
     "lock_sha256": "0960e8d2fbd33bfc288930bc5bfccaedae69675c273be764327fd9d2128f0cb3",
     "config_file": "tests/acceptance/blackbox/agentgateway.poc.yaml",
-    "config_sha256": "dfede444e0ed0146d9695b9d43f9109eb4ae4d955749630cb1f4f8308e58b74b",
+    "config_sha256": "3b70205fe5cbba7d382e010f05c618d239f1eaca3293217c084cbc5c4744b1b3",
     "native_validation": "Configuration is valid!",
     "session_key_supplied_by": "SESSION_KEY environment variable, generated per run, not recorded",
     "start_without_session_key_rewrites_config_file": true,
@@ -87,17 +87,17 @@
       }
     }
   },
-  "policy_sha256": "44ce8acf064e0d30c06ea7842d20a51077a711e7e364a24bee9f4c98ebcb096a",
-  "runner_sha256": "134b292d4b9908741f408ca8826365a75946ac35bf6e0f3dfba1882e0a4f0629",
+  "policy_sha256": "49d0f2f15583466032ca59f4f742953463594e0ea66e171be80d882a12b851e3",
+  "runner_sha256": "4b9e9a7c9aecaa94178f5aa5f28c88c27aa1260c4187d2cb04280898dd9efaa4",
   "gateway_authz": {
     "what_ran": "cmd/gateway-authz built with the acceptance tag; not the product build",
     "build_command": "go build -trimpath -tags acceptance -o tests/acceptance/blackbox/.run/gateway-authz ./cmd/gateway-authz",
     "go": "go version go1.26.8 linux/amd64",
-    "source_sha256": "a05d846cb7f31c1a6c4e0fdf419490008242de0275f707b4531c05f8b4702524",
+    "source_sha256": "e62df89a28428c039569193ec2bdb4201719ddf622958cfce8a215846e36c2b3",
     "source_sha256_covers": "go.mod and every non-test .go file under cmd/ and internal/",
-    "binary_sha256": "8a0eb086c1bd1edc49fb0d0aa9f75d3ad4dbb9b9514f5424994205cab8e93ab9",
+    "binary_sha256": "eea6aba125ada2007710ab876eb73b381cde843b183aa59a9129367c2baee073",
     "policy_from": "tests/acceptance/blackbox/policy.poc.json",
-    "credentials_from": "a file written for the run, not recorded",
+    "credentials_from": "two files written for the run, not recorded: Bearer tokens (--credentials), and account numbers with developer tokens (--developer-tokens)",
     "revocations": "in memory",
     "http_versions_seen_from_the_gateway": [
       "HTTP/2.0"
@@ -105,7 +105,7 @@
   },
   "mocks_sha256": {
     "mock_broker.py": "13566ddb1dd1f7da5e43e38b9f7d5199c1f2c903d95d2029b60df9fa675c1000",
-    "mock_provider.py": "4411dc76ac1b2a9d7f2f2d463a49ff73feded890ddb995d33fc5f2978128b1ec",
+    "mock_provider.py": "cc415d4516ee57fbcd59cf488133afe522ac6eaddbf6cda4fe4b5fe162c94584",
     "pki.py": "8f2129ac939f76ad6f2dbd37eeef29af88573980d9b127bbaa599734a6e19f44",
     "pin.py": "3138647b47d8de2792d656388c94fb07f114a35883d7f3e0a21eccd442c110a5"
   },
@@ -154,14 +154,14 @@
   ],
   "ports_left_open_after_run": [],
   "summary": {
-    "cases": 59,
-    "pass": 58,
+    "cases": 64,
+    "pass": 63,
     "fail": 1
   },
   "scope_limits": [
     "The PDP is this repository's gateway-authz, built with the `acceptance` tag: the product code plus the test controls this runner uses (request log, fault modes, revoke/restore). The product build, which has none of them, is not what ran. Where a case says \"Gatekeeper\" or \"PDP\" it means this process.",
     "gateway-authz reads its policy and its credentials from files written for the run and keeps revocations in memory. No identity provider, grants store, Secret Manager or provider token endpoint is involved, and the deployed Gatekeeper is not called: the caller tokens are signed by a key made for the run.",
-    "The provider is a loopback mock; no carrier sandbox was called.",
+    "The provider is a loopback mock; no carrier sandbox was called. That includes the developer-token route (P1-DT-*): the scheme is one carrier's, taken from its public integration guide, and what answers here is a mock that checks the form of the header, knows the run's account numbers and tokens, and refuses a nonce twice. The carrier was not called.",
     "Mutual TLS is real on the gateway-to-PDP and broker-to-PDP hops only, with a CA and certificates made for the run: no SPIFFE Workload API, no rotation, no certificate revocation. Caller-to-gateway and gateway-to-provider are plain HTTP.",
     "The local broker (Mode B) is a mock with a JSON file as its store. The gateway reaches it over loopback HTTP and proves itself with a key file, standing in for a Unix socket or pod-local restriction; that restriction itself is untested.",
     "The front proxy is one nginx build with a minimal configuration, there to show that a component in front can refuse what the gateway accepts (P1-SS-04). Four cases go through it; the others address the gateway listener directly, on loopback, which is the only place it listens (P1-NL-01). Whether the eventual entry component behaves like this nginx has to be tested on that component.",
@@ -1215,7 +1215,7 @@
       ],
       "observed": {
         "status": 403,
-        "seconds": 1.002
+        "seconds": 1.003
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1869,7 +1869,7 @@
             503
           ]
         },
-        "seconds_slow": 2.003,
+        "seconds_slow": 2.002,
         "provider_hits": 3
       },
       "indicative_for": [
@@ -2225,11 +2225,11 @@
       "observed": {
         "Gatekeeper answers 500": {
           "status": 503,
-          "seconds": 0.004
+          "seconds": 0.005
         },
         "Gatekeeper slower than the broker waits": {
           "status": 503,
-          "seconds": 0.747
+          "seconds": 0.746
         },
         "Gatekeeper down": {
           "status": 503,
@@ -2446,6 +2446,302 @@
       ]
     },
     {
+      "id": "P1-DT-01",
+      "title": "developer token with a nonce: each tenant leaves with its own account",
+      "expectation": "the provider receives \"Hc-OweDeveloper account;token;nonce\" for the tenant's own account, with a nonce not used before on every request; nothing of the caller's token reaches the provider and nothing of the credential reaches the caller",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "five requests, each answered 200 by the provider as account-blue",
+          "ok": true
+        },
+        {
+          "check": "provider received exactly those five, the logical path rewritten to the provider path",
+          "ok": true
+        },
+        {
+          "check": "each carries exactly one Authorization header, \"Hc-OweDeveloper account;token;nonce\", the nonce 32 hexadecimal characters",
+          "ok": true
+        },
+        {
+          "check": "the account number and the token are account-blue's",
+          "ok": true
+        },
+        {
+          "check": "the five nonces are all different",
+          "ok": true
+        },
+        {
+          "check": "IDP JWT appears in no header value",
+          "ok": true
+        },
+        {
+          "check": "no x-idp-*, x-provider-account or cookie header",
+          "ok": true
+        },
+        {
+          "check": "nothing of the credential in what the caller received",
+          "ok": true
+        },
+        {
+          "check": "tenant-green: 200 as account-green, and the provider received account-green's account number and token",
+          "ok": true
+        },
+        {
+          "check": "PDP consulted once per request, by the gateway workload",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "statuses": [
+          200,
+          200,
+          200,
+          200,
+          200
+        ],
+        "provider_saw_target": [
+          "/v1/parcels/PRC-1",
+          "/v1/parcels/PRC-2",
+          "/v1/parcels/PRC-3",
+          "/v1/parcels/PRC-4",
+          "/v1/parcels/PRC-5"
+        ],
+        "provider_saw_header_names": [
+          "authorization",
+          "host"
+        ]
+      },
+      "indicative_for": [
+        "GW-AT-006",
+        "GW-NAT-001",
+        "GW-AT-008",
+        "GW-AT-033",
+        "GW-FR-006",
+        "GW-FR-008",
+        "GW-FR-033"
+      ]
+    },
+    {
+      "id": "P1-DT-02",
+      "title": "developer-token route: PDP allows but releases no credential, and the caller sends one of its own",
+      "expectation": "the gateway itself refuses to forward an uncredentialed request; an Authorization header the caller put beside its token is never what the provider receives",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "caller does not get a success",
+          "ok": true
+        },
+        {
+          "check": "provider received nothing (rejected at the gateway)",
+          "ok": true
+        },
+        {
+          "check": "no credential released, caller's own header after its token: caller does not get a success",
+          "ok": true
+        },
+        {
+          "check": "no credential released, caller's own header after its token: provider received nothing",
+          "ok": true
+        },
+        {
+          "check": "no credential released, caller's own header before its token: caller does not get a success",
+          "ok": true
+        },
+        {
+          "check": "no credential released, caller's own header before its token: provider received nothing",
+          "ok": true
+        },
+        {
+          "check": "credential released, caller's own header after its token: what the caller put there reached the provider in no header",
+          "ok": true
+        },
+        {
+          "check": "credential released, caller's own header after its token: a request that reached the provider carried account-blue's credential and no other",
+          "ok": true
+        },
+        {
+          "check": "credential released, caller's own header after its token: the caller token did not reach the provider",
+          "ok": true
+        },
+        {
+          "check": "credential released, caller's own header before its token: what the caller put there reached the provider in no header",
+          "ok": true
+        },
+        {
+          "check": "credential released, caller's own header before its token: a request that reached the provider carried account-blue's credential and no other",
+          "ok": true
+        },
+        {
+          "check": "credential released, caller's own header before its token: the caller token did not reach the provider",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "status": 403,
+        "provider_hits": 0,
+        "rejected_by": "gateway",
+        "no credential released, caller's own header after its token": {
+          "status": 403,
+          "provider_hits": 0
+        },
+        "no credential released, caller's own header before its token": {
+          "status": 401,
+          "provider_hits": 0
+        },
+        "credential released, caller's own header after its token": {
+          "status": 200,
+          "provider_hits": 1
+        },
+        "credential released, caller's own header before its token": {
+          "status": 401,
+          "provider_hits": 0
+        }
+      },
+      "indicative_for": [
+        "GW-ST-009",
+        "GW-AT-043",
+        "GW-ST-001",
+        "GW-FR-006",
+        "GW-FR-008",
+        "GW-FR-043"
+      ]
+    },
+    {
+      "id": "P1-DT-03",
+      "title": "developer-token route: denial and revocation",
+      "expectation": "another tenant's account and a revoked account are each refused on that request; nothing is forwarded",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "tenant-blue asks for account-green: 403",
+          "ok": true
+        },
+        {
+          "check": "first blue request after revocation: 403",
+          "ok": true
+        },
+        {
+          "check": "provider received nothing in either case",
+          "ok": true
+        },
+        {
+          "check": "green still allowed with its own account",
+          "ok": true
+        },
+        {
+          "check": "after restore: blue allowed again",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "first_request_after_revoke": {
+          "status": 403,
+          "reason_code": "ACCOUNT_REVOKED"
+        }
+      },
+      "indicative_for": [
+        "GW-AT-004",
+        "GW-AT-026",
+        "GW-FR-004",
+        "GW-FR-026"
+      ]
+    },
+    {
+      "id": "P1-DT-04",
+      "title": "developer-token route: the token file is replaced while gateway-authz runs",
+      "expectation": "the next request leaves with the new token, without a restart; a replacement that does not load, or that claims a handle the Bearer file already holds, changes nothing on either kind of route",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "before: the provider receives the token gateway-authz started with",
+          "ok": true
+        },
+        {
+          "check": "the file is replaced: the very next request leaves with the new token",
+          "ok": true
+        },
+        {
+          "check": "green, whose entry did not change, is served as before",
+          "ok": true
+        },
+        {
+          "check": "replaced by a file that does not load: the next request leaves with the last token that loaded",
+          "ok": true
+        },
+        {
+          "check": "replaced by a file that also claims a handle the Bearer file holds: nothing changes on this route",
+          "ok": true
+        },
+        {
+          "check": "...nor on the Bearer route, which still leaves with account-blue's Bearer token",
+          "ok": true
+        },
+        {
+          "check": "the first file is put back: the next request leaves with the first token again",
+          "ok": true
+        },
+        {
+          "check": "gateway-authz is the same process throughout",
+          "ok": true
+        },
+        {
+          "check": "gateway-authz said so each time: two files loaded, two did not",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "gateway_authz_said": {
+          "loaded again": 2,
+          "did not load": 2
+        }
+      },
+      "indicative_for": [
+        "GW-AT-018",
+        "GW-FR-018",
+        "GW-FR-006"
+      ]
+    },
+    {
+      "id": "P1-DT-05",
+      "title": "developer-token route: what the gateway and gateway-authz have written to their logs",
+      "expectation": "no developer account number or token and no Authorization value of that scheme in any line of either, including the lines for a credential the PDP did not release and for a token file that did not load",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "the route answered 200, then a refusal, just before the logs were read",
+          "ok": true
+        },
+        {
+          "check": "the gateway's log has lines for this route, served and refused",
+          "ok": true
+        },
+        {
+          "check": "gateway-authz's log has the lines for the token file that loaded and the one that did not",
+          "ok": true
+        },
+        {
+          "check": "agentgateway: no developer account number, no developer token, no Authorization value of that scheme",
+          "ok": true
+        },
+        {
+          "check": "gateway-authz: no developer account number, no developer token, no Authorization value of that scheme",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "log_lines": {
+          "agentgateway": 160,
+          "gateway-authz": 123
+        }
+      },
+      "indicative_for": [
+        "GW-AT-007",
+        "GW-FR-007",
+        "GW-NFR-05"
+      ]
+    },
+    {
       "id": "P1-RB-01",
       "title": "the published file is replaced by one with one more route",
       "expectation": "the new route is served without a restart; the gateway reports the reload as applied, and what it reports running changes with the file and returns when the file does",
@@ -2544,7 +2840,7 @@
         "seconds_until_the_failure_was_reported": 0.3,
         "configReload": {
           "synchronized": false,
-          "lastError": "routes[7]: unknown field `notAFieldOfARoute` at line 403 column 3"
+          "lastError": "routes[8]: unknown field `notAFieldOfARoute` at line 472 column 3"
         },
         "api_config_effective_shows_the_rejected_file": true,
         "seconds_until_the_reload_was_reported_applied_again": 0.3
@@ -2744,7 +3040,7 @@
         }
       ],
       "observed": {
-        "log_lines": 188,
+        "log_lines": 212,
         "routes_exercised": 4
       },
       "indicative_for": [

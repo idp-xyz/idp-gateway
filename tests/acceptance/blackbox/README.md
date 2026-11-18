@@ -1,7 +1,7 @@
 # 黑盒套件 — 真实 agentgateway 上的认证、授权与凭证注入
 
 > **性质**：黑盒回归，不是验收。`tests/acceptance/acceptance_matrix.csv` 的 95 条用例与六个 STD-CP 门禁保持 `NOT_RUN`。用例编号沿用 PoC 阶段的 `P1-*`。
-> **结果**：59 个用例，agentgateway 1.7.0 上 58 PASS、1 FAIL。FAIL 的是 `P1-SS-04`：网关自己仍然接受带两个 `Host` 头的请求，处置见"未解决"。证据：`evidence/p1-run-agentgateway-1.7.0.json`。
+> **结果**：64 个用例，agentgateway 1.7.0 上 63 PASS、1 FAIL。FAIL 的是 `P1-SS-04`：网关自己仍然接受带两个 `Host` 头的请求，处置见"未解决"。证据：`evidence/p1-run-agentgateway-1.7.0.json`。
 > **环境**：agentgateway **1.7.0**，即 `deploy/agentgateway/agentgateway.lock.json` 锁定的构建（上游容器镜像里的那个二进制，镜像按摘要锁定；二进制取出来在本机直接运行，不在容器里；它的 SHA-256 记在证据里，每次运行前按锁定文件核对，对不上就不运行）、本仓库的 `gateway-authz`、Mock 本地 Broker、Mock Provider，全部在本机回环地址。只测这一个构建。网关到 `gateway-authz`、Broker 到 `gateway-authz` 两段是双向 TLS，证书由每次运行临时生成的 CA 签发。
 > **PDP 是本仓库的 `cmd/gateway-authz`，带 `acceptance` 标签构建**：产品代码加上本套件用的控制接口（看它收到了什么、让它答 500、变慢、放行却不给凭证、撤销账户）。跑的不是产品构建。它从文件读登记表和凭证，撤销状态在内存里；已部署的 Gatekeeper 没有被调用，调用方 Token 是用每次运行临时生成的密钥签的。
 > **名字还没改**：下文、用例标题、证书和端口名里的"Gatekeeper""PDP"，指的都是这个进程。PoC 阶段这个位置上是一个 Python Mock（`mock_gatekeeper.py`，已删除，见基线标签 `baseline-v1.0-poc`）。
@@ -172,6 +172,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
 18. `gateway-control` 多了第四条命令 `place`（网关启动之前把记录的那一份配置放到位），是随单机的部署文件 `deploy/compose` 一起加的；`gateway-authz` 自己的代码没有动。证据的源码哈希覆盖 `cmd/` 和 `internal/` 下所有非测试的 Go 文件，所以重跑一次。`run.py`、配置和期望都没有动：仍是 58/59，326 项检查的结果与上一份证据逐项相同。
 19. `gateway-control` 多了第五条命令 `keep`（常驻的看守：池里的容器死了，它跑启动命令把它们起回来，平时定时对账），`internal/gatewayconfig` 跟着多了看一个池的容器、跑它的启动命令的部分；`gateway-authz` 自己的代码没有动。证据的源码哈希覆盖 `cmd/` 和 `internal/` 下所有非测试的 Go 文件，所以重跑一次。`run.py`、配置和期望都没有动：仍是 58/59，326 项检查的结果与上一份证据逐项相同。这一次记到的本机临时端口范围是 52810–56905，此前各次都是 44620–48715；端口段仍然低于它。
 20. `gateway-control keep` 每看完一眼在 `--metrics-listen` 上给出指标，`internal/gatewayconfig` 多了记这些数的部分；`gateway-authz` 自己的代码没有动。证据的源码哈希覆盖 `cmd/` 和 `internal/` 下所有非测试的 Go 文件，所以重跑一次。`run.py`、配置和期望都没有动：仍是 58/59，326 项检查的结果与上一份证据逐项相同。`P1-CR-04` 记到的日志行数从 186 到 188，那一条的检查没有变。本机临时端口范围仍是 52810–56905。
+21. `gateway-authz` 多了第二种凭证文件（`--developer-tokens`，[ADR-0011](../../../docs/adr/ADR-0011.md) 第 3 条）：账号加开发者令牌，认证头里的随机数每个请求现做。评审配置多了一条路由，它的凭证不是 Bearer 令牌，后端规则认的前缀跟着换；登记表多了一行；Mock Provider 多认一种头，同一个随机数只收一次；新增 `P1-DT-01` 至 `05`。五个新用例第一次运行就通过。原有用例和期望没有动。重跑后是 63/64；除新增的五个用例外，326 项检查的结果与上一份证据逐项相同。原有用例记下的值有两处跟着变了，检查都没有变：`P1-RB-02` 里网关报告的出错位置（多了一条路由，序号和行号往后移），`P1-CR-04` 记到的日志行数从 188 到 212。新用例的对照见上面"不是 Bearer 的凭证"。
 
 没有任何期望被放宽过。
 
