@@ -57,6 +57,12 @@ func (c *Credentials) AuthorizationHeader(_ context.Context, bindingRef, account
 // Len 返回持有的凭证数量，供启动日志使用。
 func (c *Credentials) Len() int { return len(c.tokens) }
 
+// Holds 报告这个凭证句柄是不是在这份文件里。别的凭证来源用它来拒绝重复的句柄。
+func (c *Credentials) Holds(handle string) bool {
+	_, ok := c.tokens[handle]
+	return ok
+}
+
 func visibleASCII(s string) bool {
 	if s == "" {
 		return false

@@ -69,6 +69,23 @@
         "tenant-green": ["account-green"]
       },
       "allowed_service_ids": ["parcel-service", "cargo-service"]
+    },
+    {
+      "route_id": "mockcarrier-parcels-get-developer-token",
+      "provider_id": "mockcarrier",
+      "operation_id": "parcels.get",
+      "environment": "TEST",
+      "method": "GET",
+      "path_prefix": "/providers/mockcarrier/v1/parcels",
+      "upstream_hostname": "mockcarrier.example",
+      "port": 443,
+      "credential_binding_ref": "gatekeeper:mockcarrier-developer-test",
+      "allowed_tenants": ["tenant-blue", "tenant-green"],
+      "accounts_by_tenant": {
+        "tenant-blue": ["account-blue"],
+        "tenant-green": ["account-green"]
+      },
+      "allowed_service_ids": ["parcel-service", "cargo-service"]
     }
   ],
   "allow_request_redirects": false,

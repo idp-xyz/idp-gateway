@@ -448,6 +448,85 @@ routes:
         - x-idp-verified-env
 
 # ---------------------------------------------------------------------------------------
+# Mode A with a credential that is not a Bearer token (docs/adr/ADR-0011.md). The provider
+# on this route wants `Authorization: Hc-OweDeveloper account;token;nonce`, the nonce new on
+# every request. The PDP builds that value; the gateway copies it exactly as on the two
+# Mode A routes at the top. One thing differs: the backend rule that refuses a request the
+# PDP allowed without releasing a credential tests for this scheme's first word. Left at
+# "Bearer " it would refuse every request on this route (cases P1-DT-01..05).
+# ---------------------------------------------------------------------------------------
+- name: mockcarrier-parcels-get-developer-token
+  gateways: [egress-test]
+  hostnames: ["egress-api.idp.test"]
+  matches:
+  - path:
+      pathPrefix: /providers/mockcarrier/v1/parcels
+    method: GET
+  policies:
+    authorization:
+      rules:
+      - allow: 'request.path.matches("^(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$")'
+    extAuthz:
+      host: 127.0.0.1:27613
+      failureMode: deny
+      includeRequestHeaders:
+      - x-provider-account
+      policies:
+        backendTLS:
+          cert: .run/tls/gateway.crt
+          key: .run/tls/gateway.key
+          root: .run/tls/ca.crt
+          hostname: gatekeeper.idp.test
+        http:
+          requestTimeout: 1s
+      protocol:
+        http:
+          path: '"/v1/extauthz/check"'
+          addRequestHeaders:
+            x-idp-verified-subject: jwt.sub
+            x-idp-verified-tenant: jwt.tenant_id
+            x-idp-verified-env: jwt.env
+            x-idp-route-id: '"mockcarrier-parcels-get-developer-token"'
+            x-idp-provider-id: '"mockcarrier"'
+            x-idp-operation-id: '"parcels.get"'
+            x-idp-environment: '"TEST"'
+            x-idp-method: request.method
+            x-idp-path: request.path
+          includeResponseHeaders:
+          - authorization
+    urlRewrite:
+      authority:
+        full: 127.0.0.1:27612
+      path:
+        prefix: /v1/parcels
+    responseHeaderModifier:
+      remove:
+      - location
+      - set-cookie
+    timeout:
+      requestTimeout: 2s
+  backends:
+  - host: 127.0.0.1:27612
+    policies:
+      # Fail closed if the PDP allowed but released no credential. The caller's token is a
+      # Bearer token and was removed already, so a header that starts like this can only
+      # have come from the PDP.
+      authorization:
+        rules:
+        - allow: 'request.headers["authorization"].startsWith("Hc-OweDeveloper ")'
+      requestHeaderModifier:
+        remove:
+        - x-provider-account
+        - cookie
+        - x-forwarded-host
+        - x-forwarded-for
+        - x-forwarded-proto
+        - forwarded
+        - x-idp-verified-subject
+        - x-idp-verified-tenant
+        - x-idp-verified-env
+
+# ---------------------------------------------------------------------------------------
 # Read-back: the only route on the read-back listener. Two exact paths, GET only, to the
 # gateway's own admin address: what it is running (/config_dump) and whether its last load
 # of the file succeeded (/api/runtime). Everything else the admin address offers (shutdown,

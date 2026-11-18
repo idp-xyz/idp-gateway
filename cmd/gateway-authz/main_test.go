@@ -4,17 +4,21 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"go.idp.xyz/idp-gateway/internal/egressauthz/ports"
 	"go.idp.xyz/idp-gateway/internal/platform/workloadtls/tlstest"
 )
 
@@ -106,10 +110,14 @@ func newHarness(t *testing.T) *harness {
 	return h
 }
 
+// args 是启动参数。h.credentials 被清空时不带 --credentials。
 func (h *harness) args(listen string) []string {
-	return []string{"--listen", listen, "--tls-cert", h.server.CertFile, "--tls-key", h.server.KeyFile,
-		"--client-ca", h.ca.File(), "--policy", h.policy, "--credentials", h.credentials,
-		"--gateway-identity", gatewayID, "--broker-identity", brokerID}
+	args := []string{"--listen", listen, "--tls-cert", h.server.CertFile, "--tls-key", h.server.KeyFile,
+		"--client-ca", h.ca.File(), "--policy", h.policy}
+	if h.credentials != "" {
+		args = append(args, "--credentials", h.credentials)
+	}
+	return append(args, "--gateway-identity", gatewayID, "--broker-identity", brokerID)
 }
 
 // start 在本进程里把服务跑起来，监听一个空闲的回环端口。
@@ -371,6 +379,183 @@ func TestAsksGatekeeperWhenConfigured(t *testing.T) {
 	}
 }
 
+// 开发者令牌文件（docs/adr/ADR-0011.md 第 3 条）。账号和令牌里都带着 provider-token，
+// 好让 carriesCredential 和各处"日志里、错误里没有凭证"的检查一并管到它们。
+const (
+	greenHandle         = "gatekeeper:mockcarrier-test/account-green"
+	greenAccountNo      = "ACCT-provider-token-green"
+	greenDeveloperToken = "provider-token-green-developer"
+)
+
+var developerHeader = regexp.MustCompile(`^Hc-OweDeveloper ([^; ]+);([^; ]+);([0-9a-f]{32})$`)
+
+func developerTokensJSON(handle, account, token string) string {
+	return `{"` + handle + `": {"account": "` + account + `", "token": "` + token + `"}}`
+}
+
+// writePrivate 写一个只有属主能读写的文件。path 已经有文件时用改名盖上去，不就地改写。
+func writePrivate(t *testing.T, path, content string) string {
+	t.Helper()
+	next := path + ".next"
+	if err := os.WriteFile(next, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(next, path); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// 绿租户的认证头：账号、令牌是文件里的那一对，返回随机数。
+func developerNonce(t *testing.T, a answer, token string) string {
+	t.Helper()
+	match := developerHeader.FindStringSubmatch(a.header.Get("Authorization"))
+	if a.status != http.StatusOK || match == nil || match[1] != greenAccountNo || match[2] != token {
+		t.Fatalf("绿租户：%d %s，认证头的样子或内容不对", a.status, a.body)
+	}
+	return match[3]
+}
+
+// 两种凭证文件一起给：蓝账户的凭证在 Bearer 文件里，绿账户的在开发者令牌文件里，各走各的。
+func TestDeveloperTokensNextToBearerCredentials(t *testing.T) {
+	h := newHarness(t)
+	writePrivate(t, h.credentials, `{"gatekeeper:mockcarrier-test/account-blue": "`+blueToken+`"}`)
+	tokens := writePrivate(t, filepath.Join(t.TempDir(), "developer-tokens.json"),
+		developerTokensJSON(greenHandle, greenAccountNo, greenDeveloperToken))
+	h.extra = []string{"--developer-tokens", tokens}
+	h.start()
+
+	nonces := map[string]bool{}
+	for _, http2 := range []bool{false, true} {
+		blue := h.must(call{peer: "gateway", path: extAuthzPath, headers: trusted("tenant-blue"), http2: http2})
+		if blue.status != http.StatusOK || blue.header.Get("Authorization") != "Bearer "+blueToken {
+			t.Fatalf("蓝租户：%d %s", blue.status, blue.body)
+		}
+		// 每个请求的随机数都不同。
+		for range 20 {
+			nonce := developerNonce(t, h.must(call{peer: "gateway", path: extAuthzPath, headers: trusted("tenant-green"), http2: http2}), greenDeveloperToken)
+			if nonces[nonce] {
+				t.Fatalf("随机数 %s 出现了两次", nonce)
+			}
+			nonces[nonce] = true
+		}
+	}
+
+	// 拿不到凭证的那些路，对这一种凭证也一样：别的租户申请这个账户，不是网关的调用方，只返回判定的接口。
+	denied := h.must(call{peer: "gateway", path: extAuthzPath,
+		headers: append(trusted("tenant-blue"), [2]string{"X-Provider-Account", "account-green"})})
+	if denied.status != http.StatusForbidden || denied.json(t)["reason_code"] != "ACCOUNT_NOT_GRANTED" || denied.carriesCredential() {
+		t.Fatalf("蓝租户申请绿账户：%d %s", denied.status, denied.body)
+	}
+	for _, peer := range []string{"business", "broker", "operator"} {
+		if a := h.must(call{peer: peer, path: extAuthzPath, headers: trusted("tenant-green")}); a.status != http.StatusUnauthorized || a.carriesCredential() {
+			t.Errorf("%s: %d %s", peer, a.status, a.body)
+		}
+	}
+	greenDecision := strings.Replace(decisionBody, `"tenant_id":"tenant-blue"`, `"tenant_id":"tenant-green"`, 1)
+	decided := h.must(call{peer: "broker", method: http.MethodPost, path: decisionPath, body: greenDecision})
+	if body := decided.json(t); decided.status != http.StatusOK || body["result"] != "ALLOW" || body["credential_handle"] != greenHandle ||
+		decided.carriesCredential() || decided.header.Get("Authorization") != "" {
+		t.Fatalf("只返回判定的接口：%d %s", decided.status, decided.body)
+	}
+
+	// 换令牌：把文件换掉，不重启；下一个请求用的就是新令牌。
+	const rotated = "provider-token-green-rotated"
+	writePrivate(t, tokens, developerTokensJSON(greenHandle, greenAccountNo, rotated))
+	developerNonce(t, h.must(call{peer: "gateway", path: extAuthzPath, headers: trusted("tenant-green")}), rotated)
+	// 换上一份读不成的：继续用上一份，判定不中断。
+	writePrivate(t, tokens, developerTokensJSON(greenHandle, greenAccountNo, "provider-token with a space"))
+	developerNonce(t, h.must(call{peer: "gateway", path: extAuthzPath, headers: trusted("tenant-green")}), rotated)
+	// 换上一份把蓝账户也写进去的：这个句柄已经在 Bearer 文件里，整份不要。
+	writePrivate(t, tokens, `{"gatekeeper:mockcarrier-test/account-blue": {"account": "x", "token": "provider-token-blue-twice"},
+ "`+greenHandle+`": {"account": "`+greenAccountNo+`", "token": "provider-token-green-third"}}`)
+	developerNonce(t, h.must(call{peer: "gateway", path: extAuthzPath, headers: trusted("tenant-green")}), rotated)
+	if blue := h.must(call{peer: "gateway", path: extAuthzPath, headers: trusted("tenant-blue")}); blue.header.Get("Authorization") != "Bearer "+blueToken {
+		t.Fatalf("蓝租户的凭证被开发者令牌文件改掉了：%d %s", blue.status, blue.body)
+	}
+
+	logs := h.logs.String()
+	if strings.Contains(logs, "provider-token") {
+		t.Errorf("账号或令牌出现在服务日志里：%s", logs)
+	}
+	for _, expected := range []string{`"credentials":1`, `"developer_tokens":1`, `"msg":"developer tokens file loaded again"`,
+		`"msg":"developer tokens file did not load; still using the last one that loaded"`, "cannot go into a header", "one source only"} {
+		if !strings.Contains(logs, expected) {
+			t.Errorf("服务日志里没有 %s", expected)
+		}
+	}
+}
+
+// 只给开发者令牌文件也能启动。文件里没有的账户，登记表放行了也拿不到凭证：不是放行。
+func TestDeveloperTokensAlone(t *testing.T) {
+	h := newHarness(t)
+	h.credentials = ""
+	h.extra = []string{"--developer-tokens", writePrivate(t, filepath.Join(t.TempDir(), "developer-tokens.json"),
+		developerTokensJSON(greenHandle, greenAccountNo, greenDeveloperToken))}
+	h.start()
+
+	developerNonce(t, h.must(call{peer: "gateway", path: extAuthzPath, headers: trusted("tenant-green")}), greenDeveloperToken)
+	blue := h.must(call{peer: "gateway", path: extAuthzPath, headers: trusted("tenant-blue")})
+	if body := blue.json(t); blue.status != http.StatusServiceUnavailable || body["result"] != "INDETERMINATE" ||
+		body["reason_code"] != "CREDENTIAL_UNAVAILABLE" || blue.header.Get("Authorization") != "" || blue.carriesCredential() {
+		t.Fatalf("蓝账户没有凭证：%d %s", blue.status, blue.body)
+	}
+	if logs := h.logs.String(); !strings.Contains(logs, `"credentials":0`) || !strings.Contains(logs, `"developer_tokens":1`) ||
+		strings.Contains(logs, "provider-token") {
+		t.Errorf("启动日志：%s", logs)
+	}
+}
+
+type fixedSource struct {
+	held  map[string]string
+	fails error
+	asked *[]string
+	name  string
+}
+
+func (f fixedSource) AuthorizationHeader(_ context.Context, bindingRef, accountID string) (ports.Secret, error) {
+	*f.asked = append(*f.asked, f.name)
+	if f.fails != nil {
+		return ports.Secret{}, f.fails
+	}
+	value, ok := f.held[ports.Handle(bindingRef, accountID)]
+	if !ok {
+		return ports.Secret{}, fmt.Errorf("%w: from %s", ports.ErrCredentialNotHeld, f.name)
+	}
+	return ports.NewSecret(value), nil
+}
+
+// 几个凭证来源排在一起：前一个没有才问后一个；前一个出了别的错，不拿后一个顶上。
+func TestCredentialSourcesAreAskedInOrder(t *testing.T) {
+	var asked []string
+	first := fixedSource{held: map[string]string{"b/one": "from-first"}, asked: &asked, name: "first"}
+	second := fixedSource{held: map[string]string{"b/two": "from-second"}, asked: &asked, name: "second"}
+	broken := fixedSource{fails: errors.New("source is down"), asked: &asked, name: "broken"}
+
+	for _, tc := range []struct {
+		sources credentialSources
+		account string
+		want    string
+		notHeld bool
+		fails   bool
+		asks    string
+	}{
+		{credentialSources{first, second}, "one", "from-first", false, false, "first"},
+		{credentialSources{first, second}, "two", "from-second", false, false, "first,second"},
+		{credentialSources{first, second}, "three", "", true, false, "first,second"},
+		{credentialSources{broken, second}, "two", "", false, true, "broken"},
+		{credentialSources{first, broken}, "two", "", false, true, "first,broken"},
+		{credentialSources{}, "one", "", true, false, ""},
+	} {
+		asked = nil
+		credential, err := tc.sources.AuthorizationHeader(context.Background(), "b", tc.account)
+		if credential.Reveal() != tc.want || errors.Is(err, ports.ErrCredentialNotHeld) != tc.notHeld ||
+			(err != nil && !tc.notHeld) != tc.fails || strings.Join(asked, ",") != tc.asks {
+			t.Errorf("%v 问 %s：凭证 %q，错误 %v，问过 %v", len(tc.sources), tc.account, credential.Reveal(), err, asked)
+		}
+	}
+}
+
 func TestStopsWhenAskedTo(t *testing.T) {
 	h := newHarness(t).start()
 	if a := h.must(call{peer: "gateway", path: "/healthz"}); a.status != http.StatusOK {
@@ -420,14 +605,23 @@ func TestRefusesToStart(t *testing.T) {
 		args []string
 		says string
 	}{
-		"没有参数":                {nil, "missing required flags"},
-		"没有网关身份":              {without("--gateway-identity"), "--gateway-identity"},
-		"没有客户端 CA":            {without("--client-ca"), "--client-ca"},
-		"多余的参数":               {append(h.args("127.0.0.1:0"), "serve"), "unexpected argument"},
-		"Broker 与网关同一个身份":     {replace("--broker-identity", gatewayID), "must differ"},
-		"登记表不存在":              {replace("--policy", filepath.Join(dir, "missing.json")), "policy"},
-		"登记表默认放行":             {replace("--policy", write("allow.json", `{"version":"v","default_decision":"ALLOW"}`, 0o600)), "only DENY"},
-		"凭证文件别人可读":            {replace("--credentials", write("open.json", credentialsJSON, 0o644)), "readable by others"},
+		"没有参数":            {nil, "missing required flags"},
+		"没有网关身份":          {without("--gateway-identity"), "--gateway-identity"},
+		"没有客户端 CA":        {without("--client-ca"), "--client-ca"},
+		"多余的参数":           {append(h.args("127.0.0.1:0"), "serve"), "unexpected argument"},
+		"Broker 与网关同一个身份": {replace("--broker-identity", gatewayID), "must differ"},
+		"登记表不存在":          {replace("--policy", filepath.Join(dir, "missing.json")), "policy"},
+		"登记表默认放行":         {replace("--policy", write("allow.json", `{"version":"v","default_decision":"ALLOW"}`, 0o600)), "only DENY"},
+		"凭证文件别人可读":        {replace("--credentials", write("open.json", credentialsJSON, 0o644)), "readable by others"},
+		"两种凭证文件都没有给":      {without("--credentials"), "--credentials or --developer-tokens"},
+		"开发者令牌文件不存在":      {append(h.args("127.0.0.1:0"), "--developer-tokens", filepath.Join(dir, "missing-tokens.json")), "developer tokens"},
+		"开发者令牌文件别人可读": {append(h.args("127.0.0.1:0"), "--developer-tokens",
+			write("open-tokens.json", developerTokensJSON("other-binding/account", greenAccountNo, greenDeveloperToken), 0o644)), "readable by others"},
+		"开发者令牌里有分号": {append(h.args("127.0.0.1:0"), "--developer-tokens",
+			write("semicolon.json", developerTokensJSON("other-binding/account", greenAccountNo, greenDeveloperToken+";x"), 0o600)), "semicolon"},
+		"开发者令牌文件是 Bearer 文件的写法": {append(h.args("127.0.0.1:0"), "--developer-tokens", write("bearer-shape.json", credentialsJSON, 0o600)), "not a JSON object"},
+		"同一个句柄在两个凭证文件里": {append(h.args("127.0.0.1:0"), "--developer-tokens",
+			write("twice.json", developerTokensJSON(greenHandle, greenAccountNo, greenDeveloperToken), 0o600)), "one source only"},
 		"证书与私钥不配对":            {replace("--tls-key", h.peers["gateway"].KeyFile), "server certificate"},
 		"监听地址不可用":             {replace("--listen", "256.0.0.1:1"), ""},
 		"有 Gatekeeper 地址没有令牌": {append(h.args("127.0.0.1:0"), "--gatekeeper-url", "https://gk.idp.test"), "go together"},

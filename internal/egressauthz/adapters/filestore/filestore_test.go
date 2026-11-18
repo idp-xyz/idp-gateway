@@ -22,7 +22,7 @@ func TestLoadPolicyFilesInTheRepository(t *testing.T) {
 
 	for file, operations := range map[string]int{
 		"contracts/gateway/policies/egress-policy.example.json": 1,
-		"tests/acceptance/blackbox/policy.poc.json":             4,
+		"tests/acceptance/blackbox/policy.poc.json":             5,
 	} {
 		policy, err := LoadPolicy(filepath.Join(repoRoot, file))
 		if err != nil {

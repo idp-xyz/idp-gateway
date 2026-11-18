@@ -1,7 +1,8 @@
 // Package filestore 从本地 JSON 文件读登记表和凭证。
 //
 // 这是第一版的占位：登记表将来由控制面下发，凭证将来来自 Secret Manager 或 Provider 的
-// 令牌端点。文件在启动时读一次，之后不再重读。
+// 令牌端点。登记表和 Bearer 凭证文件在启动时读一次，之后不再重读；开发者令牌文件被换掉
+// 之后会重读（developer_tokens.go）。
 package filestore
 
 import (

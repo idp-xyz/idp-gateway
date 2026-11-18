@@ -29,7 +29,7 @@ Usage (from the repository root):
 The evidence file is tests/acceptance/blackbox/evidence/p1-run-agentgateway-<version>.json.
 """
 from __future__ import annotations
-import argparse, base64, copy, datetime, errno, hashlib, hmac, http.client, json, os, platform, secrets, shutil, socket, subprocess, sys, threading, time
+import argparse, base64, copy, datetime, errno, hashlib, hmac, http.client, json, os, platform, re, secrets, shutil, socket, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -66,6 +66,9 @@ LABELS = '/providers/mockcarrier/v1/labels'
 RATES = '/providers/mockcarrier/v1/rates'
 MANIFESTS = '/providers/mockcarrier/v1/manifests'   # Mode B route
 PICKUPS = '/providers/mockcarrier/v1/pickups'       # backendAuth.key.expression route
+PARCELS = '/providers/mockcarrier/v1/parcels'       # developer-token route: the credential is not a Bearer token (ADR-0011)
+PARCELS_ROUTE = 'mockcarrier-parcels-get-developer-token'
+DEVELOPER_TOKENS = RUN / 'authz-developer-tokens.json'
 
 # --------------------------------------------------------------------------------------
 # keys, tokens
@@ -240,6 +243,7 @@ def start_gatekeeper():
                             '--tls-cert', str(TLS / 'gatekeeper.crt'), '--tls-key', str(TLS / 'gatekeeper.key'),
                             '--client-ca', str(TLS / 'ca.crt'), '--policy', str(HERE / 'policy.poc.json'),
                             '--credentials', str(RUN / 'authz-credentials.json'),
+                            '--developer-tokens', str(DEVELOPER_TOKENS),
                             '--gateway-identity', pki.ID['gateway'], '--broker-identity', pki.ID['broker']],
           PORTS['gatekeeper'], env=env)
 
@@ -418,6 +422,8 @@ class S:  # per-run secrets; never written to the evidence file
     signing = attacker = None
     admin = broker_key = static_token = session_key = impostor_token = ''
     token = {}  # account -> provider token
+    developer = {}       # account -> (the carrier's account number, developer token): what gateway-authz starts with
+    developer_next = {}  # the same accounts with another token each: what P1-DT-04 rotates to
     # not secrets: what the runner observed about the binary before the cases
     default_start_rewrites = None    # start_without_session_key_rewrites(), default storage mode
     read_only_start_rewrites = None  # the same, from the reviewed configuration
@@ -1195,6 +1201,208 @@ def _(c):
     c.check('after restore: blue allowed again', gw('GET', PICKUPS + '/PCK-1', blue())['status'] == 200)
 
 
+# ---- a credential that is not a Bearer token: a developer token with a nonce (ADR-0011) -----------------
+# gateway-authz builds `Hc-OweDeveloper account;token;nonce` from a second credentials file and a nonce it
+# makes for each request. The gateway copies it as on the Mode A routes. These cases look at what the
+# provider then receives. The mock provider refuses a nonce it has accepted before.
+DEVELOPER_HEADER = re.compile(r'Hc-OweDeveloper ([^; ]+);([^; ]+);([0-9a-f]{32})')
+
+
+def policy_binding(route_id: str) -> str:
+    operations = json.loads((HERE / 'policy.poc.json').read_text(encoding='utf-8'))['registered_operations']
+    return next(o['credential_binding_ref'] for o in operations if o['route_id'] == route_id)
+
+
+def write_developer_tokens(pairs: dict, also: dict | None = None):
+    """Replace gateway-authz's developer-token file the way it asks for: a new file, renamed over the old one."""
+    binding = policy_binding(PARCELS_ROUTE)
+    document = {f'{binding}/{account}': {'account': number, 'token': token} for account, (number, token) in pairs.items()}
+    document.update(also or {})
+    staged = DEVELOPER_TOKENS.with_name(DEVELOPER_TOKENS.name + '.next')
+    staged.write_text(json.dumps(document), encoding='utf-8')
+    os.chmod(staged, 0o600)
+    os.replace(staged, DEVELOPER_TOKENS)
+
+
+def developer_seen(hit: dict) -> tuple | None:
+    """(account number, token, nonce) from the Authorization header of a request the provider recorded.
+    None unless there is exactly one such header and it has that form."""
+    given = header(hit['headers'], 'authorization')
+    match = DEVELOPER_HEADER.fullmatch(given[0]) if len(given) == 1 else None
+    return match.groups() if match else None
+
+
+def developer_secrets() -> list:
+    return [part for table in (S.developer, S.developer_next) for pair in table.values() for part in pair]
+
+
+def developer_in(text: str) -> bool:
+    """Any of this run's developer account numbers or tokens, or any Authorization value of that scheme."""
+    return any(secret in text for secret in developer_secrets()) or re.search(r'Hc-OweDeveloper [^;\s"\']+;', text) is not None
+
+
+@case('P1-DT-01', 'developer token with a nonce: each tenant leaves with its own account',
+      'the provider receives "Hc-OweDeveloper account;token;nonce" for the tenant\'s own account, with a nonce not used before on every request; '
+      'nothing of the caller\'s token reaches the provider and nothing of the credential reaches the caller',
+      ('GW-AT-006', 'GW-NAT-001', 'GW-AT-008', 'GW-AT-033', 'GW-FR-006', 'GW-FR-008', 'GW-FR-033'))
+def _(c):
+    tok = blue()
+    answers = [gw('GET', f'{PARCELS}/PRC-{n}', tok, [('Cookie', 'session=caller-session'), ('X-Provider-Account', 'account-blue')])
+               for n in range(1, 6)]
+    hits = provider_hits()
+    seen = [developer_seen(h) for h in hits]
+    names = sorted({k.lower() for h in hits for k, _ in h['headers']})
+    c.note('statuses', [r['status'] for r in answers])
+    c.note('provider_saw_target', [h['raw_target'] for h in hits])
+    c.note('provider_saw_header_names', names)
+    c.check('five requests, each answered 200 by the provider as account-blue',
+            [(r['status'], body_json(r).get('account')) for r in answers] == [(200, 'account-blue')] * 5)
+    c.check('provider received exactly those five, the logical path rewritten to the provider path',
+            [h['raw_target'] for h in hits] == [f'/v1/parcels/PRC-{n}' for n in range(1, 6)])
+    c.check('each carries exactly one Authorization header, "Hc-OweDeveloper account;token;nonce", the nonce 32 hexadecimal characters',
+            len(seen) == 5 and all(seen))
+    c.check('the account number and the token are account-blue\'s', all(s is not None and s[:2] == S.developer['account-blue'] for s in seen))
+    c.check('the five nonces are all different', len({s[2] for s in seen if s}) == 5)
+    c.check('IDP JWT appears in no header value', all(tok not in v for h in hits for _, v in h['headers']))
+    c.check('no x-idp-*, x-provider-account or cookie header',
+            not any(n.startswith('x-idp-') or n in ('x-provider-account', 'cookie') for n in names))
+    c.check('nothing of the credential in what the caller received',
+            not any(developer_in(r['body'].decode(errors='replace') + json.dumps(r['headers'])) for r in answers))
+    send(PORTS['provider'], 'POST', '/admin/reset', ADMIN(), b'')
+    g = gw('GET', PARCELS + '/PRC-9', green())
+    hits = provider_hits()
+    c.check('tenant-green: 200 as account-green, and the provider received account-green\'s account number and token',
+            g['status'] == 200 and body_json(g).get('account') == 'account-green' and len(hits) == 1
+            and (developer_seen(hits[0]) or ())[:2] == S.developer['account-green'])
+    log = pdp_log()
+    c.check('PDP consulted once per request, by the gateway workload',
+            len(log) == 6 and all(e.get('peer_identity') == pki.ID['gateway'] for e in log))
+
+
+@case('P1-DT-02', 'developer-token route: PDP allows but releases no credential, and the caller sends one of its own',
+      'the gateway itself refuses to forward an uncredentialed request; an Authorization header the caller put beside its token '
+      'is never what the provider receives',
+      ('GW-ST-009', 'GW-AT-043', 'GW-ST-001', 'GW-FR-006', 'GW-FR-008', 'GW-FR-043'))
+def _(c):
+    tok = blue()
+    planted = 'Hc-OweDeveloper PLANTED-BY-CALLER;planted-by-caller;' + '0' * 32
+    orders = {'after its token': [('Authorization', 'Bearer ' + tok), ('Authorization', planted)],
+              'before its token': [('Authorization', planted), ('Authorization', 'Bearer ' + tok)]}
+
+    def with_planted(order: str) -> dict:   # not gw(): which of the two headers comes first is the point
+        return send(PORTS['gateway'], 'GET', PARCELS + '/PRC-1', [('Host', LOGICAL_HOST)] + orders[order])
+
+    pdp_admin('/admin/mode?value=allow_without_credential')
+    r = gw('GET', PARCELS + '/PRC-1', tok)
+    hits = provider_hits()
+    c.note('status', r['status']); c.note('provider_hits', len(hits))
+    c.note('rejected_by', 'provider' if header(r, 'x-mock-provider') else 'gateway')
+    c.check('caller does not get a success', r['status'] is not None and r['status'] >= 400)
+    c.check('provider received nothing (rejected at the gateway)', len(hits) == 0)
+    for order in orders:
+        r = with_planted(order)
+        hits = provider_hits()
+        c.note(f'no credential released, caller\'s own header {order}', {'status': r['status'], 'provider_hits': len(hits)})
+        c.check(f'no credential released, caller\'s own header {order}: caller does not get a success',
+                r['status'] is not None and r['status'] >= 400)
+        c.check(f'no credential released, caller\'s own header {order}: provider received nothing', len(hits) == 0)
+    pdp_admin('/admin/mode?value=normal')
+    for order in orders:
+        send(PORTS['provider'], 'POST', '/admin/reset', ADMIN(), b'')
+        r = with_planted(order)
+        hits = provider_hits()
+        c.note(f'credential released, caller\'s own header {order}', {'status': r['status'], 'provider_hits': len(hits)})
+        c.check(f'credential released, caller\'s own header {order}: what the caller put there reached the provider in no header',
+                all('planted' not in v.lower() for h in hits for _, v in h['headers']))
+        c.check(f'credential released, caller\'s own header {order}: a request that reached the provider carried account-blue\'s credential and no other',
+                all((developer_seen(h) or ())[:2] == S.developer['account-blue'] for h in hits))
+        c.check(f'credential released, caller\'s own header {order}: the caller token did not reach the provider',
+                all(tok not in v for h in hits for _, v in h['headers']))
+
+
+@case('P1-DT-03', 'developer-token route: denial and revocation',
+      'another tenant\'s account and a revoked account are each refused on that request; nothing is forwarded',
+      ('GW-AT-004', 'GW-AT-026', 'GW-FR-004', 'GW-FR-026'))
+def _(c):
+    r = gw('GET', PARCELS + '/PRC-1', blue(), [('X-Provider-Account', 'account-green')])
+    c.check('tenant-blue asks for account-green: 403', r['status'] == 403)
+    pdp_admin('/admin/revoke?account=account-blue')
+    r = gw('GET', PARCELS + '/PRC-1', blue())
+    c.note('first_request_after_revoke', {'status': r['status'], 'reason_code': body_json(r).get('reason_code')})
+    c.check('first blue request after revocation: 403', r['status'] == 403)
+    c.check('provider received nothing in either case', len(provider_hits()) == 0)
+    g = gw('GET', PARCELS + '/PRC-2', green())
+    c.check('green still allowed with its own account', g['status'] == 200 and body_json(g).get('account') == 'account-green')
+    pdp_admin('/admin/restore?account=account-blue')
+    c.check('after restore: blue allowed again', gw('GET', PARCELS + '/PRC-1', blue())['status'] == 200)
+
+
+@case('P1-DT-04', 'developer-token route: the token file is replaced while gateway-authz runs',
+      'the next request leaves with the new token, without a restart; a replacement that does not load, or that claims a handle '
+      'the Bearer file already holds, changes nothing on either kind of route',
+      ('GW-AT-018', 'GW-FR-018', 'GW-FR-006'))
+def _(c):
+    def at_provider(target: str) -> tuple:
+        """One blue request -> (status, the account the provider answered as, the token it received)."""
+        send(PORTS['provider'], 'POST', '/admin/reset', ADMIN(), b'')
+        r = gw('GET', target, blue())
+        hits = provider_hits()
+        seen = developer_seen(hits[0]) if len(hits) == 1 else None
+        return r['status'], body_json(r).get('account'), seen[1] if seen else None
+
+    (number, first), rotated = S.developer['account-blue'], S.developer_next['account-blue'][1]
+    process = PROCS['gateway-authz'].pid
+    try:
+        c.check('before: the provider receives the token gateway-authz started with', at_provider(PARCELS + '/PRC-1') == (200, 'account-blue', first))
+        write_developer_tokens({**S.developer, 'account-blue': (number, rotated)})
+        c.check('the file is replaced: the very next request leaves with the new token', at_provider(PARCELS + '/PRC-2') == (200, 'account-blue', rotated))
+        g = gw('GET', PARCELS + '/PRC-3', green())
+        c.check('green, whose entry did not change, is served as before', g['status'] == 200 and body_json(g).get('account') == 'account-green')
+
+        write_developer_tokens({**S.developer, 'account-blue': (number, 'not a token; it has spaces and a semicolon')})
+        c.check('replaced by a file that does not load: the next request leaves with the last token that loaded',
+                at_provider(PARCELS + '/PRC-4') == (200, 'account-blue', rotated))
+        held_as_bearer = policy_binding('mockcarrier-tracking-get') + '/account-blue'
+        write_developer_tokens({**S.developer, 'account-blue': (number, first)}, also={held_as_bearer: {'account': number, 'token': first}})
+        c.check('replaced by a file that also claims a handle the Bearer file holds: nothing changes on this route',
+                at_provider(PARCELS + '/PRC-5') == (200, 'account-blue', rotated))
+        send(PORTS['provider'], 'POST', '/admin/reset', ADMIN(), b'')
+        r = gw('GET', TRACKING + '/TRK-1', blue())
+        c.check('...nor on the Bearer route, which still leaves with account-blue\'s Bearer token',
+                r['status'] == 200 and [header(h['headers'], 'authorization') for h in provider_hits()] == [['Bearer ' + S.token['account-blue']]])
+    finally:
+        write_developer_tokens(S.developer)
+    c.check('the first file is put back: the next request leaves with the first token again', at_provider(PARCELS + '/PRC-6') == (200, 'account-blue', first))
+    c.check('gateway-authz is the same process throughout', PROCS['gateway-authz'].pid == process and PROCS['gateway-authz'].poll() is None)
+    said = (RUN / 'gateway-authz.log').read_text(encoding='utf-8', errors='replace')
+    counts = {'loaded again': said.count('"msg":"developer tokens file loaded again"'),
+              'did not load': said.count('"msg":"developer tokens file did not load')}
+    c.note('gateway_authz_said', counts)
+    c.check('gateway-authz said so each time: two files loaded, two did not', counts == {'loaded again': 2, 'did not load': 2})
+
+
+@case('P1-DT-05', 'developer-token route: what the gateway and gateway-authz have written to their logs',
+      'no developer account number or token and no Authorization value of that scheme in any line of either, including the lines '
+      'for a credential the PDP did not release and for a token file that did not load',
+      ('GW-AT-007', 'GW-FR-007', 'GW-NFR-05'))
+def _(c):
+    tok = blue()
+    ok = gw('GET', PARCELS + '/PRC-1', tok)['status']
+    pdp_admin('/admin/mode?value=allow_without_credential')   # makes the gateway log its own credential-handling failure on this route
+    refused = gw('GET', PARCELS + '/PRC-1', tok)['status']
+    time.sleep(0.5)
+    logs = {name: (RUN / f'{name}.log').read_text(encoding='utf-8', errors='replace') for name in ('agentgateway', 'gateway-authz')}
+    c.note('log_lines', {name: len(text.splitlines()) for name, text in logs.items()})
+    c.check('the route answered 200, then a refusal, just before the logs were read', ok == 200 and refused is not None and refused >= 400)
+    c.check('the gateway\'s log has lines for this route, served and refused',
+            any(PARCELS_ROUTE in line and 'http.status=200' in line for line in logs['agentgateway'].splitlines())
+            and any(PARCELS_ROUTE in line and 'http.status=200' not in line for line in logs['agentgateway'].splitlines()))
+    c.check('gateway-authz\'s log has the lines for the token file that loaded and the one that did not',
+            'developer tokens file loaded again' in logs['gateway-authz'] and 'developer tokens file did not load' in logs['gateway-authz'])
+    for name, text in logs.items():
+        c.check(f'{name}: no developer account number, no developer token, no Authorization value of that scheme', not developer_in(text))
+
+
 # ---- reading back what a publisher has published -----------------------------------------------------
 # A publisher replaces the file the gateway runs from and has to learn, per instance, whether
 # the new file is what is now in effect (G03 §3-4). These cases replace the file under the
@@ -1430,7 +1638,9 @@ SCOPE_LIMITS = [
     'gateway-authz reads its policy and its credentials from files written for the run and keeps revocations in memory. '
     'No identity provider, grants store, Secret Manager or provider token endpoint is involved, and the deployed Gatekeeper '
     'is not called: the caller tokens are signed by a key made for the run.',
-    'The provider is a loopback mock; no carrier sandbox was called.',
+    'The provider is a loopback mock; no carrier sandbox was called. That includes the developer-token route (P1-DT-*): the '
+    'scheme is one carrier\'s, taken from its public integration guide, and what answers here is a mock that checks the form '
+    'of the header, knows the run\'s account numbers and tokens, and refuses a nonce twice. The carrier was not called.',
     'Mutual TLS is real on the gateway-to-PDP and broker-to-PDP hops only, with a CA and certificates made for the run: '
     'no SPIFFE Workload API, no rotation, no certificate revocation. Caller-to-gateway and gateway-to-provider are plain HTTP.',
     'The local broker (Mode B) is a mock with a JSON file as its store. The gateway reaches it over loopback HTTP and proves '
@@ -1459,6 +1669,8 @@ def prepare():
     S.admin, S.broker_key = secrets.token_urlsafe(24), 'broker-local-' + secrets.token_urlsafe(24)
     S.token = {a: f'mock-{a}-' + secrets.token_urlsafe(24) for a in ('account-blue', 'account-green')}
     S.static_token = 'mock-account-shared-' + secrets.token_urlsafe(24)
+    S.developer = {a: ('MOCK' + secrets.token_hex(4).upper(), 'developer-' + secrets.token_urlsafe(24)) for a in S.token}
+    S.developer_next = {a: (number, 'developer-next-' + secrets.token_urlsafe(24)) for a, (number, _) in S.developer.items()}
     S.impostor_token = 'impostor-' + secrets.token_urlsafe(24)
     S.session_key = secrets.token_hex(32)
     pki.issue(TLS)
@@ -1471,6 +1683,9 @@ def prepare():
     (RUN / 'broker-store.json').write_text(json.dumps({f'{binding}/{a}': t for a, t in S.token.items()}), encoding='utf-8')
     # gateway-authz's credential file has the same shape: handle -> bearer token.
     (RUN / 'authz-credentials.json').write_text(json.dumps({f'{binding}/{a}': t for a, t in S.token.items()}), encoding='utf-8')
+    # Its second credentials file, for the route whose credential is not a Bearer token:
+    # handle -> the carrier's account number and a developer token. No nonce is stored.
+    write_developer_tokens(S.developer)
     for f in RUN.iterdir():
         if f.is_file():
             os.chmod(f, 0o600)
@@ -1486,7 +1701,10 @@ def stage_config(binary: str) -> tuple[bool, str]:
     state = {'admin_secret': S.admin, 'ports': PORTS, 'tls_dir': str(TLS),
              'config_digest': 'sha256:' + hashlib.sha256(S.config_bytes).hexdigest(),
              'provider_slow_seconds': PROVIDER_SLOW_SECONDS, 'pdp_slow_seconds': PDP_SLOW_SECONDS,
-             'provider_tokens': {**{t: a for a, t in S.token.items()}, S.static_token: 'account-shared'}}
+             'provider_tokens': {**{t: a for a, t in S.token.items()}, S.static_token: 'account-shared'},
+             # "account number;token" -> account, for the tokens gateway-authz starts with and the ones P1-DT-04 rotates to
+             'provider_developer_tokens': {f'{number};{token}': a for table in (S.developer, S.developer_next)
+                                           for a, (number, token) in table.items()}}
     (RUN / 'state.json').write_text(json.dumps(state), encoding='utf-8')
     for f in (RUN_CONFIG, RUN / 'state.json'):
         os.chmod(f, 0o600)
@@ -1756,7 +1974,8 @@ def main() -> int:
                           'source_sha256_covers': 'go.mod and every non-test .go file under cmd/ and internal/',
                           'binary_sha256': hashlib.sha256(AUTHZ_BINARY.read_bytes()).hexdigest(),
                           'policy_from': 'tests/acceptance/blackbox/policy.poc.json',
-                          'credentials_from': 'a file written for the run, not recorded',
+                          'credentials_from': 'two files written for the run, not recorded: Bearer tokens (--credentials), and '
+                                              'account numbers with developer tokens (--developer-tokens)',
                           'revocations': 'in memory',
                           'http_versions_seen_from_the_gateway': sorted(S.pdp_protocols)},
         'mocks_sha256': {f: hashlib.sha256((HERE / f).read_bytes()).hexdigest() for f in MOCKS},

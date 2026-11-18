@@ -69,7 +69,7 @@ class CredentialRedemption(unittest.TestCase):
         """Every black-box route with ExtAuthZ."""
         routes = yaml.safe_load(text('tests/acceptance/blackbox/agentgateway.poc.yaml'))['routes']
         routes = [r for r in routes if 'extAuthz' in r.get('policies', {})]
-        self.assertEqual(len(routes), 4)
+        self.assertEqual(len(routes), 5)
         return routes
 
     def test_poc_gateway_sends_exactly_the_documented_trusted_context(self):
@@ -101,6 +101,23 @@ class CredentialRedemption(unittest.TestCase):
                     self.assertNotIn('backendAuth', ext['policies'])
                 else:
                     self.assertEqual(ext['host'], self.POC_PORTS['broker'])
+
+    def test_backend_rule_names_the_scheme_of_the_credential_the_route_is_given(self):
+        """A route whose credential comes from the PDP lets a request through to its backend only when the credential
+        starts with the first word of what gateway-authz releases for it: "Bearer" from the Bearer file, the developer
+        scheme from the developer-token file (ADR-0011). With the wrong word the gateway refuses every request."""
+        scheme = re.search(r'^const developerScheme = "([^" ]+)"$', text('internal/egressauthz/adapters/filestore/developer_tokens.go'), re.M)
+        self.assertIsNotNone(scheme)
+        developer = [r['name'] for r in self.poc_routes() if r['name'].endswith('-developer-token')]
+        self.assertEqual(len(developer), 1)
+        for route in self.poc_routes():
+            rules = route['backends'][0]['policies']['authorization']['rules']
+            word = scheme[1] if route['name'] in developer else 'Bearer'
+            with self.subTest(route=route['name']):
+                if route['name'].endswith('-expression'):
+                    self.assertEqual(rules, [{'allow': f'has(extauthz.credential) && extauthz.credential.startsWith("{word} ")'}])
+                else:
+                    self.assertEqual(rules, [{'allow': f'request.headers["authorization"].startsWith("{word} ")'}])
 
     def test_broker_decision_request_is_the_documented_one(self):
         """What the mock broker sends to /v1/egress/authorizations/decision must fit DecisionRequest."""

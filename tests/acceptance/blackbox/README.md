@@ -22,6 +22,7 @@ G04 §4 要求用 PoC 比较三种凭证返回模式，G04 §9 列了 PoC 必须
 | 固定凭证（模式 C）够不够？ | **只够单账户**。跑得通，但两个租户以同一个账户到达 Provider。 | `P1-MC-01` |
 | 模式 B（本地 Broker/Sidecar）？ | **跑得通，隔离、撤销、默认拒绝与模式 A 相同**。Gatekeeper 只被问决策，它发出的任何内容里都没有 Provider 凭证；凭证由 Broker 从本地存储取出，只走回环。代价见下面"三种取凭证方式的比较"。 | `P1-MB-01/02/03/04` |
 | `backendAuth.key.expression` 比复制响应头更好吗？ | **能用，结果相同，没有观察到安全上的差别**。 | `P1-KX-01/02/03` |
+| 凭证不是 Bearer 令牌，而是一个固定令牌加每个请求一个随机数时，还走得通吗？ | **走得通，网关注入的方式不用改，要改的是后端上那条规则认的前缀**。Provider 收到的是该租户自己账户的 `Hc-OweDeveloper 账号;令牌;随机数`，随机数次次不同；换掉令牌文件，下一个请求用的就是新令牌，`gateway-authz` 不重启。见下面"不是 Bearer 的凭证"。 | `P1-DT-01/02/03/04/05` |
 | 换了配置文件之后，能否确认这个实例上生效的是哪一份？ | **单个实例上能**。换文件不用重启，约 0.3 秒生效；加载不了的文件被整份拒绝，网关报告失败和原因，继续用上一份。网关报告的运行配置（`/config_dump`）算出的摘要随配置变，文件换回后回到原值。多个实例之间的情况在 `tests/integration/kubernetes` 里。注意事项见下面"配置回读"。 | `P1-RB-01/02` |
 | 发布器能否从别的机器读到这些，又不把网关的管理地址交出去？ | **能**。网关另开一个要客户端证书的监听，只认发布器的身份，只把这两个 GET 转给本机的管理地址。管理地址上别的东西（关停、改日志级别、调试、写配置）在这个监听上一概没有；别的调用方连回应都得不到。 | `P1-RB-03` |
 
@@ -45,6 +46,20 @@ G04 §4 要求用 PoC 比较三种凭证返回模式，G04 §9 列了 PoC 必须
 - **回环端口上，密钥文件是唯一的屏障**。Broker 在回环地址上监听，网关用一个密钥文件证明自己；本机任何能读到这个文件的进程都能向 Broker 要到凭证（`P1-MB-04` 的对照项）。真实部署要靠 Unix Socket 或 Pod 内网络隔离，这一点没有测。
 - **多了一处持有凭证的地方**。Broker 的本地存储里有该网关池用得到的全部账户凭证，它如何下发、轮换、吊销，设计里还没有。
 - **决策契约缺一个字段**。`DecisionRequest` 原先没有地方放"调用方 Token 是为哪个环境签发的"，Broker 无从转达，PDP 也就拒绝不了 PROD Token 用在 TEST 池上。已在 `contracts/gatekeeper/openapi.yaml` 里加上可选的 `token_environment`（提案）。
+
+## 不是 Bearer 的凭证：固定令牌加每个请求一个随机数
+
+[ADR-0011](../../../docs/adr/ADR-0011.md) 第 3 条的做法，对着替身跑。有的 Provider 要的 `Authorization` 不是 `Bearer 令牌`，而是 `Hc-OweDeveloper 账号;令牌;随机数`：账号和令牌是固定的，随机数每个请求一个。`gateway-authz` 从第二个凭证文件（`--developer-tokens`）读账号和令牌，每次放行时现做随机数，把整段值放进允许响应的 `Authorization` 头。网关一侧仍是模式 A 的复制响应头，路由是 `mockcarrier-parcels-get-developer-token`。
+
+- **网关上要跟着改的只有一处**：后端上"PDP 放行却没给凭证就拒绝"的那条规则（"默认配置不安全的地方"第 3 项）认的是凭证的第一个词。这条路由上它是 `Hc-OweDeveloper `；照搬 `Bearer `，这条路由的请求全部被网关拒绝。对照里把它改回 `Bearer `，`P1-DT-01/03/04/05` 都不通过；把这条规则整条去掉，`P1-DT-02` 不通过。`tests/contracts` 另有一条检查，拿路由上的这个词和 `gateway-authz` 源码里的那个词对。
+- **调用方塞不进自己的凭证**（`P1-DT-02`）。调用方在自己的 Token 旁边再放一个 `Authorization: Hc-OweDeveloper …`：放在 Token 后面，PDP 给了凭证时请求照常转发，Provider 收到的只有 PDP 给的那一个；PDP 没给凭证时网关照样答 403，Provider 什么都没收到。放在 Token 前面，两种情况网关都答 401。两种顺序下 Provider 都没有收到调用方放的那个值。
+- **换令牌不用重启**（`P1-DT-04`）。把令牌文件换掉（写新文件再改名），下一个请求带的就是新令牌，`gateway-authz` 还是同一个进程。换上去的文件读不成，或者带着 Bearer 文件里已经有的句柄，整份不要，继续用上一份，两种路由都不受影响；`gateway-authz` 各记一行，里面没有账号和令牌。
+- **日志**（`P1-DT-05`）。网关和 `gateway-authz` 两边的日志里都没有账号、令牌，也没有这种认证头的值，包括凭证没给出来和令牌文件读不成时写的那些行。
+- **替身比文档严一点**。Mock Provider 对这条路由按文档查头的格式（不对 403，账号或令牌不对 401），并且同一个随机数只收一次。承运商的文档说的是以后的版本会限定随机数不能重复；替身现在就拒，重发的头在这里看得出来。对照里把随机数改成固定的，`P1-DT-01/03/04/05` 都不通过。
+
+对照（2026-11-18，改完跑一遍整套再改回）一共七处，每一处都有 `P1-DT` 用例不通过，别的用例都不受影响：上面两处配置；随机数固定；令牌文件不重读；读不成的文件把表清空；重读时把凭证写进日志；Bearer 文件里已有的句柄在令牌文件里照收。
+
+这一段证明的是本仓库这一侧：`gateway-authz` 做出来的头经网关原样到了替身。承运商的沙箱没有被调用，替身接受不等于承运商接受。
 
 ## 配置回读
 
@@ -90,7 +105,7 @@ G03 要求发布之后逐个实例回读，确认生效的是批准的那一份�
 
 ## 没有覆盖
 
-`gateway-authz` 跑的是验收构建，登记表和凭证来自为这次运行写的文件，撤销在内存里（没有真实身份源、授权库、Secret Manager、Provider 令牌端点），没有调用已部署的 Gatekeeper；Provider 是回环 Mock；本地 Broker 是 Mock，存储是一个 JSON 文件。mTLS 只在网关到 PDP、Broker 到 PDP 两段上是真的，CA 和证书每次运行临时生成：没有 SPIFFE Workload API，没有证书轮换和吊销；调用方到网关、网关到 Provider 是明文 HTTP。单进程，没有限流、负载；多副本和配置的滚动替换在 `tests/integration/kubernetes` 里，用的是一份没有 JWT 和 ExtAuthZ 的小配置。回读口只在这一个实例上、用为这次运行现做的发布器证书试过；这套用例里没有发布器，真的发布器（`cmd/gateway-control`）在 `tests/integration/compose` 里对着一份没有 JWT 和 ExtAuthZ 的小配置跑。没有 gRPC ExtAuthZ、决策缓存、CONNECT、gRPC 上游、HMAC 签名、对 Provider 的 mTLS；没有 DNS 重绑定和网络层出口 ACL。完整列表在证据文件的 `scope_limits`。
+`gateway-authz` 跑的是验收构建，登记表和凭证来自为这次运行写的文件，撤销在内存里（没有真实身份源、授权库、Secret Manager、Provider 令牌端点），没有调用已部署的 Gatekeeper；Provider 是回环 Mock，开发者令牌那条路由的对端也是它，承运商的沙箱没有被调用；本地 Broker 是 Mock，存储是一个 JSON 文件。mTLS 只在网关到 PDP、Broker 到 PDP 两段上是真的，CA 和证书每次运行临时生成：没有 SPIFFE Workload API，没有证书轮换和吊销；调用方到网关、网关到 Provider 是明文 HTTP。单进程，没有限流、负载；多副本和配置的滚动替换在 `tests/integration/kubernetes` 里，用的是一份没有 JWT 和 ExtAuthZ 的小配置。回读口只在这一个实例上、用为这次运行现做的发布器证书试过；这套用例里没有发布器，真的发布器（`cmd/gateway-control`）在 `tests/integration/compose` 里对着一份没有 JWT 和 ExtAuthZ 的小配置跑。没有 gRPC ExtAuthZ、决策缓存、CONNECT、gRPC 上游、HMAC 签名、对 Provider 的 mTLS；没有 DNS 重绑定和网络层出口 ACL。完整列表在证据文件的 `scope_limits`。
 
 ## 运行
 
@@ -124,11 +139,11 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
 
 ## 文件
 
-- `agentgateway.poc.yaml`：原生配置。五条出站路由（两条模式 A，一条模式 B，一条模式 C，一条用 `key.expression` 的模式 A），外加回读口和它的一条路由。
+- `agentgateway.poc.yaml`：原生配置。六条出站路由（两条模式 A，一条模式 B，一条模式 C，一条用 `key.expression` 的模式 A，一条凭证不是 Bearer 令牌的模式 A），外加回读口和它的一条路由。
 - `pin.py`：按 `deploy/agentgateway/agentgateway.lock.json` 找到并核对 agentgateway 二进制，`--fetch` 时从锁定的镜像里把它取出来；联调套件（`tests/integration/gatekeeper/`）和 Kubernetes 套件（`tests/integration/kubernetes/`）也用它。
 - PDP 不在这个目录里：是仓库根下的 `cmd/gateway-authz`，双向 TLS，按客户端证书里的身份决定谁能调哪个端点；实现了 `contracts/gatekeeper/openapi.yaml` 的 `/v1/extauthz/check`（模式 A）和 `/v1/egress/authorizations/decision`（模式 B）。本套件用的控制接口在 `cmd/gateway-authz/hooks_on.go`，只有带 `acceptance` 标签的构建里才有。
 - `mock_broker.py`：Mock 本地 Broker。`pki.py`：每次运行的 CA、证书和 TLS 连接。
-- `mock_provider.py`：记录收到的每个请求；`policy.poc.json`：两租户两账户的授权数据。
+- `mock_provider.py`：记录收到的每个请求；按 Bearer 令牌认账户，`/v1/parcels/` 下按 `Hc-OweDeveloper 账号;令牌;随机数` 认，同一个随机数只收一次。`policy.poc.json`：两租户两账户的授权数据。
 - `front.nginx.conf`：前置 nginx 的配置。给 agentgateway 上游的报告（英文，含最小复现）在 `docs/upstream/`。
 - `run.py`：用例与期望。`evidence/p1-run-agentgateway-<版本>.json`：最近一次运行的逐项检查与观察值，含二进制、锁定文件与配置的 SHA-256。
 
