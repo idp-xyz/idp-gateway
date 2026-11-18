@@ -356,3 +356,23 @@ func TestDeveloperTokensWhileTheFileKeepsBeingReplaced(t *testing.T) {
 		t.Fatalf("最后用的是 %s，不是最后换上去的那一份", token)
 	}
 }
+
+// Holds 说的是最近一次读成的那份文件，不重读：别的凭证来源在重读自己的文件时问它。
+func TestDeveloperTokensHolds(t *testing.T) {
+	path := writeFile(t, developerTokensFile([3]string{"carrier-test/account-blue", "ACCT-1", "tok_abc-123"}), 0o600)
+	store, err := LoadDeveloperTokens(path, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !store.Holds("carrier-test/account-blue") || store.Holds("carrier-test/account-green") {
+		t.Fatal("Holds")
+	}
+	replaceFile(t, path, developerTokensFile([3]string{"carrier-test/account-green", "ACCT-2", "tok_def-456"}), 0o600)
+	if !store.Holds("carrier-test/account-blue") {
+		t.Fatal("Holds 不该自己去重读文件")
+	}
+	parts(t, store, "carrier-test", "account-green") // 要凭证时才重读
+	if store.Holds("carrier-test/account-blue") || !store.Holds("carrier-test/account-green") {
+		t.Fatal("重读之后 Holds 没有跟上")
+	}
+}

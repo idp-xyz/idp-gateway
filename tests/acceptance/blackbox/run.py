@@ -70,6 +70,9 @@ PICKUPS = '/providers/mockcarrier/v1/pickups'       # backendAuth.key.expression
 PARCELS = '/providers/mockcarrier/v1/parcels'       # developer-token route: the credential is not a Bearer token (ADR-0011)
 PARCELS_ROUTE = 'mockcarrier-parcels-get-developer-token'
 DEVELOPER_TOKENS = RUN / 'authz-developer-tokens.json'
+OAUTH_CLIENTS = RUN / 'authz-oauth-clients.json'      # gateway-authz's third credentials file: OAuth2 client credentials (ADR-0011, step two)
+OAUTH_PATH = '/oauth/token'                           # on the mock provider's own port: the token endpoint
+OAUTH_ACCOUNTS = {'account-oauth-1': 'tenant-oauth-1', 'account-oauth-2': 'tenant-oauth-2'}   # account -> the tenant that may use it
 REVOCATIONS = RUN / 'authz-revocations.json'          # gateway-authz's own table of revoked accounts (ADR-0012)
 NOTHING_REVOKED = '{"epoch": 0, "revoked_accounts": {}}\n'
 
@@ -256,6 +259,7 @@ def gatekeeper_command() -> tuple[list[str], dict]:
             '--client-ca', str(TLS / 'ca.crt'), '--policy', str(HERE / 'policy.poc.json'),
             '--credentials', str(RUN / 'authz-credentials.json'),
             '--developer-tokens', str(DEVELOPER_TOKENS),
+            '--oauth-clients', str(OAUTH_CLIENTS),
             '--revocations', str(REVOCATIONS), '--revoker-identity', pki.ID['revoker'],
             '--gateway-identity', pki.ID['gateway'], '--broker-identity', pki.ID['broker']]
     return argv, env
@@ -456,6 +460,8 @@ class S:  # per-run secrets; never written to the evidence file
     token = {}  # account -> provider token
     developer = {}       # account -> (the carrier's account number, developer token): what gateway-authz starts with
     developer_next = {}  # the same accounts with another token each: what P1-DT-04 rotates to
+    oauth = {}           # account -> {'client_id', 'secrets': {'g1': ..., 'g2': ...}}: the OAuth clients; g2 is what P1-OA-06 rotates to
+    oauth_answers: list = []   # every answer a caller got in the P1-OA cases, for the case that looks for secrets in them
     # not secrets: what the runner observed about the binary before the cases
     default_start_rewrites = None    # start_without_session_key_rewrites(), default storage mode
     read_only_start_rewrites = None  # the same, from the reviewed configuration
@@ -2395,6 +2401,358 @@ def _(c):
     c.check('...nothing of the forged id is in the line', 'forged-by-provider' not in (reqs[-1] if reqs else 'forged-by-provider'))
 
 
+# ---- OAuth2 client credentials against a token endpoint (ADR-0011, step two) -------------------------------
+# gateway-authz holds a third credentials file: for each account a token endpoint, a client and its secret. It asks
+# the endpoint for an access token (client_credentials, client_secret_basic), keeps it per account until shortly
+# before it expires, and releases "Bearer <token>" to the gateway like any other Bearer credential. So these cases
+# use the existing Bearer route (tracking.get) with two accounts of their own, tenant-oauth-1 and tenant-oauth-2;
+# no gateway route was added. The token endpoint is a path on the mock provider's own port. They run last: each one
+# writes the clients file with a key_version of its own, which makes gateway-authz forget what it cached for the
+# accounts, so no case starts from what an earlier one left in the cache.
+OA_TIMEOUT_SECONDS = 0.8   # gateway-authz's default for --oauth-timeout, which the runner does not set
+OA_SCOPE, OA_AUDIENCE = 'parcels.read parcels.write', 'https://api.mockcarrier.example'
+
+
+def oauth_endpoint() -> str:
+    return f"http://127.0.0.1:{PORTS['provider']}{OAUTH_PATH}"
+
+
+def write_oauth_clients(version: str, generation: str = 'g1', endpoint: str | None = None, mode: int = 0o600, accounts=None):
+    """Replace gateway-authz's OAuth clients file the way it asks for: a new file, renamed over the old one.
+    version is the key_version of every entry; generation names which of each client's secrets goes in."""
+    binding = policy_binding('mockcarrier-tracking-get')
+    document = {}
+    for account in accounts or S.oauth:
+        spec = S.oauth[account]
+        entry = {'token_endpoint': endpoint or oauth_endpoint(), 'client_id': spec['client_id'],
+                 'client_secret': spec['secrets'][generation], 'key_version': version}
+        if account == 'account-oauth-1':
+            entry.update(scope=OA_SCOPE, audience=OA_AUDIENCE)
+        document[f'{binding}/{account}'] = entry
+    staged = OAUTH_CLIENTS.with_name(OAUTH_CLIENTS.name + '.next')
+    staged.write_text(json.dumps(document), encoding='utf-8')
+    os.chmod(staged, mode)
+    os.replace(staged, OAUTH_CLIENTS)
+
+
+def oauth_report() -> dict:
+    return body_json(send(PORTS['provider'], 'GET', '/admin/oauth', ADMIN()))
+
+
+def oauth_client(account: str) -> dict:
+    return oauth_report()['clients'][S.oauth[account]['client_id']]
+
+
+def oauth_config(account: str, **change):
+    send(PORTS['provider'], 'POST', '/admin/oauth/config', ADMIN() + [('Content-Type', 'application/json')],
+         json.dumps({S.oauth[account]['client_id']: change}).encode())
+
+
+def oauth_begin(version: str):
+    """Start a case from nothing cached: the mock's counters and controls back to their start, and a clients file
+    whose key_version is new, which gateway-authz sees as new keys and so as nothing cached."""
+    send(PORTS['provider'], 'POST', '/admin/oauth/reset', ADMIN(), b'')
+    write_oauth_clients(version)
+
+
+def oa(account: str, n: int = 1) -> dict:
+    """One tracking request as the tenant of that account; the answer is kept for P1-OA-08."""
+    r = gw('GET', f'{TRACKING}/TRK-{n}', mint(S.signing, tenant_id=OAUTH_ACCOUNTS[account]))
+    S.oauth_answers.append(r)
+    return r
+
+
+def bearer_of(hit: dict) -> str | None:
+    given = header(hit['headers'], 'authorization')
+    return given[0][len('Bearer '):] if len(given) == 1 and given[0].startswith('Bearer ') else None
+
+
+def refused_as_unavailable(r: dict) -> bool:
+    return r['status'] == 503 and body_json(r).get('result') == 'INDETERMINATE' and body_json(r).get('reason_code') == 'CREDENTIAL_UNAVAILABLE'
+
+
+def authz_log_text() -> str:
+    return (RUN / 'gateway-authz.log').read_text(encoding='utf-8', errors='replace')
+
+
+@case('P1-OA-01', 'OAuth client credentials: two accounts, each with the token of its own',
+      'each account\'s request reaches the provider with the access token issued to that account\'s client and to no other; '
+      'the token endpoint is asked once for each, with the grant, the scope and the audience the file names',
+      ('GW-AT-006', 'GW-NAT-001', 'GW-FR-006', 'GW-FR-018', 'GW-FR-033'))
+def _(c):
+    oauth_begin('oa01')
+    r1 = oa('account-oauth-1', 1)
+    r2 = oa('account-oauth-2', 2)
+    hits = provider_hits()
+    one, two = oauth_client('account-oauth-1'), oauth_client('account-oauth-2')
+    sent = [bearer_of(h) for h in hits]
+    c.note('statuses', [r1['status'], r2['status']])
+    c.note('fetches', {'account-oauth-1': len(one['fetches']), 'account-oauth-2': len(two['fetches'])})
+    c.check('both answered 200, each by the provider as its own account',
+            [(r['status'], body_json(r).get('account')) for r in (r1, r2)] == [(200, 'account-oauth-1'), (200, 'account-oauth-2')])
+    c.check('the provider received exactly those two, the logical path rewritten to the provider path',
+            [h['raw_target'] for h in hits] == ['/v1/tracking/TRK-1', '/v1/tracking/TRK-2'])
+    c.check('each carries exactly one Authorization header, "Bearer <token>"', all(sent))
+    c.check('the first carries the token issued to account-oauth-1\'s client, the second the one issued to account-oauth-2\'s',
+            len(sent) == 2 and one['issued'] == [sent[0]] and two['issued'] == [sent[1]])
+    c.check('the two tokens are different', len(sent) == 2 and sent[0] != sent[1])
+    c.check('the token endpoint was asked once for each client, with the first secret of each',
+            [f['secret_generation'] for f in one['fetches']] == ['g1'] and [f['secret_generation'] for f in two['fetches']] == ['g1'])
+    c.check('the request had grant_type=client_credentials, and the scope and audience of the file where it names them',
+            (one['fetches'][0]['grant_type'], one['fetches'][0]['scope'], one['fetches'][0]['audience']) == ('client_credentials', OA_SCOPE, OA_AUDIENCE)
+            and (two['fetches'][0]['scope'], two['fetches'][0]['audience']) == (None, None))
+    c.check('nothing of the caller\'s IDP token reached the provider, and neither answer carries a credential',
+            all(not any(v.startswith('Bearer ey') for _, v in h['headers']) for h in hits)
+            and not any(carries_credential(r) for r in (r1, r2)))
+
+
+@case('P1-OA-02', 'OAuth client credentials: several requests in a row use the cached token',
+      'five requests for one account leave with the same access token and the token endpoint is asked once',
+      ('GW-FR-018', 'GW-FR-006'))
+def _(c):
+    oauth_begin('oa02')
+    answers = [oa('account-oauth-1', n) for n in range(1, 6)]
+    sent = [bearer_of(h) for h in provider_hits()]
+    client = oauth_client('account-oauth-1')
+    c.note('fetches', len(client['fetches']))
+    c.check('five requests, each answered 200 as account-oauth-1', [(r['status'], body_json(r).get('account')) for r in answers] == [(200, 'account-oauth-1')] * 5)
+    c.check('all five left with the same access token', len(sent) == 5 and None not in sent and len(set(sent)) == 1)
+    c.check('the token endpoint was asked once for that client, and not at all for the other', len(client['fetches']) == 1
+            and len(oauth_client('account-oauth-2')['fetches']) == 0)
+
+
+@case('P1-OA-03', 'OAuth client credentials: a token is renewed before it expires',
+      'with a short-lived token, a request inside the last tenth of its life leaves with a new token, which the endpoint issued '
+      'while the first was still valid; before that, the first was still the one used',
+      ('GW-FR-018', 'GW-FR-006'))
+def _(c):
+    oauth_begin('oa03')
+    oauth_config('account-oauth-1', life=5)   # renewal comes when a tenth of the life, 0.5 s, is left
+    began = time.monotonic()
+    first = oa('account-oauth-1', 1)
+    time.sleep(max(0.0, began + 2.0 - time.monotonic()))
+    second = oa('account-oauth-1', 2)
+    middle = len(oauth_client('account-oauth-1')['fetches'])
+    time.sleep(max(0.0, began + 4.7 - time.monotonic()))
+    third = oa('account-oauth-1', 3)
+    client = oauth_client('account-oauth-1')
+    sent = [bearer_of(h) for h in provider_hits()]
+    gap = client['fetches'][1]['at'] - client['fetches'][0]['at'] if len(client['fetches']) == 2 else None
+    c.note('seconds_between_the_two_fetches', round(gap, 2) if gap is not None else None)
+    c.check('all three answered 200 as account-oauth-1', [(r['status'], body_json(r).get('account')) for r in (first, second, third)] == [(200, 'account-oauth-1')] * 3)
+    c.check('two seconds into a five-second life the first token was still the one used, the endpoint asked once', middle == 1 and sent[:2] == [sent[0]] * 2)
+    c.check('at 4.7 seconds the request left with a different token, and the endpoint was asked a second time',
+            len(sent) == 3 and sent[2] != sent[0] and len(client['fetches']) == 2 and client['issued'] == [sent[0], sent[2]])
+    c.check('the second fetch came before the first token\'s five seconds were over (renewed, not replaced after it had expired)',
+            gap is not None and gap < 5.0)
+
+
+@case('P1-OA-04', 'OAuth client credentials: concurrent requests for one account ask the endpoint once',
+      'twelve requests at once for one account, the token endpoint slowed down, all get 200 with the same token and the endpoint is asked once',
+      ('GW-FR-018', 'GW-FR-006'))
+def _(c):
+    oauth_begin('oa04')
+    oauth_config('account-oauth-1', delay=0.4)
+    answers: list = []
+    workers = [threading.Thread(target=lambda n=n: answers.append(oa('account-oauth-1', n))) for n in range(1, 13)]
+    for w in workers:
+        w.start()
+    for w in workers:
+        w.join()
+    sent = [bearer_of(h) for h in provider_hits()]
+    client = oauth_client('account-oauth-1')
+    c.note('statuses', sorted(r['status'] for r in answers))
+    c.note('seconds_slowest', max(r['seconds'] for r in answers))
+    c.check('twelve answers, all 200 as account-oauth-1', len(answers) == 12 and all(r['status'] == 200 and body_json(r).get('account') == 'account-oauth-1' for r in answers))
+    c.check('the token endpoint was asked once', len(client['fetches']) == 1)
+    c.check('all twelve requests reached the provider with that one token', len(sent) == 12 and None not in sent and set(sent) == set(client['issued']))
+
+
+# Each way the endpoint can be no use. The caller gets what the PDP gives for a credential that cannot be had
+# (P1-FO-02): 503 INDETERMINATE CREDENTIAL_UNAVAILABLE, from gateway-authz through the gateway, and nothing is forwarded.
+OA_FAULTS = {'the endpoint answers 500': dict(mode='status500'), 'the endpoint answers 401': dict(mode='status401'),
+             'the endpoint redirects': dict(mode='redirect'),
+             'token_type is not Bearer': dict(mode='bad_token_type'), 'there is no token_type': dict(mode='no_token_type'),
+             'there is no expires_in': dict(mode='no_expires'), 'expires_in is 0': dict(mode='zero_expires'),
+             'expires_in is a string': dict(mode='string_expires'), 'the access token is empty': dict(mode='empty_token'),
+             'the answer is not JSON': dict(mode='not_json'), 'the answer is a JSON array': dict(mode='json_array'),
+             'the endpoint closes the connection without answering': dict(mode='drop'),
+             'the endpoint answers after the timeout': dict(delay=OA_TIMEOUT_SECONDS * 2)}
+
+
+@case('P1-OA-05', 'OAuth client credentials: the token endpoint cannot be used',
+      'unreachable, too slow, or answering wrongly in each of the ways tried: the caller is refused with 503 CREDENTIAL_UNAVAILABLE and the '
+      'provider receives nothing; so too when a cached token has not expired but is due to be renewed; the next request after the endpoint '
+      'is well again is served',
+      ('GW-AT-018', 'GW-ST-009', 'GW-FR-018', 'GW-FR-043', 'GW-FR-006'))
+def _(c):
+    for n, (what, fault) in enumerate(OA_FAULTS.items()):
+        oauth_begin(f'oa05-{n}')
+        oauth_config('account-oauth-1', **fault)
+        send(PORTS['provider'], 'POST', '/admin/reset', ADMIN(), b'')
+        r = oa('account-oauth-1', 1)
+        asked = len(oauth_client('account-oauth-1')['fetches'])
+        c.note(what, {'status': r['status'], 'reason_code': body_json(r).get('reason_code'), 'seconds': r['seconds'], 'endpoint_asked': asked})
+        c.check(f'{what}: 503 INDETERMINATE CREDENTIAL_UNAVAILABLE, the endpoint was asked, the provider received nothing, nothing was followed',
+                refused_as_unavailable(r) and asked == 1 and len(provider_hits()) == 0 and len(forbidden_hits()) == 0)
+        c.check(f'{what}: the answer carries no credential', not carries_credential(r))
+        if fault.get('delay'):
+            c.check(f'{what}: refused after about the timeout, not after the endpoint\'s own delay', r['seconds'] < OA_TIMEOUT_SECONDS + 0.7)
+        oauth_config('account-oauth-1', mode='ok', delay=0.0)
+        r = oa('account-oauth-1', 2)
+        hits = provider_hits()
+        c.check(f'{what}: the endpoint is well again: the next request is served with a token it issued',
+                r['status'] == 200 and body_json(r).get('account') == 'account-oauth-1' and len(hits) == 1
+                and bearer_of(hits[0]) in oauth_client('account-oauth-1')['issued'])
+    # An address nobody listens on: a port the OS has just handed out and taken back.
+    with socket.socket() as probe:
+        probe.bind(('127.0.0.1', 0))
+        closed = probe.getsockname()[1]
+    oauth_begin('oa05-unreachable')
+    write_oauth_clients('oa05-unreachable', endpoint=f'http://127.0.0.1:{closed}{OAUTH_PATH}')
+    send(PORTS['provider'], 'POST', '/admin/reset', ADMIN(), b'')
+    r = oa('account-oauth-1', 1)
+    c.note('nobody listens at the token endpoint', {'status': r['status'], 'reason_code': body_json(r).get('reason_code'), 'seconds': r['seconds']})
+    c.check('nobody listens at the token endpoint: 503 INDETERMINATE CREDENTIAL_UNAVAILABLE, the provider received nothing',
+            not port_open(closed) and refused_as_unavailable(r) and len(provider_hits()) == 0)
+    write_oauth_clients('oa05-reachable')
+    c.check('the file names an endpoint that answers again: the next request is served', oa('account-oauth-1', 2)['status'] == 200)
+
+    # A token that has not expired, in the part of its life when it is due to be renewed, while the endpoint is broken.
+    oauth_begin('oa05-cached')
+    oauth_config('account-oauth-1', life=6)    # due for renewal when 0.6 s is left
+    began = time.monotonic()
+    first = oa('account-oauth-1', 1)
+    held = bearer_of(provider_hits()[0]) if provider_hits() else None
+    time.sleep(max(0.0, began + 5.7 - time.monotonic()))
+    oauth_config('account-oauth-1', mode='status500')
+    send(PORTS['provider'], 'POST', '/admin/reset', ADMIN(), b'')
+    second, third = oa('account-oauth-1', 2), oa('account-oauth-1', 3)
+    nothing = len(provider_hits())
+    # The first token is still good at the provider: it was refused here, not there.
+    direct = send(PORTS['provider'], 'GET', '/v1/tracking/direct', [('Authorization', 'Bearer ' + (held or 'none'))])
+    client = oauth_client('account-oauth-1')
+    c.note('cached token due for renewal, endpoint broken', {'statuses': [second['status'], third['status']], 'endpoint_asked': len(client['fetches']),
+                                                             'seconds_into_its_life_when_asked': round(time.monotonic() - began, 2)})
+    c.check('the first request got a token and the provider accepted it', first['status'] == 200 and held is not None)
+    c.check('the token was due for renewal and the endpoint was broken: both requests refused with 503 CREDENTIAL_UNAVAILABLE',
+            refused_as_unavailable(second) and refused_as_unavailable(third))
+    c.check('the provider received neither: the token that had not yet expired was not used', nothing == 0)
+    c.check('...though that token had not expired at the provider (it answers 200 to it, direct)', direct['status'] == 200)
+    c.check('the endpoint was asked on each of the refusals (the first, and one each time after)', len(client['fetches']) == 3)
+    oauth_config('account-oauth-1', mode='ok')
+    fourth = oa('account-oauth-1', 4)
+    c.check('the endpoint is well again: served, with a new token and not the old one',
+            fourth['status'] == 200 and bearer_of(provider_hits()[-1]) not in (None, held))
+
+
+@case('P1-OA-06', 'OAuth client credentials: the client secret is replaced while gateway-authz runs',
+      'after the clients file is replaced with a new secret and key_version, the next request is served with a token fetched with the '
+      'new secret, without a restart; a replacement that does not load changes nothing',
+      ('GW-AT-018', 'GW-FR-018', 'GW-FR-006'))
+def _(c):
+    oauth_begin('oa06-1')
+    process = PROCS['gateway-authz'].pid
+    first = oa('account-oauth-1', 1)
+    old = bearer_of(provider_hits()[0]) if provider_hits() else None
+    c.check('before: served, with a token fetched with the first secret',
+            first['status'] == 200 and [f['secret_generation'] for f in oauth_client('account-oauth-1')['fetches']] == ['g1'])
+    # The endpoint takes the new secret only from here on: a request that still used the old one could not be served.
+    oauth_config('account-oauth-1', valid=['g2'])
+    oauth_config('account-oauth-2', valid=['g2'])
+    write_oauth_clients('oa06-2', generation='g2')
+    send(PORTS['provider'], 'POST', '/admin/reset', ADMIN(), b'')
+    second = oa('account-oauth-1', 2)
+    new = bearer_of(provider_hits()[0]) if provider_hits() else None
+    client = oauth_client('account-oauth-1')
+    c.note('secret generations the endpoint saw', [f['secret_generation'] for f in client['fetches']])
+    c.check('the file is replaced: the very next request is served, with a different token than before',
+            second['status'] == 200 and new is not None and new != old)
+    c.check('the endpoint reports that second fetch as made with the new secret, and refused nothing',
+            [f['secret_generation'] for f in client['fetches']] == ['g1', 'g2'] and client['refused'] == 0)
+    c.check('account-oauth-2, whose entry changed too, is served with a token fetched with its new secret',
+            oa('account-oauth-2', 3)['status'] == 200 and [f['secret_generation'] for f in oauth_client('account-oauth-2')['fetches']] == ['g2'])
+
+    before = authz_log_text().count('"msg":"oauth clients file did not load')
+    write_oauth_clients('oa06-3', generation='g2', endpoint='http://auth.example.test/oauth/token')   # plain http to an address that is not loopback
+    send(PORTS['provider'], 'POST', '/admin/reset', ADMIN(), b'')
+    third = oa('account-oauth-1', 4)
+    write_oauth_clients('oa06-4', generation='g2', mode=0o644)                                         # readable by others
+    fourth = oa('account-oauth-1', 5)
+    sent = [bearer_of(h) for h in provider_hits()]
+    c.check('replaced by a file that does not load (plain http beyond loopback; readable by others): served as before, with the token it held',
+            third['status'] == 200 and fourth['status'] == 200 and sent == [new, new])
+    c.check('...and the endpoint was not asked again', len(oauth_client('account-oauth-1')['fetches']) == 2)
+    c.check('gateway-authz said so twice, and is the same process throughout',
+            authz_log_text().count('"msg":"oauth clients file did not load') - before == 2
+            and PROCS['gateway-authz'].pid == process and PROCS['gateway-authz'].poll() is None)
+    write_oauth_clients('oa06-2', generation='g2')
+    c.check('the good file is put back: still served, from the cache', oa('account-oauth-1', 6)['status'] == 200
+            and len(oauth_client('account-oauth-1')['fetches']) == 2)
+
+
+@case('P1-OA-07', 'OAuth client credentials: a revoked account gets no cached token',
+      'with its token in the cache, the revoked account is refused 403 ACCOUNT_REVOKED; the provider receives nothing and the token '
+      'endpoint is not asked; restored, it is served again',
+      ('GW-AT-026', 'GW-FR-026', 'GW-FR-018'))
+def _(c):
+    oauth_begin('oa07')
+    first = oa('account-oauth-1', 1)
+    held = bearer_of(provider_hits()[0]) if provider_hits() else None
+    c.check('before: served, and the token is in the cache (one fetch)', first['status'] == 200 and len(oauth_client('account-oauth-1')['fetches']) == 1)
+    pdp_admin('/admin/revoke?account=account-oauth-1')
+    try:
+        send(PORTS['provider'], 'POST', '/admin/reset', ADMIN(), b'')
+        r = oa('account-oauth-1', 2)
+        c.note('after revocation', {'status': r['status'], 'reason_code': body_json(r).get('reason_code')})
+        c.check('revoked: 403 ACCOUNT_REVOKED', refused_as_revoked(r))
+        c.check('the provider received nothing', len(provider_hits()) == 0)
+        c.check('the token endpoint was not asked again', len(oauth_client('account-oauth-1')['fetches']) == 1)
+        c.check('the other OAuth account is served', oa('account-oauth-2', 3)['status'] == 200)
+        # It is the revocation that refuses, not a missing token: with the revocation gone the cached token is what is used.
+    finally:
+        pdp_admin('/admin/restore?account=account-oauth-1')
+    send(PORTS['provider'], 'POST', '/admin/reset', ADMIN(), b'')
+    again = oa('account-oauth-1', 4)
+    c.check('restored: served, with the token that was cached, and the endpoint still asked once',
+            again['status'] == 200 and [bearer_of(h) for h in provider_hits()] == [held] and len(oauth_client('account-oauth-1')['fetches']) == 1)
+
+
+@case('P1-OA-08', 'OAuth client credentials: what the gateway and gateway-authz have written to their logs, and what the callers got',
+      'no client secret, no access token and no Basic header in any line of either log or in any answer a caller got in the P1-OA cases, '
+      'refusals included; gateway-authz\'s log has a line for each time it asked the endpoint',
+      ('GW-AT-007', 'GW-FR-007', 'GW-NFR-05'))
+def _(c):
+    time.sleep(0.5)
+    logs = {name: (RUN / f'{name}.log').read_text(encoding='utf-8', errors='replace') for name in ('agentgateway', 'gateway-authz')}
+    report = oauth_report()
+    tokens = report['issued_ever']
+    client_secrets = [s for spec in S.oauth.values() for s in spec['secrets'].values()]
+    basics = [base64.b64encode(f"{spec['client_id']}:{s}".encode()).decode() for spec in S.oauth.values() for s in spec['secrets'].values()]
+    answers = '\n'.join(r['body'].decode(errors='replace') + json.dumps(r['headers']) for r in S.oauth_answers)
+    texts = {'agentgateway log': logs['agentgateway'], 'gateway-authz log': logs['gateway-authz'], 'the callers\' answers': answers}
+    c.note('log_lines', {name: len(text.splitlines()) for name, text in logs.items()})
+    c.note('answers_looked_at', {'count': len(S.oauth_answers), 'refused': sum(r['status'] == 503 for r in S.oauth_answers),
+                                 'served': sum(r['status'] == 200 for r in S.oauth_answers)})
+    c.check('there is something to look at: tokens were issued, and the callers got both answers that served and answers that refused',
+            len(tokens) >= 10 and any(r['status'] == 200 for r in S.oauth_answers) and any(r['status'] == 503 for r in S.oauth_answers)
+            and any(r['status'] == 403 for r in S.oauth_answers))
+    c.check('gateway-authz\'s log has the line for each fetch, the lines for a fetch that failed, and for the files that loaded and did not',
+            all(m in logs['gateway-authz'] for m in ('"msg":"oauth token fetched"', '"msg":"oauth token not fetched"', '"result":"timeout"',
+                                                     '"result":"status 500"', '"result":"bad_answer"', '"result":"unreachable"',
+                                                     '"msg":"oauth clients file loaded again"', '"msg":"oauth clients file did not load')))
+    c.check('the gateway\'s log has lines for the Bearer route these accounts use, served and refused',
+            any('http.status=200' in l for l in logs['agentgateway'].splitlines() if 'mockcarrier-tracking-get' in l)
+            and any('http.status=503' in l for l in logs['agentgateway'].splitlines() if 'mockcarrier-tracking-get' in l))
+    for name, text in texts.items():
+        c.check(f'{name}: no client secret', not any(s in text for s in client_secrets))
+        c.check(f'{name}: no access token issued by the endpoint', not any(t in text for t in tokens))
+        c.check(f'{name}: no Basic header, neither as one of this run\'s nor of any form', not any(b in text for b in basics)
+                and re.search(r'Basic [A-Za-z0-9+/=]{8,}', text) is None)
+    c.check('the log of gateway-authz has no body of the endpoint\'s answers (the 500 answer carried one with a client_secret field)',
+            'a body that must not be echoed' not in logs['gateway-authz'] and 'token endpoint says hello' not in logs['gateway-authz'])
+
+
 # --------------------------------------------------------------------------------------
 # main
 # --------------------------------------------------------------------------------------
@@ -2409,6 +2767,9 @@ SCOPE_LIMITS = [
     'The provider is a loopback mock; no carrier sandbox was called. That includes the developer-token route (P1-DT-*): the '
     'scheme is one carrier\'s, taken from its public integration guide, and what answers here is a mock that checks the form '
     'of the header, knows the run\'s account numbers and tokens, and refuses a nonce twice. The carrier was not called.',
+    'The token endpoint of the P1-OA cases is a mock on the provider\'s own loopback port, over plain HTTP: it checks the client in '
+    'Basic and the form of the request, and answers as each case tells it to. No real token endpoint, no HTTPS to one, no Secret '
+    'Manager and no other client authentication method than client_secret_basic is involved.',
     'Mutual TLS is real on the gateway-to-PDP and broker-to-PDP hops only, with a CA and certificates made for the run: '
     'no SPIFFE Workload API, no rotation, no certificate revocation. Caller-to-gateway and gateway-to-provider are plain HTTP.',
     'The local broker (Mode B) is a mock with a JSON file as its store. The gateway reaches it over loopback HTTP and proves '
@@ -2454,6 +2815,10 @@ def prepare():
     # Its second credentials file, for the route whose credential is not a Bearer token:
     # handle -> the carrier's account number and a developer token. No nonce is stored.
     write_developer_tokens(S.developer)
+    # Its third credentials file: the OAuth2 clients of two more accounts, each with two secrets (generations) of its own.
+    S.oauth = {a: {'client_id': 'client-' + a, 'secrets': {'g1': 'oauth-secret-' + secrets.token_urlsafe(24),
+                                                            'g2': 'oauth-secret-' + secrets.token_urlsafe(24)}} for a in OAUTH_ACCOUNTS}
+    write_oauth_clients('start')
     # Its table of revoked accounts. "Nothing revoked" is a file that says so: without the file it does not start.
     REVOCATIONS.write_text(NOTHING_REVOKED, encoding='utf-8')
     for f in RUN.iterdir():
@@ -2474,7 +2839,10 @@ def stage_config(binary: str) -> tuple[bool, str]:
              'provider_tokens': {**{t: a for a, t in S.token.items()}, S.static_token: 'account-shared'},
              # "account number;token" -> account, for the tokens gateway-authz starts with and the ones P1-DT-04 rotates to
              'provider_developer_tokens': {f'{number};{token}': a for table in (S.developer, S.developer_next)
-                                           for a, (number, token) in table.items()}}
+                                           for a, (number, token) in table.items()},
+             # client id -> its account, and the secrets it may present, each named by the generation the mock reports it as
+             'provider_oauth': {spec['client_id']: {'account': a, 'secrets': {secret: g for g, secret in spec['secrets'].items()}}
+                                for a, spec in S.oauth.items()}}
     (RUN / 'state.json').write_text(json.dumps(state), encoding='utf-8')
     for f in (RUN_CONFIG, RUN / 'state.json'):
         os.chmod(f, 0o600)
@@ -2802,8 +3170,9 @@ def main() -> int:
                           'source_sha256_covers': 'go.mod and every non-test .go file under cmd/ and internal/',
                           'binary_sha256': hashlib.sha256(AUTHZ_BINARY.read_bytes()).hexdigest(),
                           'policy_from': 'tests/acceptance/blackbox/policy.poc.json',
-                          'credentials_from': 'two files written for the run, not recorded: Bearer tokens (--credentials), and '
-                                              'account numbers with developer tokens (--developer-tokens)',
+                          'credentials_from': 'three files written for the run, not recorded: Bearer tokens (--credentials), '
+                                              'account numbers with developer tokens (--developer-tokens), and OAuth2 clients '
+                                              '(--oauth-clients)',
                           'revocations': 'a file written for the run (--revocations), empty at the start; changed through the '
                                          'acceptance controls and, in P1-RV-02 to 05, through the product interface',
                           'http_versions_seen_from_the_gateway': sorted(S.pdp_protocols)},

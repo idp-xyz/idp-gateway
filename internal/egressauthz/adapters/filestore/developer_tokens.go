@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"go.idp.xyz/idp-gateway/internal/egressauthz/ports"
 )
@@ -41,6 +42,9 @@ type DeveloperTokens struct {
 	seen os.FileInfo
 	// prefixes 是句柄到 `Hc-OweDeveloper 账号;令牌;` 的表。它只会被整份换掉，不会被就地改。
 	prefixes map[string]ports.Secret
+	// held 是 prefixes 的另一份指针：Holds 读它，不拿 mu。别的来源在重读自己的文件、查句柄有没有
+	// 重复时会来问 Holds，而这边重读时也会问它们；两边都拿着自己的锁互相等，就是死锁。
+	held atomic.Pointer[map[string]ports.Secret]
 }
 
 // LoadDeveloperTokens 读开发者令牌文件：一个 JSON 对象，键是凭证句柄，值是
@@ -62,6 +66,7 @@ func LoadDeveloperTokens(path string, reserved func(handle string) bool, logger 
 		return nil, err
 	}
 	d.prefixes, d.seen = prefixes, info
+	d.held.Store(&prefixes)
 	return d, nil
 }
 
@@ -76,6 +81,17 @@ func (d *DeveloperTokens) AuthorizationHeader(_ context.Context, bindingRef, acc
 	// crypto/rand.Read 在受支持的平台上不返回错误；万一失败，Go 运行时会直接终止进程。
 	_, _ = rand.Read(nonce[:])
 	return ports.NewSecret(prefix.Reveal() + hex.EncodeToString(nonce[:])), nil
+}
+
+// Holds 报告这个凭证句柄是不是在最近一次读成的那份文件里。它不看文件有没有变，也不重读：
+// 别的凭证来源用它来拒绝重复的句柄（docs/adr/ADR-0011.md 第 4 条）。
+func (d *DeveloperTokens) Holds(handle string) bool {
+	table := d.held.Load()
+	if table == nil {
+		return false
+	}
+	_, ok := (*table)[handle]
+	return ok
 }
 
 // Len 返回此刻持有的凭证数量，供启动日志使用。
@@ -107,6 +123,7 @@ func (d *DeveloperTokens) current() map[string]ports.Secret {
 		return d.prefixes
 	}
 	d.prefixes, d.seen = prefixes, read
+	d.held.Store(&prefixes)
 	d.logger.Info("developer tokens file loaded again", "path", d.path, "entries", len(prefixes))
 	return d.prefixes
 }

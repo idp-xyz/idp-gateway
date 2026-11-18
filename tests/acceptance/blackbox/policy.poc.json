@@ -12,10 +12,12 @@
       "upstream_hostname": "mockcarrier.example",
       "port": 443,
       "credential_binding_ref": "gatekeeper:mockcarrier-test",
-      "allowed_tenants": ["tenant-blue", "tenant-green"],
+      "allowed_tenants": ["tenant-blue", "tenant-green", "tenant-oauth-1", "tenant-oauth-2"],
       "accounts_by_tenant": {
         "tenant-blue": ["account-blue"],
-        "tenant-green": ["account-green"]
+        "tenant-green": ["account-green"],
+        "tenant-oauth-1": ["account-oauth-1"],
+        "tenant-oauth-2": ["account-oauth-2"]
       },
       "allowed_service_ids": ["parcel-service", "cargo-service"]
     },

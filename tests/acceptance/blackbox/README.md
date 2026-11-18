@@ -27,6 +27,7 @@ G04 §4 要求用 PoC 比较三种凭证返回模式，G04 §9 列了 PoC 必须
 | `backendAuth.key.expression` 比复制响应头更好吗？ | **能用，结果相同，没有观察到安全上的差别**。 | `P1-KX-01/02/03` |
 | 撤销能不能由产品构建自己的入口来做，重启之后还在不在？ | **能，还在**。撤销者的工作负载身份向 `gateway-authz` 发一个请求，下一个请求在四种路由上都被拒绝，另一个账户不受影响；别的身份（包括拿得到凭证的网关）改不了也读不到；重启之后账户仍被拒绝，代次接着数；撤销文件读不成时 `gateway-authz` 不启动，网关拒绝全部请求。见下面"撤销：经产品自己的接口"。 | `P1-RV-02/03/04/05` |
 | 凭证不是 Bearer 令牌，而是一个固定令牌加每个请求一个随机数时，还走得通吗？ | **走得通，网关注入的方式不用改，要改的是后端上那条规则认的前缀**。Provider 收到的是该租户自己账户的 `Hc-OweDeveloper 账号;令牌;随机数`，随机数次次不同；换掉令牌文件，下一个请求用的就是新令牌，`gateway-authz` 不重启。见下面"不是 Bearer 的凭证"。 | `P1-DT-01/02/03/04/05` |
+| 凭证是向令牌端点取的 OAuth2 访问令牌时，能不能按账户隔离、缓存、过期前换新，取不到时拒绝？ | **能，对着替身令牌端点**。两个账户各拿各的令牌；连着要只取一次，并发要也只取一次；过期之前换新；令牌端点连不上、超时、答错时调用方得到 503 `CREDENTIAL_UNAVAILABLE`、Provider 什么都收不到，缓存里还没到期但该换新的令牌也不拿来顶；换客户端密钥不用重启；被撤销的账户拿不到缓存里的令牌；日志和应答里没有客户端密钥和令牌。没有对着真的令牌端点。见下面"OAuth2 客户端凭证"。 | `P1-OA-01` 至 `08` |
 | 换了配置文件之后，能否确认这个实例上生效的是哪一份？ | **单个实例上能**。换文件不用重启，约 0.3 秒生效；加载不了的文件被整份拒绝，网关报告失败和原因，继续用上一份。网关报告的运行配置（`/config_dump`）算出的摘要随配置变，文件换回后回到原值。多个实例之间的情况在 `tests/integration/kubernetes` 里。注意事项见下面"配置回读"。 | `P1-RB-01/02` |
 | 发布器能否从别的机器读到这些，又不把网关的管理地址交出去？ | **能**。网关另开一个要客户端证书的监听，只认发布器的身份，只把这两个 GET 转给本机的管理地址。管理地址上别的东西（关停、改日志级别、调试、写配置）在这个监听上一概没有；别的调用方连回应都得不到。 | `P1-RB-03` |
 
@@ -193,9 +194,27 @@ G03 要求发布之后逐个实例回读，确认生效的是批准的那一份�
 - **mTLS 证明的是"谁在调用 PDP"，不是"调用方 Token 里写了什么"**。租户和服务身份仍然是网关转述的：PDP 相信它们，是因为对面是网关。网关被攻破等于这些声明可以伪造，这一点 mTLS 不改变。
 - **规范路径规则很严**：不允许 `%`，所以路径段里不能有需要编码的字符。真实 Provider 的 Operation 如果需要，得按 Operation 单独登记放宽，不能全局放开。
 
+## OAuth2 客户端凭证：向令牌端点取令牌
+
+[ADR-0011](../../../docs/adr/ADR-0011.md) 第 4 条的做法，对着替身令牌端点跑。`gateway-authz` 从第三个凭证文件（`--oauth-clients`）读每个账户的令牌端点、客户端标识、客户端密钥和 `key_version`，用 `client_credentials` 加 HTTP Basic 去取访问令牌，按账户缓存，把 `Bearer 令牌` 放进允许响应的 `Authorization` 头。取到的是 Bearer 令牌，所以**没有加网关路由**，用现有的 `tracking.get` 那条问 PDP 的 Bearer 路由；登记表里那条路由多了两个租户、各带一个账户（`tenant-oauth-1`/`account-oauth-1`、`tenant-oauth-2`/`account-oauth-2`），原有租户和账户没有动。账户放进已有的租户会让它们有两个账户、"唯一获授账户"的选择失效，所以用了新租户。替身令牌端点是 Mock Provider 的一个路径（`/oauth/token`），同一个进程、同一个端口：核对 Basic 里的客户端和密钥，给每个客户端发各自的令牌并记住它属于哪个账户，Provider 的业务端点收到这样的令牌时认它、在应答里说出账户，过了寿命就不认；用例通过 `/admin/oauth/config` 控制它的寿命、延迟和故障，通过 `/admin/oauth` 读每个客户端被取了几次、各次用的是哪一个密钥。令牌端点的请求不进 `/admin/hits`。
+
+这八个用例排在最后。每个用例开头把客户端文件换成一份 `key_version` 新的，`gateway-authz` 因此认为键都变了、缓存是空的，没有哪个用例从前一个留下的缓存开始。
+
+- **各拿各的**（`P1-OA-01`）。两个账户的请求到 Provider 时各带着发给自己客户端的令牌；令牌端点各被问一次，带着文件里写的 `scope`（`account-oauth-1` 的是两个记号 `parcels.read parcels.write`，替身报告它收到的整串，与文件里的一致）和 `audience`。
+- **缓存与换新**（`P1-OA-02`、`03`）。连着五个请求只取一次。寿命设成五秒：两秒时还是第一枚，4.7 秒（最后十分之一里）的请求用的是新的一枚，第二次取发生在第一枚的五秒之内。
+- **并发**（`P1-OA-04`）。令牌端点慢 0.4 秒，十二个请求同时来，全部 200，令牌端点只被问一次，十二个请求用的是同一枚。
+- **取不到**（`P1-OA-05`）。十三种做法：状态 500、401，重定向（不跟随，禁止目标什么都没收到），`token_type` 不对、没有、没有 `expires_in`、为 0、是字符串，令牌为空，不是 JSON，JSON 数组，连接被掐断，超过超时才答；另有一个没人监听的端口。每一种：调用方得到 503、`INDETERMINATE`、`CREDENTIAL_UNAVAILABLE`，Provider 什么都没收到；超时的那种约 0.8 秒就拒绝；端点恢复之后下一个请求照常。另造了一条：先取到一枚，等它进入该换新的最后十分之一、令牌端点同时坏掉，两个请求都被拒绝，而那一枚在 Provider 那里还没过期（直接拿它去问 Provider 得到 200）；端点恢复后用的是新的一枚。
+- **换密钥**（`P1-OA-06`）。令牌端点只认新密钥之后，把客户端文件换成新密钥加新 `key_version`：下一个请求就是用新密钥取了新令牌，替身报告那一次用的是第二个密钥，没有拒绝过一次；`gateway-authz` 同一个进程。换上去的文件不合格（非回环的明文 `http`、别人可读）时，继续用上一份，缓存的令牌照用，令牌端点没有再被问，`gateway-authz` 各记一行。
+- **撤销**（`P1-OA-07`）。令牌已缓存，撤销账户：403 `ACCOUNT_REVOKED`，Provider 没收到，令牌端点没有再被问；恢复之后用的是缓存里原来那一枚。
+- **日志和应答**（`P1-OA-08`）。网关的日志、`gateway-authz` 的日志、这几个用例里调用方得到的全部应答（成功的、被拒绝的、被撤销的）里，没有客户端密钥、替身发过的任何访问令牌和 Basic 头；`gateway-authz` 的日志里有每次取令牌的行（句柄、类别、用时、`expires_in`），没有令牌端点应答的正文。
+
+文件写得不对时不启动（权限不是 0600、非回环的明文 `http`、句柄与另一个文件重复、`--oauth-timeout` 不合法），黑盒里没有对应的用例：第一步的同类检查（开发者令牌文件）也没有另起进程做，所以这几条只在 Go 单元测试里（`cmd/gateway-authz` 的 `TestOAuthFlagsRefuseToStart`、`oauthclient` 的文件测试）。
+
+这一段证明的是本仓库这一侧：取令牌、缓存、拒绝和不泄露，对着一个按 RFC 6749 回答的替身。令牌端点是回环上的明文 HTTP，不是真的令牌端点，也没有 HTTPS 的场景。
+
 ## 没有覆盖
 
-`gateway-authz` 跑的是验收构建，登记表、凭证和撤销表都来自为这次运行写的文件，撤销者的证书也是为这次运行签发的（没有真实身份源、授权库、Secret Manager、Provider 令牌端点），没有调用已部署的 Gatekeeper；Provider 是回环 Mock，开发者令牌那条路由的对端也是它，承运商的沙箱没有被调用；本地 Broker 是 Mock，存储是一个 JSON 文件。mTLS 只在网关到 PDP、Broker 到 PDP 两段上是真的，CA 和证书每次运行临时生成：没有 SPIFFE Workload API，没有证书轮换和吊销；调用方到网关、网关到 Provider 是明文 HTTP。单进程，没有限流、负载；多副本和配置的滚动替换在 `tests/integration/kubernetes` 里，用的是一份没有 JWT 和 ExtAuthZ 的小配置。回读口只在这一个实例上、用为这次运行现做的发布器证书试过；这套用例里没有发布器，真的发布器（`cmd/gateway-control`）在 `tests/integration/compose` 里对着一份没有 JWT 和 ExtAuthZ 的小配置跑。没有 gRPC ExtAuthZ、决策缓存、CONNECT、gRPC 上游、HMAC 签名、对 Provider 的 mTLS；没有 DNS 重绑定和网络层出口 ACL。完整列表在证据文件的 `scope_limits`。
+`gateway-authz` 跑的是验收构建，登记表、凭证和撤销表都来自为这次运行写的文件，撤销者的证书也是为这次运行签发的（没有真实身份源、授权库、Secret Manager；Provider 的令牌端点只有 `P1-OA-*` 用的那个替身），没有调用已部署的 Gatekeeper；Provider 是回环 Mock，开发者令牌那条路由的对端也是它，承运商的沙箱没有被调用；本地 Broker 是 Mock，存储是一个 JSON 文件。mTLS 只在网关到 PDP、Broker 到 PDP 两段上是真的，CA 和证书每次运行临时生成：没有 SPIFFE Workload API，没有证书轮换和吊销；调用方到网关、网关到 Provider 是明文 HTTP。单进程，没有限流、负载；多副本和配置的滚动替换在 `tests/integration/kubernetes` 里，用的是一份没有 JWT 和 ExtAuthZ 的小配置。回读口只在这一个实例上、用为这次运行现做的发布器证书试过；这套用例里没有发布器，真的发布器（`cmd/gateway-control`）在 `tests/integration/compose` 里对着一份没有 JWT 和 ExtAuthZ 的小配置跑。没有 gRPC ExtAuthZ、决策缓存、CONNECT、gRPC 上游、HMAC 签名、对 Provider 的 mTLS；没有 DNS 重绑定和网络层出口 ACL。完整列表在证据文件的 `scope_limits`。
 
 ## 运行
 
@@ -233,7 +252,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
 - `pin.py`：按 `deploy/agentgateway/agentgateway.lock.json` 找到并核对 agentgateway 二进制，`--fetch` 时从锁定的镜像里把它取出来；联调套件（`tests/integration/gatekeeper/`）和 Kubernetes 套件（`tests/integration/kubernetes/`）也用它。
 - PDP 不在这个目录里：是仓库根下的 `cmd/gateway-authz`，双向 TLS，按客户端证书里的身份决定谁能调哪个端点；实现了 `contracts/gatekeeper/openapi.yaml` 的 `/v1/extauthz/check`（模式 A）、`/v1/egress/authorizations/decision`（模式 B）和改撤销表的 `/v1/egress/revocations`。本套件用的控制接口在 `cmd/gateway-authz/hooks_on.go`，只有带 `acceptance` 标签的构建里才有。
 - `mock_broker.py`：Mock 本地 Broker。`pki.py`：每次运行的 CA、证书和 TLS 连接；证书里有网关、Broker、发布器、撤销者等几个工作负载身份。
-- `mock_provider.py`：记录收到的每个请求；按 Bearer 令牌认账户，`/v1/parcels/` 下按 `Hc-OweDeveloper 账号;令牌;随机数` 认，同一个随机数只收一次。`policy.poc.json`：两租户两账户的授权数据。
+- `mock_provider.py`：记录收到的每个请求；按 Bearer 令牌认账户，`/v1/parcels/` 下按 `Hc-OweDeveloper 账号;令牌;随机数` 认，同一个随机数只收一次。`/oauth/token` 是替身令牌端点（`P1-OA-*`）。`policy.poc.json`：四个租户四个账户的授权数据（两个是 `P1-OA-*` 用的）。
 - `front.nginx.conf`：前置 nginx 的配置。给 agentgateway 上游的报告（英文，含最小复现）在 `docs/upstream/`。
 - `run.py`：用例与期望。`evidence/p1-run-agentgateway-<版本>.json`：最近一次运行的逐项检查与观察值，含二进制、锁定文件与配置的 SHA-256。
 
