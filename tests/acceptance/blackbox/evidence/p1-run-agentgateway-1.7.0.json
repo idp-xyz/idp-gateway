@@ -1,12 +1,12 @@
 {
   "title": "IDP Gateway black-box suite: real agentgateway, gateway-authz (acceptance build), mock provider",
-  "started_at_utc": "2026-11-18T14:39:44.399229+00:00",
-  "finished_at_utc": "2026-11-18T14:40:25.197475+00:00",
+  "started_at_utc": "2026-11-18T16:56:23.551988+00:00",
+  "finished_at_utc": "2026-11-18T16:57:19.923082+00:00",
   "operator": "tops",
   "host": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "python": "3.12.3",
   "command": ".venv/bin/python tests/acceptance/blackbox/run.py",
-  "repository_commit": "48c0b23e2f3168b06222685e460d532be88cbe9f",
+  "repository_commit": "cc98574f9f42104cbee79f918b34d4de768d84b0",
   "repository_dirty_files": 0,
   "repository_dirty_files_ignores": "tests/acceptance/blackbox/evidence/",
   "agentgateway": {
@@ -25,7 +25,7 @@
     "pinned_by": "deploy/agentgateway/agentgateway.lock.json",
     "lock_sha256": "0960e8d2fbd33bfc288930bc5bfccaedae69675c273be764327fd9d2128f0cb3",
     "config_file": "tests/acceptance/blackbox/agentgateway.poc.yaml",
-    "config_sha256": "c46c0be0b8d51a1d1f2ec961a6c6e846f759bb5515e56653a28c7f9e6a115114",
+    "config_sha256": "32477b82767c0c7ac891b7b35c5c92a02368868e67ed4d86347675f0ed43fb3c",
     "native_validation": "Configuration is valid!",
     "session_key_supplied_by": "SESSION_KEY environment variable, generated per run, not recorded",
     "start_without_session_key_rewrites_config_file": true,
@@ -106,14 +106,14 @@
     }
   },
   "policy_sha256": "49d0f2f15583466032ca59f4f742953463594e0ea66e171be80d882a12b851e3",
-  "runner_sha256": "b9712b52dd535bb3617aecff2e126e636af8630f82aff0bc615295bdddd7dff9",
+  "runner_sha256": "67e2e4af79c98a9ae918aa618183c0b0f17132befed83f05a9987b640c24cb0c",
   "gateway_authz": {
     "what_ran": "cmd/gateway-authz built with the acceptance tag; not the product build",
     "build_command": "go build -trimpath -tags acceptance -o tests/acceptance/blackbox/.run/gateway-authz ./cmd/gateway-authz",
     "go": "go version go1.26.8 linux/amd64",
-    "source_sha256": "8e3bd17830060a2194805b2e4db810a9078686587984f3a3b63ef55cdbcea210",
+    "source_sha256": "bae17b437a1d993792f2c091e93fb5ab4c9249a8b99ba67321827b12dda532f6",
     "source_sha256_covers": "go.mod and every non-test .go file under cmd/ and internal/",
-    "binary_sha256": "f714fb0bf1090953af33b1741e8db6d878a40b351e8e45b4279466533dae5a5d",
+    "binary_sha256": "b7a6d1fb1f7e80fabd7422405df57c7800bf5a1b3df4c55913a90a6344e90829",
     "policy_from": "tests/acceptance/blackbox/policy.poc.json",
     "credentials_from": "two files written for the run, not recorded: Bearer tokens (--credentials), and account numbers with developer tokens (--developer-tokens)",
     "revocations": "a file written for the run (--revocations), empty at the start; changed through the acceptance controls and, in P1-RV-02 to 05, through the product interface",
@@ -122,8 +122,8 @@
     ]
   },
   "mocks_sha256": {
-    "mock_broker.py": "13566ddb1dd1f7da5e43e38b9f7d5199c1f2c903d95d2029b60df9fa675c1000",
-    "mock_provider.py": "cc415d4516ee57fbcd59cf488133afe522ac6eaddbf6cda4fe4b5fe162c94584",
+    "mock_broker.py": "2eed2fca25e57907ccfb7a45acb0c77974cf3597a80fa9600a90699fe3cfff02",
+    "mock_provider.py": "4cc67a6e4d8e92575e1ca204933edc2e7d2e26d4daf9d7f842191cf58e5ba353",
     "pki.py": "c7e5f82dfba769f0f804b09cb2856452426c9849acc182c9701666165e746955",
     "pin.py": "3138647b47d8de2792d656388c94fb07f114a35883d7f3e0a21eccd442c110a5"
   },
@@ -173,8 +173,8 @@
   ],
   "ports_left_open_after_run": [],
   "summary": {
-    "cases": 74,
-    "pass": 73,
+    "cases": 82,
+    "pass": 81,
     "fail": 1
   },
   "scope_limits": [
@@ -1115,7 +1115,7 @@
           "x-client-trace"
         ],
         "traceparent_the_provider_received": [
-          "00-0af7651916cd43dd8537bf50925c1ba0-ed6ec732d6a7ec0a-01"
+          "00-0af7651916cd43dd8537bf50925c1ba0-10a75394e97b625a-01"
         ]
       },
       "indicative_for": [
@@ -1835,7 +1835,7 @@
       ],
       "observed": {
         "status": 504,
-        "seconds": 2.002,
+        "seconds": 2.012,
         "provider_hits": 1
       },
       "indicative_for": [
@@ -2677,15 +2677,15 @@
       "observed": {
         "Gatekeeper answers 500": {
           "status": 503,
-          "seconds": 0.004
+          "seconds": 0.045
         },
         "Gatekeeper slower than the broker waits": {
           "status": 503,
-          "seconds": 0.745
+          "seconds": 0.748
         },
         "Gatekeeper down": {
           "status": 503,
-          "seconds": 0.002
+          "seconds": 0.003
         },
         "broker down": {
           "status": 503,
@@ -3183,7 +3183,7 @@
       ],
       "observed": {
         "log_lines": {
-          "agentgateway": 185,
+          "agentgateway": 190,
           "gateway-authz": 145
         }
       },
@@ -3327,7 +3327,7 @@
           "revoked_accounts": [
             {
               "account_id": "account-blue",
-              "revoked_at": "2026-11-18T14:40:20Z",
+              "revoked_at": "2026-11-18T16:57:01Z",
               "revoked_by": "spiffe://idp.test/egress/revoker",
               "reason": "black-box: credential reported leaked"
             }
@@ -3685,13 +3685,13 @@
         }
       ],
       "observed": {
-        "seconds_until_the_failure_was_reported": 0.3,
+        "seconds_until_the_failure_was_reported": 0.31,
         "configReload": {
           "synchronized": false,
-          "lastError": "routes[8]: unknown field `notAFieldOfARoute` at line 505 column 3"
+          "lastError": "routes[8]: unknown field `notAFieldOfARoute` at line 529 column 3"
         },
         "api_config_effective_shows_the_rejected_file": true,
-        "seconds_until_the_reload_was_reported_applied_again": 0.3
+        "seconds_until_the_reload_was_reported_applied_again": 0.41
       },
       "indicative_for": [
         "GW-AT-014",
@@ -3888,7 +3888,7 @@
         }
       ],
       "observed": {
-        "log_lines": 257,
+        "log_lines": 264,
         "routes_exercised": 4
       },
       "indicative_for": [
@@ -3969,6 +3969,618 @@
         "GW-AT-014",
         "GW-NFR-04",
         "GW-FR-014"
+      ]
+    },
+    {
+      "id": "P1-CO-01",
+      "title": "a create call, found from its reference number alone",
+      "expectation": "exactly one gateway line carries the reference number; it names the gateway-authz decision, the tenant and the provider's process number, and the decision is the one line gateway-authz wrote for this call",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "201, with a process number and the reference number in the answer",
+          "ok": true
+        },
+        {
+          "check": "the gateway log has exactly one line with the reference number",
+          "ok": true
+        },
+        {
+          "check": "that line has the decision id",
+          "ok": true
+        },
+        {
+          "check": "...the tenant from the caller's token",
+          "ok": true
+        },
+        {
+          "check": "...the provider's process number, the one the caller received",
+          "ok": true
+        },
+        {
+          "check": "...the reference number as a field",
+          "ok": true
+        },
+        {
+          "check": "...and the route is the create route",
+          "ok": true
+        },
+        {
+          "check": "gateway-authz has exactly one \"egress authorization\" line with that decision id",
+          "ok": true
+        },
+        {
+          "check": "...it is an ALLOW",
+          "ok": true
+        },
+        {
+          "check": "...for this route, tenant and operation",
+          "ok": true
+        },
+        {
+          "check": "the provider received the request",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "gateway_lines_with_the_reference_number": 1,
+        "gateway_line_fields": {
+          "route": "default/mockcarrier-labels-create",
+          "http.status": "201",
+          "authz_decision_id": "dec-9666bad8b47f",
+          "tenant_ref": "tenant-blue",
+          "provider_reference_id": "CO-16bbe25bd1",
+          "provider_request_id": "PC-5da6899c9312"
+        },
+        "gateway_authz_lines_with_the_decision": 1
+      },
+      "indicative_for": [
+        "GW-FR-017"
+      ]
+    },
+    {
+      "id": "P1-CO-02",
+      "title": "two tenants create one call each",
+      "expectation": "each reference number leads to its own decision and process number; nothing is crossed",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "both answered 201",
+          "ok": true
+        },
+        {
+          "check": "tenant-blue: exactly one gateway line with its reference number",
+          "ok": true
+        },
+        {
+          "check": "tenant-blue: the line has its tenant and the process number its caller received",
+          "ok": true
+        },
+        {
+          "check": "tenant-blue: the decision id is one line at gateway-authz, for that tenant, with that tenant's account",
+          "ok": true
+        },
+        {
+          "check": "tenant-green: exactly one gateway line with its reference number",
+          "ok": true
+        },
+        {
+          "check": "tenant-green: the line has its tenant and the process number its caller received",
+          "ok": true
+        },
+        {
+          "check": "tenant-green: the decision id is one line at gateway-authz, for that tenant, with that tenant's account",
+          "ok": true
+        },
+        {
+          "check": "the two lines have different decision ids and different process numbers",
+          "ok": true
+        }
+      ],
+      "observed": {},
+      "indicative_for": [
+        "GW-FR-017",
+        "GW-NAT-001"
+      ]
+    },
+    {
+      "id": "P1-CO-03",
+      "title": "the Mode B route and the other GET routes that ask the PDP",
+      "expectation": "the line has the decision id and the tenant, and that decision is found at gateway-authz; there is no reference number or process number on a call that has none",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "tracking (Mode A): 200 and exactly one line",
+          "ok": true
+        },
+        {
+          "check": "tracking (Mode A): the line has the decision id, the tenant and the route",
+          "ok": true
+        },
+        {
+          "check": "tracking (Mode A): no reference number and no process number",
+          "ok": true
+        },
+        {
+          "check": "tracking (Mode A): exactly one gateway-authz line with that decision id, an ALLOW for this route",
+          "ok": true
+        },
+        {
+          "check": "manifests (Mode B, local broker): 200 and exactly one line",
+          "ok": true
+        },
+        {
+          "check": "manifests (Mode B, local broker): the line has the decision id, the tenant and the route",
+          "ok": true
+        },
+        {
+          "check": "manifests (Mode B, local broker): no reference number and no process number",
+          "ok": true
+        },
+        {
+          "check": "manifests (Mode B, local broker): exactly one gateway-authz line with that decision id, an ALLOW for this route",
+          "ok": true
+        },
+        {
+          "check": "pickups (key.expression): 200 and exactly one line",
+          "ok": true
+        },
+        {
+          "check": "pickups (key.expression): the line has the decision id, the tenant and the route",
+          "ok": true
+        },
+        {
+          "check": "pickups (key.expression): no reference number and no process number",
+          "ok": true
+        },
+        {
+          "check": "pickups (key.expression): exactly one gateway-authz line with that decision id, an ALLOW for this route",
+          "ok": true
+        },
+        {
+          "check": "parcels (developer token): 200 and exactly one line",
+          "ok": true
+        },
+        {
+          "check": "parcels (developer token): the line has the decision id, the tenant and the route",
+          "ok": true
+        },
+        {
+          "check": "parcels (developer token): no reference number and no process number",
+          "ok": true
+        },
+        {
+          "check": "parcels (developer token): exactly one gateway-authz line with that decision id, an ALLOW for this route",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "tracking (Mode A): the gateway-authz line": {
+          "endpoint": "/v1/extauthz/check",
+          "caller": "spiffe://idp.test/egress/agentgateway"
+        },
+        "manifests (Mode B, local broker): the gateway-authz line": {
+          "endpoint": "/v1/egress/authorizations/decision",
+          "caller": "spiffe://idp.test/egress/credential-broker"
+        },
+        "pickups (key.expression): the gateway-authz line": {
+          "endpoint": "/v1/extauthz/check",
+          "caller": "spiffe://idp.test/egress/agentgateway"
+        },
+        "parcels (developer token): the gateway-authz line": {
+          "endpoint": "/v1/extauthz/check",
+          "caller": "spiffe://idp.test/egress/agentgateway"
+        }
+      },
+      "indicative_for": [
+        "GW-FR-017"
+      ]
+    },
+    {
+      "id": "P1-CO-04",
+      "title": "a reference number that is not of the accepted form",
+      "expectation": "one line for each call; the log has (malformed) or no such field, and none of what the caller put there; the provider receives the body byte for byte; the caller gets its answer",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "a string with a quote and a newline: 201 for the caller",
+          "ok": true
+        },
+        {
+          "check": "a string with a quote and a newline: the gateway log grew by exactly one line",
+          "ok": true
+        },
+        {
+          "check": "a string with a quote and a newline: it says (malformed) or has no such field",
+          "ok": true
+        },
+        {
+          "check": "a string with a quote and a newline: nothing of what the caller put there is in the line",
+          "ok": true
+        },
+        {
+          "check": "a string with a quote and a newline: the provider received the body byte for byte, and said so",
+          "ok": true
+        },
+        {
+          "check": "a string of 5000 characters: 201 for the caller",
+          "ok": true
+        },
+        {
+          "check": "a string of 5000 characters: the gateway log grew by exactly one line",
+          "ok": true
+        },
+        {
+          "check": "a string of 5000 characters: it says (malformed) or has no such field",
+          "ok": true
+        },
+        {
+          "check": "a string of 5000 characters: nothing of what the caller put there is in the line",
+          "ok": true
+        },
+        {
+          "check": "a string of 5000 characters: the provider received the body byte for byte, and said so",
+          "ok": true
+        },
+        {
+          "check": "a number: 201 for the caller",
+          "ok": true
+        },
+        {
+          "check": "a number: the gateway log grew by exactly one line",
+          "ok": true
+        },
+        {
+          "check": "a number: it says (malformed) or has no such field",
+          "ok": true
+        },
+        {
+          "check": "a number: nothing of what the caller put there is in the line",
+          "ok": true
+        },
+        {
+          "check": "a number: the provider received the body byte for byte, and said so",
+          "ok": true
+        },
+        {
+          "check": "an object: 201 for the caller",
+          "ok": true
+        },
+        {
+          "check": "an object: the gateway log grew by exactly one line",
+          "ok": true
+        },
+        {
+          "check": "an object: it says (malformed) or has no such field",
+          "ok": true
+        },
+        {
+          "check": "an object: nothing of what the caller put there is in the line",
+          "ok": true
+        },
+        {
+          "check": "an object: the provider received the body byte for byte, and said so",
+          "ok": true
+        },
+        {
+          "check": "an empty string: 201 for the caller",
+          "ok": true
+        },
+        {
+          "check": "an empty string: the gateway log grew by exactly one line",
+          "ok": true
+        },
+        {
+          "check": "an empty string: it says (malformed) or has no such field",
+          "ok": true
+        },
+        {
+          "check": "an empty string: nothing of what the caller put there is in the line",
+          "ok": true
+        },
+        {
+          "check": "an empty string: the provider received the body byte for byte, and said so",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "a string with a quote and a newline: the logged value": "(malformed)",
+        "a string of 5000 characters: the logged value": "(malformed)",
+        "a number: the logged value": "(no such field)",
+        "an object: the logged value": "(no such field)",
+        "an empty string: the logged value": "(malformed)"
+      },
+      "indicative_for": [
+        "GW-FR-017",
+        "GW-NFR-05"
+      ]
+    },
+    {
+      "id": "P1-CO-05",
+      "title": "the provider answers with a process number that is not of the accepted form",
+      "expectation": "one line for the call; the log has (malformed) for the process number; the caller gets the provider's answer unchanged",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "the gateway log grew by exactly one line",
+          "ok": true
+        },
+        {
+          "check": "the process number is written as (malformed)",
+          "ok": true
+        },
+        {
+          "check": "the reference number, which was fine, is written",
+          "ok": true
+        },
+        {
+          "check": "nothing of the provider's process number is in the line",
+          "ok": true
+        },
+        {
+          "check": "the caller got 201 and the provider's answer as it was: the long process number with its quote and newline",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "process_number_as_logged": "(malformed)"
+      },
+      "indicative_for": [
+        "GW-FR-017",
+        "GW-NFR-05"
+      ]
+    },
+    {
+      "id": "P1-CO-06",
+      "title": "calls the PDP refuses, and a call the PDP cannot be asked about",
+      "expectation": "a refused call carries the id of the decision that refused it: the caller's 403 has it in the X-Idp-Decision-Id header and as decision_id in the body, the same one; the gateway line has it as authz_decision_id; gateway-authz has exactly one DENY line with it; nothing is forwarded. The line has no reference number (1.7.0 reads no request body on a refused call). When the PDP cannot be asked there is no decision and the line has no decision id",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "a tenant with no grant: 403 with the PDP's reason, nothing forwarded",
+          "ok": true
+        },
+        {
+          "check": "a tenant with no grant: the 403 carries a decision id, in the header and in the body, the same one",
+          "ok": true
+        },
+        {
+          "check": "a tenant with no grant: one gateway line",
+          "ok": true
+        },
+        {
+          "check": "a tenant with no grant: the line has that decision id as authz_decision_id",
+          "ok": true
+        },
+        {
+          "check": "a tenant with no grant: gateway-authz wrote exactly one line for the call, a DENY with that decision id",
+          "ok": true
+        },
+        {
+          "check": "a tenant with no grant: the line has no reference number",
+          "ok": true
+        },
+        {
+          "check": "a revoked account: 403 with the PDP's reason, nothing forwarded",
+          "ok": true
+        },
+        {
+          "check": "a revoked account: the 403 carries a decision id, in the header and in the body, the same one",
+          "ok": true
+        },
+        {
+          "check": "a revoked account: one gateway line",
+          "ok": true
+        },
+        {
+          "check": "a revoked account: the line has that decision id as authz_decision_id",
+          "ok": true
+        },
+        {
+          "check": "a revoked account: gateway-authz wrote exactly one line for the call, a DENY with that decision id",
+          "ok": true
+        },
+        {
+          "check": "a revoked account: the line has no reference number",
+          "ok": true
+        },
+        {
+          "check": "the PDP cannot be asked: 503 from the gateway itself, with no decision id in the header or the body",
+          "ok": true
+        },
+        {
+          "check": "the PDP cannot be asked: one gateway line, without authz_decision_id",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "a tenant with no grant: the gateway line": {
+          "http.status": "403",
+          "reason": "DirectResponse",
+          "authz_decision_id": "dec-5473cc310c75",
+          "tenant_ref": "tenant-red",
+          "provider_reference_id": null
+        },
+        "a tenant with no grant: the 403 body": {
+          "decision_id": "dec-5473cc310c75",
+          "result": "DENY",
+          "reason_code": "TENANT_NOT_GRANTED",
+          "policy_version": "poc-p1",
+          "revocation_epoch": 16
+        },
+        "a tenant with no grant: the X-Idp-Decision-Id header of the 403": [
+          "dec-5473cc310c75"
+        ],
+        "a revoked account: the gateway line": {
+          "http.status": "403",
+          "reason": "DirectResponse",
+          "authz_decision_id": "dec-36f3d92ff2bb",
+          "tenant_ref": "tenant-blue",
+          "provider_reference_id": null
+        },
+        "a revoked account: the 403 body": {
+          "decision_id": "dec-36f3d92ff2bb",
+          "result": "DENY",
+          "reason_code": "ACCOUNT_REVOKED",
+          "policy_version": "poc-p1",
+          "revocation_epoch": 17
+        },
+        "a revoked account: the X-Idp-Decision-Id header of the 403": [
+          "dec-36f3d92ff2bb"
+        ],
+        "the PDP cannot be asked: the gateway line": {
+          "http.status": "503",
+          "reason": "DirectResponse",
+          "authz_decision_id": null,
+          "tenant_ref": "tenant-blue"
+        }
+      },
+      "indicative_for": [
+        "GW-FR-017"
+      ]
+    },
+    {
+      "id": "P1-CO-07",
+      "title": "what the logs hold of a call that carries token-like strings, a JWT and credentials",
+      "expectation": "no planted token-like string from the body, no caller JWT and no provider credential in the gateway line or in gateway-authz's lines",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "the create call was answered 201",
+          "ok": true
+        },
+        {
+          "check": "the gateway line for the call exists (so the search below is not empty)",
+          "ok": true
+        },
+        {
+          "check": "gateway-authz lines for these calls exist",
+          "ok": true
+        },
+        {
+          "check": "the gateway: none of the planted strings",
+          "ok": true
+        },
+        {
+          "check": "the gateway: no caller JWT",
+          "ok": true
+        },
+        {
+          "check": "the gateway: no provider credential",
+          "ok": true
+        },
+        {
+          "check": "the gateway: no broker key and no session key",
+          "ok": true
+        },
+        {
+          "check": "gateway-authz: none of the planted strings",
+          "ok": true
+        },
+        {
+          "check": "gateway-authz: no caller JWT",
+          "ok": true
+        },
+        {
+          "check": "gateway-authz: no provider credential",
+          "ok": true
+        },
+        {
+          "check": "gateway-authz: no broker key and no session key",
+          "ok": true
+        }
+      ],
+      "observed": {},
+      "indicative_for": [
+        "GW-AT-007",
+        "GW-FR-007",
+        "GW-NFR-05"
+      ]
+    },
+    {
+      "id": "P1-CO-08",
+      "title": "a provider that names a decision in its answer, in the body or in a header",
+      "expectation": "the decision id on the gateway line is only ever the PDP's: a provider's body cannot write it, and a provider's X-Idp-Decision-Id header is removed before the caller or the log expression sees it, on a route that asks the PDP and on one that does not",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "200, and the answer the caller got does name a decision (so there was something to copy)",
+          "ok": true
+        },
+        {
+          "check": "one gateway line, on the static-credential route",
+          "ok": true
+        },
+        {
+          "check": "the line has no decision id",
+          "ok": true
+        },
+        {
+          "check": "nothing of the forged id is in the line",
+          "ok": true
+        },
+        {
+          "check": "the tenant is on the line all the same",
+          "ok": true
+        },
+        {
+          "check": "gateway-authz was not asked",
+          "ok": true
+        },
+        {
+          "check": "header forged, route without a PDP: 200 with the provider's answer",
+          "ok": true
+        },
+        {
+          "check": "...the caller's answer has no X-Idp-Decision-Id header",
+          "ok": true
+        },
+        {
+          "check": "...one gateway line, on the static-credential route, without authz_decision_id",
+          "ok": true
+        },
+        {
+          "check": "...nothing of the forged id is in the line",
+          "ok": true
+        },
+        {
+          "check": "header forged after an allow: 200",
+          "ok": true
+        },
+        {
+          "check": "...gateway-authz wrote one ALLOW line, and one gateway line has its decision id",
+          "ok": true
+        },
+        {
+          "check": "...the caller's answer has no X-Idp-Decision-Id header, the PDP's or the provider's",
+          "ok": true
+        },
+        {
+          "check": "...nothing of the forged id is in the line",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "body_forged_gateway_line_fields": {
+          "route": "default/mockcarrier-rates-get-static",
+          "authz_decision_id": null,
+          "tenant_ref": "tenant-blue",
+          "provider_reference_id": null,
+          "provider_request_id": null
+        },
+        "header_forged_no_pdp_gateway_line_fields": {
+          "route": "default/mockcarrier-rates-get-static",
+          "authz_decision_id": null,
+          "tenant_ref": "tenant-blue"
+        },
+        "header_forged_after_allow_gateway_line_fields": {
+          "route": "default/mockcarrier-tracking-get",
+          "authz_decision_id": "dec-f48bfee4445a",
+          "tenant_ref": "tenant-blue"
+        }
+      },
+      "indicative_for": [
+        "GW-FR-017"
       ]
     }
   ]
