@@ -532,7 +532,27 @@ Prometheus 容器的 `/prometheus` 是 tmpfs。进程不是 root 时，这个 tm
 
 只在套件之外看过一次（2026-11-18，一次，同一个部署文件的池，真的看守 `gateway-control keep --interval 1s`），套件里没有检查看着它：看守修好一个 `orphaned` 的池之后，规则在不在。`netns` 单独被 `docker kill`，看守写的是 `orphaned`，做了先停后启动，修好了，对账 `IN_SYNC`。它停的只有 `front` 和网关（`docker compose stop front agentgateway`）。之后各容器的启动时刻：`netns` 14:32:30.899，`egress` 14:32:31.686，`egress-watch` 14:32:32.278，网关 14:32:32.349，`front` 14:32:33.065：`egress` 这一步在新的 `netns` 之后、网关之前重新跑了，以 0 跑完。之后从池的网络命名空间里：钉着的还是那两处（`echo:8000` 钉在后端的地址上，`127.0.0.1:15000`），后端连得上，后端那个地址的另一个端口和 `192.0.2.1:443` 都被规则拒绝（113），经 `front` 的请求得到 200。
 
-`SH-22` 的对照（把做法改坏几处，看有没有检查不通过）没有留下记录，当作没有做。
+`SH-22` 的对照（2026-11-18，仓库的一份副本里，提交 `a4b82db`；把做法改坏，一次一处，跑完从 git 恢复成原样，真的工作区没有动过）。改的是 `deploy/compose/pin-egress.sh` 的 11 处和 `deploy/compose/compose.yml` 的 4 处，一共 15 处。`SH-22` 是单独跑的，没有跑整套：一个驱动脚本照套件里的做法把池摆好（放一份快照、起后端、`docker compose up -d`、用发布器做一次带重启的发布留下记录、再 `up -d` 把 `front` 开起来；用的快照带回读路由 `v`，因为 `SH-22` 要看它转给的管理地址被钉住），然后只调 `SH-22` 那一段。驱动脚本不在仓库里。没有改动的做法在改坏之前和 15 处全部做完之后各跑了一遍，都是 `SH-22` 15 项全过，`tests/contracts` 144 个全过。每一处还跑了 `tests/contracts`。15 处每一处都至少有一个检查不通过，没有超时，没有脚本异常，摆池都成功。
+
+| 改掉的 | `SH-22` 里不通过的 | `tests/contracts` 里不通过的 |
+|---|---|---|
+| 1. `pin-egress.sh`：一个名字每次都重新解析 | 四项：钉着的是配置里写着的两处；部署说明里写的那条重新解析的命令；新的网络命名空间里规则在；池又是完整的 | 没有 |
+| 2. `pin-egress.sh`：解析器按 53 端口放行 | 四项：后端的名字解析得了，后端连得上；部署说明里写的那条重新解析的命令；再跑启动命令（退出码 0，`egress` 在网关启动之前重新跑了）；配置文件改回 0644 再跑启动命令 | 没有 |
+| 3. `pin-egress.sh`：规则先清空再重建 | 两项：后端那个地址的另一个端口、回环上网关的指标端口、一个不相干的地址被规则拒绝；这 8 秒里连了不少于 500 次，每一次都被规则拒绝 | `test_both_egress_services_run_the_script_in_the_namespace_of_the_holder` |
+| 4. `pin-egress.sh`：一个名字只钉一个地址 | 没有。发现它的是 egressnet 的 EG-05 | 没有 |
+| 5. `pin-egress.sh`：`forget` 不丢掉钉住的 | 一项：部署说明里写的那条重新解析的命令 | 没有 |
+| 6. `pin-egress.sh`：没有放行的一律接受 | 三项：后端那个地址的另一个端口、回环上网关的指标端口、一个不相干的地址被规则拒绝；这 8 秒里连了不少于 500 次；新的网络命名空间里规则在 | 没有 |
+| 7. `pin-egress.sh`：不装 IPv6 的规则 | 一项：后端那个地址的另一个端口、回环上网关的指标端口、一个不相干的地址被规则拒绝，IPv6 的 | 没有 |
+| 8. `pin-egress.sh`：`OUTPUT` 不跳到这条链 | 三项：后端那个地址的另一个端口……被规则拒绝；这 8 秒里连了不少于 500 次；新的网络命名空间里规则在 | `test_both_egress_services_run_the_script_in_the_namespace_of_the_holder` |
+| 9. `pin-egress.sh`：不放行上游解析器 | 没有。发现它的是 egressnet 的 EG-02、EG-03、EG-04、EG-05、EG-07、EG-08 | 没有 |
+| 10. `pin-egress.sh`：配置里去掉的后端仍然放行 | 没有。发现它的是 egressnet 的 EG-07、EG-08 | 没有 |
+| 11. `pin-egress.sh`：常驻的那个一遍没跑成就退出 | 没有。发现它的是 egressnet 的 EG-08、EG-06 | 没有 |
+| 12. `compose.yml`：网关不等 `egress` | 三项：再跑启动命令（退出码 0，`egress` 在网关启动之前重新跑了）；网关没有被这次 `up` 启动；配置文件改回 0644 再跑启动命令 | `test_the_gateway_starts_after_the_confirmed_snapshot_is_in_place_and_the_egress_rules_are_in` |
+| 13. `compose.yml`：`egress-watch` 不与 `netns` 共用 PID 命名空间 | 没有。只有 `tests/contracts` 发现 | `test_the_keeper_knows_the_long_running_services_by_their_names`，`test_the_egress_watcher_cannot_outlive_the_namespace_it_was_started_in` |
+| 14. `compose.yml`：回环不放行 `127.0.0.1:8081` | 四项：后端的名字解析得了，后端连得上，回环上 `front` 转给网关的那个端口和管理地址连得上；部署说明里写的那条重新解析的命令；再跑启动命令；配置文件改回 0644 再跑启动命令 | `test_both_egress_services_run_the_script_in_the_namespace_of_the_holder`（`egress` 和 `egress-watch` 各一个子项） |
+| 15. `compose.yml`：装规则的容器多一个 capability（`DAC_OVERRIDE`） | 四项：`egress` 这一步已经以退出码 0 跑完，两个都是 root，除了 `NET_ADMIN`；`egress` 读不了配置（配置文件是 0600）；网关没有被这次 `up` 启动；配置文件改回 0644 再跑启动命令 | `test_every_container_is_locked_down`（`egress` 和 `egress-watch` 各一个子项） |
+
+第 13 处：`SH-22` 里"断电：`egress-watch` 跟着 `netns` 死了"那一项照样通过。脚本发现命名空间里没有地址了自己也会退出，只是慢一些：那一遍记下的是 0.95 秒、退出码 1；没有改坏时三轮都是 0.06 秒、退出码 137（上面"断电之后"）。所以这一项检查分不出起作用的是共用 PID 命名空间，还是脚本自己发现命名空间没了；只有 `tests/contracts` 的那两条测试发现了这一处。`pin-egress.sh` 的 11 处在隔离测试里各是哪个用例发现的，见 [`tests/integration/egressnet/README.md`](../egressnet/README.md) 的"对照"。第 3 处带偶然性，这一次第一遍就发现了，没有多跑。
 
 ## 没有覆盖的
 
