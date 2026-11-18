@@ -1,12 +1,12 @@
 {
   "title": "IDP Gateway black-box suite: real agentgateway, gateway-authz (acceptance build), mock provider",
-  "started_at_utc": "2026-11-18T06:20:27.525001+00:00",
-  "finished_at_utc": "2026-11-18T06:21:03.727162+00:00",
+  "started_at_utc": "2026-11-18T08:07:52.730165+00:00",
+  "finished_at_utc": "2026-11-18T08:08:36.016883+00:00",
   "operator": "tops",
   "host": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "python": "3.12.3",
   "command": ".venv/bin/python tests/acceptance/blackbox/run.py",
-  "repository_commit": "33e46040ef79da7b560b1a84f2274694081a02ae",
+  "repository_commit": "17aeed91ab7abf1bd4dd6f30bee663b6dc1a1413",
   "repository_dirty_files": 0,
   "repository_dirty_files_ignores": "tests/acceptance/blackbox/evidence/",
   "agentgateway": {
@@ -25,13 +25,13 @@
     "pinned_by": "deploy/agentgateway/agentgateway.lock.json",
     "lock_sha256": "0960e8d2fbd33bfc288930bc5bfccaedae69675c273be764327fd9d2128f0cb3",
     "config_file": "tests/acceptance/blackbox/agentgateway.poc.yaml",
-    "config_sha256": "3b70205fe5cbba7d382e010f05c618d239f1eaca3293217c084cbc5c4744b1b3",
+    "config_sha256": "c46c0be0b8d51a1d1f2ec961a6c6e846f759bb5515e56653a28c7f9e6a115114",
     "native_validation": "Configuration is valid!",
     "session_key_supplied_by": "SESSION_KEY environment variable, generated per run, not recorded",
     "start_without_session_key_rewrites_config_file": true,
     "start_without_session_key_rewrites_config_file_with_storage_read_only": false,
     "unmitigated_defaults": {
-      "configuration": "the reviewed configuration without: urlRewrite.authority; the canonical-path authorization rule on each route; the credential-present authorization rule on each backend; responseHeaderModifier; requestHeaderModifier; config.storage.mode; bindAddress on the callers' listener",
+      "configuration": "the reviewed configuration without: urlRewrite.authority; the canonical-path authorization rule on each route; the credential-present authorization rule on each backend; responseHeaderModifier; requestHeaderModifier; the header allow list on each backend (transformations); config.storage.mode; bindAddress on the callers' listener",
       "callers_listener_bound_to": [
         "*"
       ],
@@ -44,6 +44,11 @@
         "x-forwarded-for",
         "x-forwarded-host",
         "x-forwarded-proto"
+      ],
+      "unregistered_caller_headers_the_provider_received": [
+        "x-custom-stuff",
+        "x-evil-probe",
+        "x-internal-hint"
       ],
       "request_targets_on_the_route_without_a_pdp": {
         "/providers/mockcarrier/v1/rates/%252e%252e/admin": {
@@ -85,17 +90,30 @@
         "what_the_gateway_runs_changed": true,
         "configuration_file_rewritten_by_the_gateway": true
       }
+    },
+    "allow_list_expression_that_cannot_be_evaluated": {
+      "configuration": "the reviewed configuration with every allow-list expression replaced by: request.headers.noSuchFunction(k, true)",
+      "expressions_replaced": 6,
+      "accepted_by_the_validator": true,
+      "status": 200,
+      "unregistered_caller_headers_the_provider_received": [
+        "x-custom-stuff",
+        "x-evil-probe",
+        "x-internal-hint"
+      ],
+      "headers_removed_by_name_the_provider_received": [],
+      "lines_the_gateway_logged_beside_the_request_line": 0
     }
   },
   "policy_sha256": "49d0f2f15583466032ca59f4f742953463594e0ea66e171be80d882a12b851e3",
-  "runner_sha256": "0825ad26f277fa7108f1f8d9440a39d201136d8e92e625e1bde8c9ca4c690113",
+  "runner_sha256": "b9712b52dd535bb3617aecff2e126e636af8630f82aff0bc615295bdddd7dff9",
   "gateway_authz": {
     "what_ran": "cmd/gateway-authz built with the acceptance tag; not the product build",
     "build_command": "go build -trimpath -tags acceptance -o tests/acceptance/blackbox/.run/gateway-authz ./cmd/gateway-authz",
     "go": "go version go1.26.8 linux/amd64",
     "source_sha256": "8e3bd17830060a2194805b2e4db810a9078686587984f3a3b63ef55cdbcea210",
     "source_sha256_covers": "go.mod and every non-test .go file under cmd/ and internal/",
-    "binary_sha256": "71887d9b984ccf31f2ca67bda54e74ef88d6ac638dcfd7490a206210f70c8550",
+    "binary_sha256": "d911ced454681ca65ea5eb127cf0328df1930f91d439909048fed8e79bf26764",
     "policy_from": "tests/acceptance/blackbox/policy.poc.json",
     "credentials_from": "two files written for the run, not recorded: Bearer tokens (--credentials), and account numbers with developer tokens (--developer-tokens)",
     "revocations": "a file written for the run (--revocations), empty at the start; changed through the acceptance controls and, in P1-RV-02 to 05, through the product interface",
@@ -155,8 +173,8 @@
   ],
   "ports_left_open_after_run": [],
   "summary": {
-    "cases": 68,
-    "pass": 67,
+    "cases": 74,
+    "pass": 73,
     "fail": 1
   },
   "scope_limits": [
@@ -1049,6 +1067,364 @@
       ]
     },
     {
+      "id": "P1-HD-01",
+      "title": "registered request headers reach the provider",
+      "expectation": "every header on the allow list that the caller sent is present; the provider credential is still Authorization",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "request reached the provider once",
+          "ok": true
+        },
+        {
+          "check": "Accept preserved",
+          "ok": true
+        },
+        {
+          "check": "X-Client-Trace preserved",
+          "ok": true
+        },
+        {
+          "check": "Idempotency-Key preserved",
+          "ok": true
+        },
+        {
+          "check": "Traceparent reaches the provider",
+          "ok": true
+        },
+        {
+          "check": "...and it still carries the caller's trace id",
+          "ok": true
+        },
+        {
+          "check": "provider credential is present as Authorization",
+          "ok": true
+        },
+        {
+          "check": "the provider received no header outside the registered set",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "provider_saw_header_names": [
+          "accept",
+          "authorization",
+          "host",
+          "idempotency-key",
+          "traceparent",
+          "x-client-trace"
+        ],
+        "traceparent_the_provider_received": [
+          "00-0af7651916cd43dd8537bf50925c1ba0-6982cbcff7450696-01"
+        ]
+      },
+      "indicative_for": [
+        "GW-AT-008",
+        "GW-FR-008"
+      ]
+    },
+    {
+      "id": "P1-HD-02",
+      "title": "headers not on the allow list do not reach the provider",
+      "expectation": "caller-supplied headers outside the registered set are dropped; removals still drop Cookie and X-Forwarded-*",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "request reached the provider once",
+          "ok": true
+        },
+        {
+          "check": "no unregistered caller header reached the provider",
+          "ok": true
+        },
+        {
+          "check": "Cookie still removed",
+          "ok": true
+        },
+        {
+          "check": "X-Forwarded-For still removed",
+          "ok": true
+        },
+        {
+          "check": "registered X-Client-Trace still present",
+          "ok": true
+        },
+        {
+          "check": "the provider received no header outside the registered set",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "provider_saw_header_names": [
+          "authorization",
+          "host",
+          "x-client-trace"
+        ]
+      },
+      "indicative_for": [
+        "GW-AT-008",
+        "GW-FR-008"
+      ]
+    },
+    {
+      "id": "P1-HD-03",
+      "title": "the allow list on every provider route",
+      "expectation": "on each of the six routes the provider receives one request whose headers are registered ones or the gateway's own, with exactly one credential; headers a client commonly sends without being asked are not among them",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "Mode A: served, and the provider received one request",
+          "ok": true
+        },
+        {
+          "check": "Mode A: no header outside the registered set",
+          "ok": true
+        },
+        {
+          "check": "Mode A: the registered header the caller sent, and exactly one credential",
+          "ok": true
+        },
+        {
+          "check": "Mode A, a write: served, and the provider received one request",
+          "ok": true
+        },
+        {
+          "check": "Mode A, a write: no header outside the registered set",
+          "ok": true
+        },
+        {
+          "check": "Mode A, a write: the registered header the caller sent, and exactly one credential",
+          "ok": true
+        },
+        {
+          "check": "Mode B: served, and the provider received one request",
+          "ok": true
+        },
+        {
+          "check": "Mode B: no header outside the registered set",
+          "ok": true
+        },
+        {
+          "check": "Mode B: the registered header the caller sent, and exactly one credential",
+          "ok": true
+        },
+        {
+          "check": "Mode C: served, and the provider received one request",
+          "ok": true
+        },
+        {
+          "check": "Mode C: no header outside the registered set",
+          "ok": true
+        },
+        {
+          "check": "Mode C: the registered header the caller sent, and exactly one credential",
+          "ok": true
+        },
+        {
+          "check": "Mode A with key.expression: served, and the provider received one request",
+          "ok": true
+        },
+        {
+          "check": "Mode A with key.expression: no header outside the registered set",
+          "ok": true
+        },
+        {
+          "check": "Mode A with key.expression: the registered header the caller sent, and exactly one credential",
+          "ok": true
+        },
+        {
+          "check": "Mode A with a developer token: served, and the provider received one request",
+          "ok": true
+        },
+        {
+          "check": "Mode A with a developer token: no header outside the registered set",
+          "ok": true
+        },
+        {
+          "check": "Mode A with a developer token: the registered header the caller sent, and exactly one credential",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "provider_saw_header_names": {
+          "Mode A": [
+            "authorization",
+            "host",
+            "x-client-trace"
+          ],
+          "Mode A, a write": [
+            "authorization",
+            "content-length",
+            "content-type",
+            "host",
+            "x-client-trace"
+          ],
+          "Mode B": [
+            "authorization",
+            "host",
+            "x-client-trace"
+          ],
+          "Mode C": [
+            "authorization",
+            "host",
+            "x-client-trace"
+          ],
+          "Mode A with key.expression": [
+            "authorization",
+            "host",
+            "x-client-trace"
+          ],
+          "Mode A with a developer token": [
+            "authorization",
+            "host",
+            "x-client-trace"
+          ]
+        }
+      },
+      "indicative_for": [
+        "GW-AT-008",
+        "GW-FR-008"
+      ]
+    },
+    {
+      "id": "P1-HD-04",
+      "title": "requests made to get a header past the allow list",
+      "expectation": "none does: with a value that is not UTF-8, a name in another letter case, a header named in Connection, a registered header sent twice or a second Authorization, the provider is left with registered headers only and the one credential",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "an unregistered header whose value is not UTF-8: served, and the provider received one request",
+          "ok": true
+        },
+        {
+          "check": "an unregistered header whose value is not UTF-8: no header outside the registered set",
+          "ok": true
+        },
+        {
+          "check": "an unregistered header whose value is not UTF-8: exactly one Authorization, account-blue's credential",
+          "ok": true
+        },
+        {
+          "check": "a registered header whose value is not UTF-8: served, and the provider received one request",
+          "ok": true
+        },
+        {
+          "check": "a registered header whose value is not UTF-8: no header outside the registered set",
+          "ok": true
+        },
+        {
+          "check": "a registered header whose value is not UTF-8: exactly one Authorization, account-blue's credential",
+          "ok": true
+        },
+        {
+          "check": "names in other letter cases: served, and the provider received one request",
+          "ok": true
+        },
+        {
+          "check": "names in other letter cases: no header outside the registered set",
+          "ok": true
+        },
+        {
+          "check": "names in other letter cases: exactly one Authorization, account-blue's credential",
+          "ok": true
+        },
+        {
+          "check": "the header named in Connection: served, and the provider received one request",
+          "ok": true
+        },
+        {
+          "check": "the header named in Connection: no header outside the registered set",
+          "ok": true
+        },
+        {
+          "check": "the header named in Connection: exactly one Authorization, account-blue's credential",
+          "ok": true
+        },
+        {
+          "check": "a registered header sent twice: served, and the provider received one request",
+          "ok": true
+        },
+        {
+          "check": "a registered header sent twice: no header outside the registered set",
+          "ok": true
+        },
+        {
+          "check": "a registered header sent twice: exactly one Authorization, account-blue's credential",
+          "ok": true
+        },
+        {
+          "check": "a second Authorization after the caller's token: served, and the provider received one request",
+          "ok": true
+        },
+        {
+          "check": "a second Authorization after the caller's token: no header outside the registered set",
+          "ok": true
+        },
+        {
+          "check": "a second Authorization after the caller's token: exactly one Authorization, account-blue's credential",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "provider_saw": {
+          "an unregistered header whose value is not UTF-8": {
+            "names": [
+              "authorization",
+              "host"
+            ],
+            "x-client-trace": []
+          },
+          "a registered header whose value is not UTF-8": {
+            "names": [
+              "authorization",
+              "host"
+            ],
+            "x-client-trace": []
+          },
+          "names in other letter cases": {
+            "names": [
+              "authorization",
+              "host",
+              "x-client-trace"
+            ],
+            "x-client-trace": [
+              "keep-me"
+            ]
+          },
+          "the header named in Connection": {
+            "names": [
+              "authorization",
+              "host"
+            ],
+            "x-client-trace": []
+          },
+          "a registered header sent twice": {
+            "names": [
+              "authorization",
+              "host",
+              "x-client-trace"
+            ],
+            "x-client-trace": [
+              "one",
+              "two"
+            ]
+          },
+          "a second Authorization after the caller's token": {
+            "names": [
+              "authorization",
+              "host"
+            ],
+            "x-client-trace": []
+          }
+        }
+      },
+      "indicative_for": [
+        "GW-AT-008",
+        "GW-ST-001",
+        "GW-FR-008"
+      ]
+    },
+    {
       "id": "P1-CR-02",
       "title": "what the caller receives",
       "expectation": "the provider credential appears nowhere in the response",
@@ -1215,8 +1591,8 @@
         }
       ],
       "observed": {
-        "status": 403,
-        "seconds": 1.002
+        "status": 503,
+        "seconds": 1.003
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1245,7 +1621,7 @@
         }
       ],
       "observed": {
-        "status_while_down": 403
+        "status_while_down": 503
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1282,8 +1658,8 @@
       ],
       "observed": {
         "statuses_while_impersonated": [
-          403,
-          403
+          503,
+          503
         ]
       },
       "indicative_for": [
@@ -1326,6 +1702,81 @@
         "GW-AT-043",
         "GW-FR-006",
         "GW-FR-043"
+      ]
+    },
+    {
+      "id": "P1-FO-01",
+      "title": "the PDP refuses, and the PDP cannot be asked",
+      "expectation": "the caller can tell them apart: a policy denial is 403 with the PDP's reason; when the PDP cannot be asked the gateway answers 503 itself, on every route, and forwards nothing; an answer the PDP did give keeps the PDP's status",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "a policy denial: 403, with the PDP's reason",
+          "ok": true
+        },
+        {
+          "check": "an error the PDP answered with keeps its status: 500",
+          "ok": true
+        },
+        {
+          "check": "the PDP does not answer within the gateway's 1s timeout: 503, from the gateway itself",
+          "ok": true
+        },
+        {
+          "check": "the PDP is down: 503, from the gateway itself",
+          "ok": true
+        },
+        {
+          "check": "the same on the other routes that ask the PDP: 503, from the gateway itself",
+          "ok": true
+        },
+        {
+          "check": "a server on the PDP port whose certificate the gateway does not accept: 503 from the gateway, which sent it nothing",
+          "ok": true
+        },
+        {
+          "check": "the Mode B route while the local broker is down: 503, from the gateway itself",
+          "ok": true
+        },
+        {
+          "check": "the provider received none of these requests",
+          "ok": true
+        },
+        {
+          "check": "after the PDP and the broker are back: allowed again",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "policy_denial": {
+          "status": 403,
+          "reason_code": "ACCOUNT_NOT_GRANTED"
+        },
+        "pdp_answered_500": {
+          "status": 500
+        },
+        "pdp_slower_than_the_timeout": {
+          "status": 503,
+          "seconds": 1.003
+        },
+        "gateway_log_line_when_the_pdp_cannot_be_asked": {
+          "level": "info",
+          "http.status": "503",
+          "reason": "DirectResponse",
+          "error": null
+        },
+        "other_routes_while_the_pdp_is_down": {
+          "labels, a write": 503,
+          "pickups, key.expression": 503,
+          "parcels, developer token": 503
+        },
+        "mode_b_while_the_broker_is_down": 503
+      },
+      "indicative_for": [
+        "GW-AT-043",
+        "GW-ST-008",
+        "GW-FR-043",
+        "GW-FR-047"
       ]
     },
     {
@@ -1384,7 +1835,7 @@
       ],
       "observed": {
         "status": 504,
-        "seconds": 2.002,
+        "seconds": 2.004,
         "provider_hits": 1
       },
       "indicative_for": [
@@ -1870,7 +2321,7 @@
             503
           ]
         },
-        "seconds_slow": 2.003,
+        "seconds_slow": 2.005,
         "provider_hits": 3
       },
       "indicative_for": [
@@ -2237,8 +2688,8 @@
           "seconds": 0.002
         },
         "broker down": {
-          "status": 403,
-          "seconds": 0.002
+          "status": 503,
+          "seconds": 0.001
         }
       },
       "indicative_for": [
@@ -2732,14 +3183,61 @@
       ],
       "observed": {
         "log_lines": {
-          "agentgateway": 160,
-          "gateway-authz": 123
+          "agentgateway": 185,
+          "gateway-authz": 145
         }
       },
       "indicative_for": [
         "GW-AT-007",
         "GW-FR-007",
         "GW-NFR-05"
+      ]
+    },
+    {
+      "id": "P1-FO-02",
+      "title": "the PDP answers that it cannot decide",
+      "expectation": "holding no credential for an account its policy grants, gateway-authz answers 503 INDETERMINATE itself: the caller gets that answer and its reason, not a 403; nothing is forwarded; the other account is served",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "503, and the answer is the PDP's own: INDETERMINATE, CREDENTIAL_UNAVAILABLE",
+          "ok": true
+        },
+        {
+          "check": "the answer carries no credential",
+          "ok": true
+        },
+        {
+          "check": "the provider received nothing",
+          "ok": true
+        },
+        {
+          "check": "green, whose credential it holds, is served",
+          "ok": true
+        },
+        {
+          "check": "with the credential back: blue is served again",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "answer": {
+          "status": 503,
+          "result": "INDETERMINATE",
+          "reason_code": "CREDENTIAL_UNAVAILABLE"
+        },
+        "gateway_log_line_when_the_pdp_cannot_decide": {
+          "level": "info",
+          "http.status": "503",
+          "reason": "DirectResponse",
+          "error": null
+        }
+      },
+      "indicative_for": [
+        "GW-AT-043",
+        "GW-ST-009",
+        "GW-FR-043",
+        "GW-FR-006"
       ]
     },
     {
@@ -2829,7 +3327,7 @@
           "revoked_accounts": [
             {
               "account_id": "account-blue",
-              "revoked_at": "2026-11-18T06:20:58Z",
+              "revoked_at": "2026-11-18T08:08:30Z",
               "revoked_by": "spiffe://idp.test/egress/revoker",
               "reason": "black-box: credential reported leaked"
             }
@@ -3081,7 +3579,7 @@
           "exited": 1,
           "said": "gateway-authz: revocations .run/authz-revocations.json: mode 0644 is readable by others; want 0600 or stricter"
         },
-        "status_while_it_is_not_running": 403
+        "status_while_it_is_not_running": 503
       },
       "indicative_for": [
         "GW-ST-008",
@@ -3135,7 +3633,7 @@
         }
       ],
       "observed": {
-        "seconds_until_the_new_route_was_served": 0.41,
+        "seconds_until_the_new_route_was_served": 0.31,
         "seconds_until_the_route_was_gone_again": 0.34
       },
       "indicative_for": [
@@ -3187,10 +3685,10 @@
         }
       ],
       "observed": {
-        "seconds_until_the_failure_was_reported": 0.3,
+        "seconds_until_the_failure_was_reported": 0.4,
         "configReload": {
           "synchronized": false,
-          "lastError": "routes[8]: unknown field `notAFieldOfARoute` at line 472 column 3"
+          "lastError": "routes[8]: unknown field `notAFieldOfARoute` at line 505 column 3"
         },
         "api_config_effective_shows_the_rejected_file": true,
         "seconds_until_the_reload_was_reported_applied_again": 0.3
@@ -3390,7 +3888,7 @@
         }
       ],
       "observed": {
-        "log_lines": 230,
+        "log_lines": 257,
         "routes_exercised": 4
       },
       "indicative_for": [

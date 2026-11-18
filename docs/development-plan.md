@@ -12,7 +12,7 @@
 
 ## 现在在哪
 
-- 阶段 P1 的内容跑过了：黑盒套件在锁定的 agentgateway 1.7.0 上 67/68，令牌是套件自己签的，Provider 是替身（[报告](../tests/acceptance/blackbox/README.md)）；另有与本机起的一套真实 Gatekeeper 的联调，Provider 同样是替身（[报告](../tests/integration/gatekeeper/README.md)）。两者都不是验收证据。
+- 阶段 P1 的内容跑过了：黑盒套件在锁定的 agentgateway 1.7.0 上 73/74，令牌是套件自己签的，Provider 是替身（[报告](../tests/acceptance/blackbox/README.md)）；另有与本机起的一套真实 Gatekeeper 的联调，Provider 同样是替身（[报告](../tests/integration/gatekeeper/README.md)）。两者都不是验收证据。
 - 请求路径：`cmd/gateway-authz` 按请求判定并发放凭证。登记表和凭证来自文件，是占位（[ADR-0009](adr/ADR-0009.md)）；撤销表原先只在内存里，2026-11-18 起落在一个文件里，由一个工作负载身份经接口改（[ADR-0012](adr/ADR-0012.md)）。凭证从哪里来的提案是 [ADR-0011](adr/ADR-0011.md)；仓库所有者在 2026-11-18 同意照它动手，它仍是 Proposed。它的第一步（固定令牌加每个请求一个随机数）已经有了实现，只对着替身验证过。黑盒的评审配置只放行登记过的请求头；问不到 PDP 时调用方得到 503，策略拒绝仍是 403（2.4）。
 - 控制面：`cmd/gateway-control` 管单机上的一个池：发布、对账、启动的先后、看守和告警用的指标（[ADR-0010](adr/ADR-0010.md)）。
 - 正式的记录：95 条验收用例、15 项缺口、六个门禁全部是 `NOT_RUN`。
@@ -148,7 +148,7 @@ flowchart TD
 - **依据**：`GW-GAP-11`、`GW-FR-043`；`GW-FR-008`，[G03](G03_Routing_and_Configuration.md) 第 5 节。[ADR-0008](adr/ADR-0008.md) 写明这两条在批准之前要处置或接受。
 - **等**：不等别人。
 - **做完的标准**：每一条要么有处理，并且有黑盒用例把关；要么写明在锁定的版本上做不到、留下什么风险，交给批准人去接受。
-- **到哪了（2026-11-18）**：两条都在锁定的 1.7.0 上做了处理，黑盒有用例，没有改 `gateway-authz` 的代码。失败来源：问 PDP 的路由用 `failureMode.denyWithStatus: 503`。策略拒绝仍是 403 加 PDP 的原因；问不到（超时、进程不在、证书不接受、模式 B 的 Broker 不在）是网关自己的 503，不转发（[黑盒](../tests/acceptance/blackbox/README.md)的 `P1-FO-01`）。PDP 答了 500，或答了定不了（503 `INDETERMINATE`），调用方拿到的是 PDP 的状态和原因（`P1-FO-01`、`P1-FO-02`）。请求头：六条后端用同一份名单重建请求头，没登记的不到 Provider（`P1-HD-01` 至 `04`），这是"默认配置不安全的地方"的第 9 项。留下的：网关访问日志里，问不到和 PDP 自己的 503 都是 info、`reason=DirectResponse`，不再有 `reason=ExtAuth` 的错误行，调用方靠正文区分；表达式求值不了时校验照样通过，请求带着没登记的头继续走，所以按名字删除还留着。`denyWithStatus: 200` 这个二进制会当成成功应答，评审配置钉在 503。对照把配置和 `gateway-authz` 改坏 17 处，16 处有新用例不通过；剩下的一处是名单还在时去掉按名字删除，黑盒看不出来，`tests/contracts` 不通过。一次调用在日志里对起来仍是 3.3。工作区上的黑盒是 73/74，失败的仍只有 `P1-SS-04`；原有 68 个用例的 418 项检查逐项相同。干净工作区上的证据还没有重跑。
+- **到哪了（2026-11-18）**：两条都在锁定的 1.7.0 上做了处理，黑盒有用例，没有改 `gateway-authz` 的代码。失败来源：问 PDP 的路由用 `failureMode.denyWithStatus: 503`。策略拒绝仍是 403 加 PDP 的原因；问不到（超时、进程不在、证书不接受、模式 B 的 Broker 不在）是网关自己的 503，不转发（[黑盒](../tests/acceptance/blackbox/README.md)的 `P1-FO-01`）。PDP 答了 500，或答了定不了（503 `INDETERMINATE`），调用方拿到的是 PDP 的状态和原因（`P1-FO-01`、`P1-FO-02`）。请求头：六条后端用同一份名单重建请求头，没登记的不到 Provider（`P1-HD-01` 至 `04`），这是"默认配置不安全的地方"的第 9 项。留下的：网关访问日志里，问不到和 PDP 自己的 503 都是 info、`reason=DirectResponse`，不再有 `reason=ExtAuth` 的错误行，调用方靠正文区分；表达式求值不了时校验照样通过，请求带着没登记的头继续走，所以按名字删除还留着。`denyWithStatus: 200` 这个二进制会当成成功应答，评审配置钉在 503。对照把配置和 `gateway-authz` 改坏 17 处，16 处有新用例不通过；剩下的一处是名单还在时去掉按名字删除，黑盒看不出来，`tests/contracts` 不通过。一次调用在日志里对起来仍是 3.3。从干净的工作区重跑是 73/74，失败的仍只有 `P1-SS-04`；原有 68 个用例的 418 项检查逐项相同。
 
 ### 2.5 委托身份
 
