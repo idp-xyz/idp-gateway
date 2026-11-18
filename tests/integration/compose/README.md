@@ -54,7 +54,7 @@ python3 tests/integration/compose/units.py            # 一分钟左右；两个
 
 2026-11-17 加上告警的两个用例之后，同一台机器上连跑三轮，都是 21/21，每轮 669 到 686 秒。跑之前时钟已对准（内核 tick 10000，单调时钟按硬件速度走）。`GatewayKeeperDown` 从看守停下到响，三轮是 61.1、61.1、61.0 秒；套件接受的是 60 到 75 秒。更早那一轮量到 56 秒，是这台机器的单调时钟被调慢了，不是规则从第一次抓取失败提前响。第 14 点的数字没有换。`units.py` 仍是 6/6。
 
-2026-11-18 加上 `SH-22` 之后，同一台机器上连跑三轮，22 个用例、251 项检查，都是 22/22，每轮 659 到 665 秒，三轮的检查项逐项相同。这三轮之前同一天有一轮是 21/22：`SH-17` 的一项不通过，原因和改法见第 14 点；三轮是改了脚本杀发布器的时刻之后跑的。第 16 点的数字出自这三轮。`units.py` 这次没有重跑。
+2026-11-18 加上 `SH-22` 之后，同一台机器上连跑三轮，22 个用例、251 项检查，都是 22/22，每轮 659 到 665 秒，三轮的检查项逐项相同。这三轮之前同一天有一轮是 21/22：`SH-17` 的一项不通过，原因和改法见第 14 点；三轮是改了脚本杀发布器的时刻之后跑的。第 16 点的数字出自这三轮。`units.py` 这次没有重跑。同一天把 `SH-22` 的一项检查收紧之后（见第 16 点的对照）又连跑三轮，都是 22/22、251 项检查，每轮 680 到 772 秒；后两轮跑的时候这台机器上另有实验在跑。
 
 下面各点引用的数字不出自同一批轮次：这套用例是一批一批加起来的，每加一批就连跑三轮，都在同一天。
 
@@ -526,7 +526,7 @@ Prometheus 容器的 `/prometheus` 是 tmpfs。进程不是 root 时，这个 tm
 - **钉着的两处**：`echo:8000` 钉在 192.168.32.2，`127.0.0.1:15000` 钉在 127.0.0.1。三轮相同。
 - **`egress-watch` 重写规则的 8 秒里没有空档**。这 8 秒里连后端那个地址的另一个端口，三轮各是 3761、3756、3763 次，每一次都是 113。
 - **`forget`**：`docker compose run --rm --no-deps egress forget`，退出码 0，说了 `pinned 127.0.0.1:15000 -> 127.0.0.1` 和 `pinned echo:8000 -> 192.168.32.2`；之后钉着的没有变，请求照常。三轮相同。
-- **断电之后**。三个常驻容器同时被强行杀掉，`egress-watch` 在 0.06 秒时已经停了，退出码 137；三轮相同。再跑启动命令：退出码 0，`egress` 在这次启动里重新跑了，在网关启动之前以 0 跑完，`egress-watch` 在新的 `netns` 之后起来，请求照常。新的命名空间里：`192.168.32.2:8000` 是 0，`192.168.32.2:8001` 和 `127.0.0.1:15020` 是 113，钉着的还是那两处。
+- **断电之后**。三个常驻容器同时被强行杀掉，`egress-watch` 在 0.06 秒时已经停了，退出码 137；三轮相同。套件要求这个退出码是 137：那是随 `netns` 的 PID 命名空间被内核杀掉的，脚本自己退出时是 1（见下面的对照）。再跑启动命令：退出码 0，`egress` 在这次启动里重新跑了，在网关启动之前以 0 跑完，`egress-watch` 在新的 `netns` 之后起来，请求照常。新的命名空间里：`192.168.32.2:8000` 是 0，`192.168.32.2:8001` 和 `127.0.0.1:15020` 是 113，钉着的还是那两处。
 - **`egress` 读不了配置**。`egress` 读配置靠的是文件对所有人可读；配置文件是 0644（发布器写的就是这个）。把它改成 0600 再跑 `docker compose up -d`：命令的退出码是 1，最后说 `service "egress" didn't complete successfully: exit 1`；`egress` 容器的退出码是 1，在标准错误上说 `sed: /work/config/config.yaml: Permission denied` 和 `pin-egress: cannot read /work/config/config.yaml`。在跑的只有 `netns`；`egress`、网关、`confirm`、`front`、`egress-watch` 都没有在跑，业务端口上没有人应答。`place` 在这次 `up` 里照常以 0 跑完（`IN_PLACE`），在 `egress` 之前；配置文件没有被动过，内容、属主、修改时刻都不变，模式还是 0600。三轮相同。
 - **改回 0644 之后**：再跑启动命令，退出码 0，`egress` 重新跑了并以 0 跑完，网关在它之后才启动，`confirm` 是 `IN_SYNC`，请求照常。池又是完整的：三个常驻容器和 `echo` 都在跑，`egress-watch` 在跑，钉着的和之前一样。
 
@@ -548,11 +548,11 @@ Prometheus 容器的 `/prometheus` 是 tmpfs。进程不是 root 时，这个 tm
 | 10. `pin-egress.sh`：配置里去掉的后端仍然放行 | 没有。发现它的是 egressnet 的 EG-07、EG-08 | 没有 |
 | 11. `pin-egress.sh`：常驻的那个一遍没跑成就退出 | 没有。发现它的是 egressnet 的 EG-08、EG-06 | 没有 |
 | 12. `compose.yml`：网关不等 `egress` | 三项：再跑启动命令（退出码 0，`egress` 在网关启动之前重新跑了）；网关没有被这次 `up` 启动；配置文件改回 0644 再跑启动命令 | `test_the_gateway_starts_after_the_confirmed_snapshot_is_in_place_and_the_egress_rules_are_in` |
-| 13. `compose.yml`：`egress-watch` 不与 `netns` 共用 PID 命名空间 | 没有。只有 `tests/contracts` 发现 | `test_the_keeper_knows_the_long_running_services_by_their_names`，`test_the_egress_watcher_cannot_outlive_the_namespace_it_was_started_in` |
+| 13. `compose.yml`：`egress-watch` 不与 `netns` 共用 PID 命名空间 | 做对照时没有，只有 `tests/contracts` 发现；检查收紧之后再跑，一项：断电，`egress-watch` 跟着 `netns` 死了（见表后） | `test_the_keeper_knows_the_long_running_services_by_their_names`，`test_the_egress_watcher_cannot_outlive_the_namespace_it_was_started_in` |
 | 14. `compose.yml`：回环不放行 `127.0.0.1:8081` | 四项：后端的名字解析得了，后端连得上，回环上 `front` 转给网关的那个端口和管理地址连得上；部署说明里写的那条重新解析的命令；再跑启动命令；配置文件改回 0644 再跑启动命令 | `test_both_egress_services_run_the_script_in_the_namespace_of_the_holder`（`egress` 和 `egress-watch` 各一个子项） |
 | 15. `compose.yml`：装规则的容器多一个 capability（`DAC_OVERRIDE`） | 四项：`egress` 这一步已经以退出码 0 跑完，两个都是 root，除了 `NET_ADMIN`；`egress` 读不了配置（配置文件是 0600）；网关没有被这次 `up` 启动；配置文件改回 0644 再跑启动命令 | `test_every_container_is_locked_down`（`egress` 和 `egress-watch` 各一个子项） |
 
-第 13 处：`SH-22` 里"断电：`egress-watch` 跟着 `netns` 死了"那一项照样通过。脚本发现命名空间里没有地址了自己也会退出，只是慢一些：那一遍记下的是 0.95 秒、退出码 1；没有改坏时三轮都是 0.06 秒、退出码 137（上面"断电之后"）。所以这一项检查分不出起作用的是共用 PID 命名空间，还是脚本自己发现命名空间没了；只有 `tests/contracts` 的那两条测试发现了这一处。`pin-egress.sh` 的 11 处在隔离测试里各是哪个用例发现的，见 [`tests/integration/egressnet/README.md`](../egressnet/README.md) 的"对照"。第 3 处带偶然性，这一次第一遍就发现了，没有多跑。
+第 13 处：`SH-22` 里"断电：`egress-watch` 跟着 `netns` 死了"那一项照样通过。脚本发现命名空间里没有地址了自己也会退出，只是慢一些：那一遍记下的是 0.95 秒、退出码 1；没有改坏时三轮都是 0.06 秒、退出码 137（上面"断电之后"）。所以做对照时这一项检查分不出起作用的是共用 PID 命名空间，还是脚本自己发现命名空间没了；只有 `tests/contracts` 的那两条测试发现了这一处。之后这项检查收紧了：还要求退出码是 137，也就是随 `netns` 的 PID 命名空间被内核杀掉的。收紧之后在副本里对这一处再跑：这一项不通过（那一遍 1.11 秒、退出码 1），别的 14 项通过；不改坏时 15 项全过（0.06 秒、退出码 137）。套件随后连跑的三轮里这一项记下的是 0.07、0.1、0.07 秒，退出码都是 137。`pin-egress.sh` 的 11 处在隔离测试里各是哪个用例发现的，见 [`tests/integration/egressnet/README.md`](../egressnet/README.md) 的"对照"。第 3 处带偶然性，这一次第一遍就发现了，没有多跑。
 
 ## 没有覆盖的
 

@@ -2249,7 +2249,7 @@ def egress_cases(r: Results):
     back = wait_for(lambda: get('a.test', '/quick')['status'] == 200, 30)
     ran, watcher, gateway, holder = (container(service) for service in ('egress', 'egress-watch', 'agentgateway', 'netns'))
     r.note('断电之后 egress-watch 过了多少秒停的，它的退出码', [died, dead.get('exit')])
-    r.check('断电（三个常驻容器被强行杀掉）：egress-watch 跟着 netns 死了，没有留在已经没用的那个命名空间里', cut and died is not None)
+    r.check('断电（三个常驻容器被强行杀掉）：egress-watch 跟着 netns 死了，没有留在已经没用的那个命名空间里；退出码 137，是随 netns 的 PID 命名空间被内核杀掉的，不是脚本自己退出的', cut and died is not None and dead.get('exit') == 137)
     r.check('再跑启动命令：退出码 0；egress 这一步在这次启动里重新跑了，在网关启动之前以 0 跑完；egress-watch 是在新的 netns 之后起来的；请求照常',
             up.returncode == 0 and back is not None and ran.get('exit') == 0
             and since <= moment(ran.get('started') or '') <= moment(ran.get('finished') or '') <= moment(gateway.get('started') or '')
