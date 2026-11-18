@@ -69,6 +69,8 @@ PICKUPS = '/providers/mockcarrier/v1/pickups'       # backendAuth.key.expression
 PARCELS = '/providers/mockcarrier/v1/parcels'       # developer-token route: the credential is not a Bearer token (ADR-0011)
 PARCELS_ROUTE = 'mockcarrier-parcels-get-developer-token'
 DEVELOPER_TOKENS = RUN / 'authz-developer-tokens.json'
+REVOCATIONS = RUN / 'authz-revocations.json'          # gateway-authz's own table of revoked accounts (ADR-0012)
+NOTHING_REVOKED = '{"epoch": 0, "revoked_accounts": {}}\n'
 
 # --------------------------------------------------------------------------------------
 # keys, tokens
@@ -234,18 +236,38 @@ def build_authz(go: str) -> str:
     return ''
 
 
-def start_gatekeeper():
-    """The PDP on the gatekeeper port: this repository's gateway-authz, acceptance build."""
+def gatekeeper_command() -> tuple[list[str], dict]:
+    """How gateway-authz is started here: its arguments, and the environment the acceptance build asks for."""
     env = {**os.environ, 'GATEWAY_AUTHZ_ACCEPTANCE_ADMIN_SECRET': S.admin,
            'GATEWAY_AUTHZ_ACCEPTANCE_OPERATOR_IDENTITY': pki.ID['operator'],
            'GATEWAY_AUTHZ_ACCEPTANCE_SLOW_SECONDS': str(PDP_SLOW_SECONDS)}
-    start('gateway-authz', [str(AUTHZ_BINARY), '--listen', f"127.0.0.1:{PORTS['gatekeeper']}",
-                            '--tls-cert', str(TLS / 'gatekeeper.crt'), '--tls-key', str(TLS / 'gatekeeper.key'),
-                            '--client-ca', str(TLS / 'ca.crt'), '--policy', str(HERE / 'policy.poc.json'),
-                            '--credentials', str(RUN / 'authz-credentials.json'),
-                            '--developer-tokens', str(DEVELOPER_TOKENS),
-                            '--gateway-identity', pki.ID['gateway'], '--broker-identity', pki.ID['broker']],
-          PORTS['gatekeeper'], env=env)
+    argv = [str(AUTHZ_BINARY), '--listen', f"127.0.0.1:{PORTS['gatekeeper']}",
+            '--tls-cert', str(TLS / 'gatekeeper.crt'), '--tls-key', str(TLS / 'gatekeeper.key'),
+            '--client-ca', str(TLS / 'ca.crt'), '--policy', str(HERE / 'policy.poc.json'),
+            '--credentials', str(RUN / 'authz-credentials.json'),
+            '--developer-tokens', str(DEVELOPER_TOKENS),
+            '--revocations', str(REVOCATIONS), '--revoker-identity', pki.ID['revoker'],
+            '--gateway-identity', pki.ID['gateway'], '--broker-identity', pki.ID['broker']]
+    return argv, env
+
+
+def start_gatekeeper():
+    """The PDP on the gatekeeper port: this repository's gateway-authz, acceptance build."""
+    argv, env = gatekeeper_command()
+    start('gateway-authz', argv, PORTS['gatekeeper'], env=env)
+
+
+def gatekeeper_refuses_to_start() -> dict:
+    """Run the same command while nothing listens on the port, and see whether it gives up.
+    -> {'exited': its exit code, or None if it was still running after 10 seconds and was killed, 'said': its last line}"""
+    argv, env = gatekeeper_command()
+    try:
+        done = subprocess.run(argv, cwd=HERE, env=env, capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        return {'exited': None, 'said': ''}
+    lines = (done.stdout + done.stderr).strip().splitlines()
+    # The message names the file by its full path; the evidence should not depend on where the repository is.
+    return {'exited': done.returncode, 'said': lines[-1].replace(str(RUN), '.run') if lines else ''}
 
 
 def start_broker():
@@ -1403,6 +1425,191 @@ def _(c):
         c.check(f'{name}: no developer account number, no developer token, no Authorization value of that scheme', not developer_in(text))
 
 
+# ---- revocation through the product's own interface (ADR-0012) --------------------------------------------
+# The cases above revoke through the controls that only the acceptance build has. These go the way a
+# deployment would: a POST to gateway-authz from the one workload identity it was told may change its
+# revocations. The table is a file of gateway-authz's own, so it has to outlive a restart, and
+# gateway-authz must not start without it.
+REVOCATIONS_PATH = '/v1/egress/revocations'
+REVOKE_BLUE = {'account_id': 'account-blue', 'revoked': True, 'reason': 'black-box: credential reported leaked'}
+RESTORE_BLUE = {'account_id': 'account-blue', 'revoked': False}
+
+
+def revocations(method: str, change: dict | None = None, cert: str | None = 'revoker', headers=(), ca: str = 'ca') -> dict:
+    """A call to gateway-authz's revocation interface under the named certificate. -> the response, as send() gives it."""
+    body = json.dumps(change).encode() if change is not None else None
+    return pdp(method, REVOCATIONS_PATH, JSON_CT + list(headers) if body else list(headers), body, cert=cert, ca=ca)
+
+
+def revocation_table() -> tuple:
+    """-> (revocation epoch, [account ids]) as the revoker reads them."""
+    state = body_json(revocations('GET'))
+    return state.get('revocation_epoch'), [a.get('account_id') for a in state.get('revoked_accounts') or []]
+
+
+def refused_as_revoked(r: dict) -> bool:
+    return r['status'] == 403 and body_json(r).get('reason_code') == 'ACCOUNT_REVOKED'
+
+
+@case('P1-RV-02', 'an account is revoked through gateway-authz\'s own interface',
+      'the next request for that account is refused on every route and not forwarded; the other account is unaffected; '
+      'a mistyped account is an error, not a silent success; lifting the revocation lets the account through again',
+      ('GW-AT-026', 'GW-ST-026', 'GW-AT-047', 'GW-FR-026', 'GW-FR-047'))
+def _(c):
+    epoch, accounts = revocation_table()
+    c.note('epoch_before', epoch)
+    c.check('before: nothing is revoked and blue is allowed', accounts == [] and gw('GET', TRACKING + '/TRK-1', blue())['status'] == 200)
+    send(PORTS['provider'], 'POST', '/admin/reset', ADMIN(), b'')
+    try:
+        r = revocations('POST', REVOKE_BLUE)
+        c.note('revoke', {'status': r['status'], 'body': body_json(r)})
+        c.check('the revoker revokes account-blue: 200, the account is revoked, the epoch is one higher',
+                r['status'] == 200 and body_json(r) == {'account_id': 'account-blue', 'revoked': True, 'changed': True, 'revocation_epoch': epoch + 1})
+        for label, target in (('the Bearer route', TRACKING + '/TRK-1'), ('the developer-token route', PARCELS + '/PRC-1'),
+                              ('the key.expression route', PICKUPS + '/PCK-1'), ('the Mode B route', MANIFESTS + '/MAN-1')):
+            c.check(f'the very next blue request on {label}: 403 ACCOUNT_REVOKED', refused_as_revoked(gw('GET', target, blue())))
+        c.check('...and the provider received none of them', len(provider_hits()) == 0)
+        g = gw('GET', TRACKING + '/TRK-2', green())
+        c.check('green still allowed with its own account', g['status'] == 200 and body_json(g).get('account') == 'account-green')
+
+        r = revocations('POST', REVOKE_BLUE)
+        c.check('revoking it again changes nothing: 200, not changed, the same epoch',
+                r['status'] == 200 and body_json(r) == {'account_id': 'account-blue', 'revoked': True, 'changed': False, 'revocation_epoch': epoch + 1})
+        state = body_json(revocations('GET'))
+        c.note('table', state)
+        row = (state.get('revoked_accounts') or [{}])[0]
+        c.check('the table has that one account, with the identity that revoked it and the reason given',
+                len(state.get('revoked_accounts') or []) == 1 and row.get('account_id') == 'account-blue'
+                and row.get('revoked_by') == pki.ID['revoker'] and row.get('reason') == REVOKE_BLUE['reason'])
+        r = revocations('POST', {'account_id': 'account-bleu', 'revoked': True, 'reason': 'black-box: a mistyped account'})
+        c.note('mistyped', {'status': r['status'], 'body': body_json(r)})
+        c.check('an account the policy does not name: 422 unknown_account, and nothing changes',
+                r['status'] == 422 and body_json(r).get('error') == 'unknown_account' and revocation_table() == (epoch + 1, ['account-blue']))
+        c.check('none of these answers carries a provider credential',
+                not any(carries_credential(x) or developer_in(x['body'].decode(errors='replace')) for x in (r, revocations('GET'))))
+    finally:
+        lifted = revocations('POST', RESTORE_BLUE)
+    c.check('the revocation is lifted: 200, the account is not revoked, the epoch is one higher again',
+            lifted['status'] == 200 and body_json(lifted) == {'account_id': 'account-blue', 'revoked': False, 'changed': True, 'revocation_epoch': epoch + 2})
+    c.check('blue is allowed again', gw('GET', TRACKING + '/TRK-1', blue())['status'] == 200)
+    on_disk = json.loads(REVOCATIONS.read_text(encoding='utf-8'))
+    c.check('the file gateway-authz keeps says the same: nothing revoked, at that epoch', on_disk == {'epoch': epoch + 2, 'revoked_accounts': {}})
+    said = (RUN / 'gateway-authz.log').read_text(encoding='utf-8', errors='replace')
+    c.check('gateway-authz logged the revocation with who made it and why',
+            any('"msg":"egress revocation"' in line and '"action":"revoke"' in line and pki.ID['revoker'] in line
+                and REVOKE_BLUE['reason'] in line for line in said.splitlines()))
+
+
+@case('P1-RV-03', 'who may change the revocations',
+      'only the revoker\'s workload certificate: every other workload of the trust domain is answered 401 and is told nothing, '
+      'without a certificate of the workload CA there is no TLS session, and nothing changes',
+      ('GW-ST-018', 'GW-AT-021', 'GW-FR-021', 'GW-FR-047'))
+def _(c):
+    c.check('the revoker revokes account-blue', revocations('POST', REVOKE_BLUE)['status'] == 200)
+    before = revocation_table()
+    try:
+        revoke_green = {'account_id': 'account-green', 'revoked': True, 'reason': 'black-box: not this workload\'s to revoke'}
+        attempts = (('read the table', 'GET', None), ('lift the revocation', 'POST', RESTORE_BLUE), ('revoke another account', 'POST', revoke_green))
+        for label, cert, extra in [('the gateway, which is given credentials', 'gateway', []), ('the local broker', 'broker', []),
+                                   ('a business app', 'business-app', []), ('the publisher', 'publisher', []),
+                                   ('this suite\'s operator, with the secret of the acceptance controls', 'operator', ADMIN())]:
+            answers = [revocations(method, change, cert=cert, headers=extra) for _, method, change in attempts]
+            c.note(label, [r['status'] for r in answers])
+            c.check(f'{label}: 401 to each of {", ".join(what for what, _, _ in attempts)}', all(r['status'] == 401 for r in answers))
+            c.check(f'{label}: told nothing of the table', not any(b'account-blue' in r['body'] for r in answers))
+        for label, cert, ca in [('no client certificate', None, 'ca'),
+                                ('a certificate with the revoker\'s identity from another CA', 'rogue-revoker', 'ca')]:
+            r = revocations('POST', RESTORE_BLUE, cert=cert, ca=ca)
+            c.check(f'{label}: no HTTP response', r['status'] is None)
+        c.check('after all of that the table and the epoch are as they were', revocation_table() == before)
+        c.check('...blue is still refused, green still served',
+                refused_as_revoked(gw('GET', TRACKING + '/TRK-1', blue())) and gw('GET', TRACKING + '/TRK-2', green())['status'] == 200)
+        # The other way round: the revoker's certificate is good for this and for nothing else.
+        asked = pdp('GET', '/v1/extauthz/check', trusted_context('mockcarrier-tracking-get', 'tracking.get', TRACKING + '/TRK-2'), cert='revoker')
+        c.check('the revoker is given no decision and no credential', asked['status'] == 401 and not carries_credential(asked))
+    finally:
+        revocations('POST', RESTORE_BLUE)
+    c.check('the revoker lifts the revocation: blue allowed again', gw('GET', TRACKING + '/TRK-1', blue())['status'] == 200)
+
+
+@case('P1-RV-04', 'a revocation outlives a restart of gateway-authz',
+      'after the restart the account is still refused, the epoch has not started again, and the table still says who revoked it and why',
+      ('GW-AT-026', 'GW-AT-047', 'GW-FR-026', 'GW-FR-047'))
+def _(c):
+    r = revocations('POST', REVOKE_BLUE)
+    epoch = body_json(r).get('revocation_epoch')
+    c.note('epoch_at_revocation', epoch)
+    c.check('the revoker revokes account-blue', r['status'] == 200 and isinstance(epoch, int) and epoch > 0)
+    try:
+        process = PROCS['gateway-authz'].pid
+        stop('gateway-authz', PORTS['gatekeeper'])
+        start_gatekeeper()
+        c.check('gateway-authz is another process now', PROCS['gateway-authz'].pid != process)
+        r = gw('GET', TRACKING + '/TRK-1', blue())
+        c.note('first_request_after_restart', {'status': r['status'], 'reason_code': body_json(r).get('reason_code'),
+                                               'revocation_epoch': body_json(r).get('revocation_epoch')})
+        c.check('first blue request after the restart: 403 ACCOUNT_REVOKED', refused_as_revoked(r))
+        c.check('...and the provider did not receive it', len(provider_hits()) == 0)
+        c.check('the epoch is the one from before the restart, not 0', body_json(r).get('revocation_epoch') == epoch)
+        state = body_json(revocations('GET'))
+        row = (state.get('revoked_accounts') or [{}])[0]
+        c.check('the table read after the restart still has the account, who revoked it and why',
+                state.get('revocation_epoch') == epoch and len(state.get('revoked_accounts') or []) == 1 and row.get('account_id') == 'account-blue'
+                and row.get('revoked_by') == pki.ID['revoker'] and row.get('reason') == REVOKE_BLUE['reason'])
+        g = gw('GET', TRACKING + '/TRK-2', green())
+        c.check('green is served after the restart', g['status'] == 200 and body_json(g).get('account') == 'account-green')
+    finally:
+        if 'gateway-authz' not in PROCS:
+            start_gatekeeper()
+        revocations('POST', RESTORE_BLUE)
+    c.check('the revocation is lifted: blue allowed again', gw('GET', TRACKING + '/TRK-1', blue())['status'] == 200)
+
+
+@case('P1-RV-05', 'gateway-authz without a revocation file it can read',
+      'it does not start, so every request is rejected at the gateway; a missing file is not read as "nothing revoked"; '
+      'with the file back it starts and the earlier revocation is still in force',
+      ('GW-ST-008', 'GW-NAT-006', 'GW-AT-047', 'GW-FR-026', 'GW-FR-047'))
+def _(c):
+    c.check('the revoker revokes account-blue', revocations('POST', REVOKE_BLUE)['status'] == 200)
+    kept = REVOCATIONS.with_name(REVOCATIONS.name + '.kept')
+    stop('gateway-authz', PORTS['gatekeeper'])
+    os.replace(REVOCATIONS, kept)
+    try:
+        def put(content: bytes, mode: int):
+            REVOCATIONS.write_bytes(content)
+            os.chmod(REVOCATIONS, mode)
+
+        for label, arrange in (('the file is missing', lambda: None),
+                               ('the file is cut short', lambda: put(kept.read_bytes()[:40], 0o600)),
+                               ('the file says nothing of the table', lambda: put(b'{"epoch": 0}\n', 0o600)),
+                               ('the file is readable by others', lambda: put(kept.read_bytes(), 0o644))):
+            REVOCATIONS.unlink(missing_ok=True)
+            arrange()
+            tried = gatekeeper_refuses_to_start()
+            c.note(label, tried)
+            c.check(f'{label}: gateway-authz gives up instead of listening',
+                    tried['exited'] not in (None, 0) and 'revocations' in tried['said'] and not port_open(PORTS['gatekeeper']))
+        tok = green()
+        r = gw('GET', TRACKING + '/TRK-2', tok)
+        c.note('status_while_it_is_not_running', r['status'])
+        c.check('while it is not running a request for an account that was never revoked is rejected too',
+                r['status'] is not None and r['status'] >= 400)
+        c.check('...and the provider received nothing', len(provider_hits()) == 0)
+    finally:
+        REVOCATIONS.unlink(missing_ok=True)
+        os.replace(kept, REVOCATIONS)
+        os.chmod(REVOCATIONS, 0o600)
+        start_gatekeeper()
+    try:
+        c.check('with the file back gateway-authz starts, and blue is still refused as revoked',
+                refused_as_revoked(gw('GET', TRACKING + '/TRK-1', blue())))
+        g = gw('GET', TRACKING + '/TRK-2', green())
+        c.check('green is served again', g['status'] == 200 and body_json(g).get('account') == 'account-green')
+    finally:
+        revocations('POST', RESTORE_BLUE)
+    c.check('the revocation is lifted: blue allowed again', gw('GET', TRACKING + '/TRK-1', blue())['status'] == 200)
+
+
 # ---- reading back what a publisher has published -----------------------------------------------------
 # A publisher replaces the file the gateway runs from and has to learn, per instance, whether
 # the new file is what is now in effect (G03 §3-4). These cases replace the file under the
@@ -1635,7 +1842,8 @@ SCOPE_LIMITS = [
     'The PDP is this repository\'s gateway-authz, built with the `acceptance` tag: the product code plus the test controls '
     'this runner uses (request log, fault modes, revoke/restore). The product build, which has none of them, is not what ran. '
     'Where a case says "Gatekeeper" or "PDP" it means this process.',
-    'gateway-authz reads its policy and its credentials from files written for the run and keeps revocations in memory. '
+    'gateway-authz reads its policy and its credentials from files written for the run and keeps its revocations in a file '
+    'made for the run; the certificate of the one workload that may change them is made for the run as well. '
     'No identity provider, grants store, Secret Manager or provider token endpoint is involved, and the deployed Gatekeeper '
     'is not called: the caller tokens are signed by a key made for the run.',
     'The provider is a loopback mock; no carrier sandbox was called. That includes the developer-token route (P1-DT-*): the '
@@ -1686,6 +1894,8 @@ def prepare():
     # Its second credentials file, for the route whose credential is not a Bearer token:
     # handle -> the carrier's account number and a developer token. No nonce is stored.
     write_developer_tokens(S.developer)
+    # Its table of revoked accounts. "Nothing revoked" is a file that says so: without the file it does not start.
+    REVOCATIONS.write_text(NOTHING_REVOKED, encoding='utf-8')
     for f in RUN.iterdir():
         if f.is_file():
             os.chmod(f, 0o600)
@@ -1976,7 +2186,8 @@ def main() -> int:
                           'policy_from': 'tests/acceptance/blackbox/policy.poc.json',
                           'credentials_from': 'two files written for the run, not recorded: Bearer tokens (--credentials), and '
                                               'account numbers with developer tokens (--developer-tokens)',
-                          'revocations': 'in memory',
+                          'revocations': 'a file written for the run (--revocations), empty at the start; changed through the '
+                                         'acceptance controls and, in P1-RV-02 to 05, through the product interface',
                           'http_versions_seen_from_the_gateway': sorted(S.pdp_protocols)},
         'mocks_sha256': {f: hashlib.sha256((HERE / f).read_bytes()).hexdigest() for f in MOCKS},
         'front_proxy': {'image': FRONT_IMAGE, 'version': front_version, 'config_file': 'tests/acceptance/blackbox/front.nginx.conf',

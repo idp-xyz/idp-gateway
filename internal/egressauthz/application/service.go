@@ -24,6 +24,12 @@ const (
 // ErrIndeterminate 表示判定没能完成。调用方必须按拒绝处理，并且不能把它报告成策略拒绝。
 var ErrIndeterminate = errors.New("egressauthz: decision indeterminate")
 
+// ErrUnknownAccount 表示要撤销或恢复的账户既不在登记表里，也不在撤销表里。多半是名字打错了。
+var ErrUnknownAccount = errors.New("egressauthz: account is neither in the policy nor revoked")
+
+// ErrNoRevocationLedger 表示这个服务没有配置可以改的撤销表。
+var ErrNoRevocationLedger = errors.New("egressauthz: no revocation ledger configured")
+
 // Input 是判定所需的上下文。除 RequestedAccount 外，各项都由网关从已验签的 Token 和
 // 路由常量写出；RequestedAccount 来自调用方，只是申请。
 type Input struct {
@@ -65,6 +71,7 @@ type Service struct {
 	policy      domain.Policy
 	credentials ports.CredentialSource
 	revocations ports.Revocations
+	ledger      ports.RevocationLedger
 	grants      ports.Grants
 	newID       func() string
 }
@@ -76,6 +83,12 @@ type Option func(*Service)
 // 登记表拒绝的请求不会去问，grants 说没有授权或答不出来的请求不会放行。
 func WithGrants(grants ports.Grants) Option {
 	return func(s *Service) { s.grants = grants }
+}
+
+// WithRevocationLedger 让撤销表可以经本服务改动。判定读的仍是构造时给的 revocations；两者
+// 应当是同一张表，由装配的一方保证。
+func WithRevocationLedger(ledger ports.RevocationLedger) Option {
+	return func(s *Service) { s.ledger = ledger }
 }
 
 // New 构造 Service。policy 在进程生命周期内不变；换登记表要换进程。
@@ -168,6 +181,52 @@ func (s *Service) Authorize(ctx context.Context, in Input) (Outcome, ports.Secre
 		return out, ports.Secret{}, fmt.Errorf("%w: credential: %w", ErrIndeterminate, err)
 	}
 	return out, credential, nil
+}
+
+// RevokeAccount 撤销一个账户：从下一次判定起，它在哪条路由上都不放行。by 是做这件事的
+// 工作负载身份。
+//
+// 只接受登记表里出现过的账户（已经在撤销表里的也接受，那是重复撤销）：名字打错了要得到
+// ErrUnknownAccount，而不是一次什么都没拦住的成功。返回的错误包装了
+// ports.ErrRevocationNotWritten 时，撤销已经生效，只是没有保存下来。
+func (s *Service) RevokeAccount(ctx context.Context, accountID, by, reason string) (ports.RevocationChange, error) {
+	if s.ledger == nil {
+		return ports.RevocationChange{}, ErrNoRevocationLedger
+	}
+	if !s.policy.NamesAccount(accountID) {
+		revoked, epoch, err := s.ledger.State(ctx, accountID)
+		if err != nil {
+			return ports.RevocationChange{}, err
+		}
+		if !revoked {
+			return ports.RevocationChange{Epoch: epoch}, ErrUnknownAccount
+		}
+	}
+	return s.ledger.Revoke(ctx, accountID, by, reason)
+}
+
+// RestoreAccount 取消对一个账户的撤销。账户没有被撤销时什么都不改；账户既不在登记表里也
+// 不在撤销表里时返回 ErrUnknownAccount。恢复没有保存下来就不生效。
+func (s *Service) RestoreAccount(ctx context.Context, accountID string) (ports.RevocationChange, error) {
+	if s.ledger == nil {
+		return ports.RevocationChange{}, ErrNoRevocationLedger
+	}
+	revoked, epoch, err := s.ledger.State(ctx, accountID)
+	if err != nil {
+		return ports.RevocationChange{}, err
+	}
+	if !revoked && !s.policy.NamesAccount(accountID) {
+		return ports.RevocationChange{Epoch: epoch}, ErrUnknownAccount
+	}
+	return s.ledger.Restore(ctx, accountID)
+}
+
+// RevokedAccounts 返回整张撤销表和当前代次。
+func (s *Service) RevokedAccounts(ctx context.Context) ([]ports.RevokedAccount, uint64, error) {
+	if s.ledger == nil {
+		return nil, 0, ErrNoRevocationLedger
+	}
+	return s.ledger.Revoked(ctx)
 }
 
 func randomDecisionID() string {

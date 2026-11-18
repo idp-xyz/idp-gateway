@@ -28,12 +28,14 @@ const (
 	brokerID   = "spiffe://idp.test/egress/credential-broker"
 	operatorID = "spiffe://idp.test/poc/operator"
 	businessID = "spiffe://idp.test/apps/parcel-service"
+	revokerID  = "spiffe://idp.test/egress/revoker"
 	tracking   = "/providers/mockcarrier/v1/tracking"
 	blueToken  = "provider-token-blue"
 	greenToken = "provider-token-green"
 
-	extAuthzPath = "/v1/extauthz/check"
-	decisionPath = "/v1/egress/authorizations/decision"
+	extAuthzPath    = "/v1/extauthz/check"
+	decisionPath    = "/v1/egress/authorizations/decision"
+	revocationsPath = "/v1/egress/revocations"
 )
 
 const policyJSON = `{
@@ -97,7 +99,9 @@ func newHarness(t *testing.T) *harness {
 			"broker":        ca.Issue("broker", []string{brokerID}),
 			"operator":      ca.Issue("operator", []string{operatorID}),
 			"business":      ca.Issue("business", []string{businessID}),
+			"revoker":       ca.Issue("revoker", []string{revokerID}),
 			"rogue-gateway": rogue.Issue("gateway", []string{gatewayID}),
+			"rogue-revoker": rogue.Issue("revoker", []string{revokerID}),
 		},
 		policy:      filepath.Join(dir, "policy.json"),
 		credentials: filepath.Join(dir, "credentials.json"),
@@ -556,6 +560,131 @@ func TestCredentialSourcesAreAskedInOrder(t *testing.T) {
 	}
 }
 
+// 撤销（docs/adr/ADR-0012.md）。
+const (
+	nothingRevoked = `{"epoch": 0, "revoked_accounts": {}}`
+	revokeBlue     = `{"account_id":"account-blue","revoked":true,"reason":"key leaked"}`
+	restoreBlue    = `{"account_id":"account-blue","revoked":false}`
+)
+
+// withRevocations 让服务带着一份撤销文件和撤销者的身份启动，返回文件的路径。
+func (h *harness) withRevocations(content string) string {
+	h.t.Helper()
+	file := writePrivate(h.t, filepath.Join(h.t.TempDir(), "revocations.json"), content)
+	h.extra = append(h.extra, "--revocations", file, "--revoker-identity", revokerID)
+	return file
+}
+
+func (h *harness) revocations(peer, method, body string) answer {
+	h.t.Helper()
+	return h.must(call{peer: peer, method: method, path: revocationsPath, body: body})
+}
+
+func (h *harness) blue() answer {
+	h.t.Helper()
+	return h.must(call{peer: "gateway", path: extAuthzPath, headers: trusted("tenant-blue")})
+}
+
+// 撤销经产品的接口做，由撤销者的证书证明身份；重启之后它还在，代次接着数。
+func TestRevocationsAreChangedByTheRevokerAndSurviveARestart(t *testing.T) {
+	h := newHarness(t)
+	file := h.withRevocations(nothingRevoked)
+	h.start()
+
+	if a := h.blue(); a.status != http.StatusOK {
+		t.Fatalf("撤销之前：%d %s", a.status, a.body)
+	}
+	revoked := h.revocations("revoker", http.MethodPost, revokeBlue)
+	if body := revoked.json(t); revoked.status != http.StatusOK || body["revoked"] != true || body["changed"] != true ||
+		body["revocation_epoch"] != float64(1) || revoked.carriesCredential() {
+		t.Fatalf("撤销：%d %s", revoked.status, revoked.body)
+	}
+	denied := h.blue()
+	if denied.status != http.StatusForbidden || denied.json(t)["reason_code"] != "ACCOUNT_REVOKED" || denied.carriesCredential() {
+		t.Fatalf("撤销之后的蓝租户：%d %s", denied.status, denied.body)
+	}
+	if a := h.must(call{peer: "gateway", path: extAuthzPath, headers: trusted("tenant-green")}); a.status != http.StatusOK {
+		t.Fatalf("撤销蓝账户影响了绿租户：%d", a.status)
+	}
+
+	// 别的身份改不了，也读不到：同一个信任域里的每一个，包括拿得到凭证的网关。
+	for _, peer := range []string{"gateway", "broker", "business", "operator"} {
+		for _, request := range [][2]string{{http.MethodPost, restoreBlue}, {http.MethodGet, ""}} {
+			if a := h.revocations(peer, request[0], request[1]); a.status != http.StatusUnauthorized || strings.Contains(a.body, "account-blue") {
+				t.Errorf("%s %s：%d %s", peer, request[0], a.status, a.body)
+			}
+		}
+	}
+	// 没有证书，或者撤销者的名字、别的 CA 签的：没有 HTTP 交换。
+	for _, peer := range []string{"", "rogue-revoker"} {
+		if a, err := h.do(call{peer: peer, method: http.MethodPost, path: revocationsPath, body: restoreBlue}); err == nil {
+			t.Errorf("证书 %q 得到了 HTTP 响应：%d", peer, a.status)
+		}
+	}
+	if a := h.blue(); a.status != http.StatusForbidden {
+		t.Fatalf("被拒绝的恢复却生效了：%d", a.status)
+	}
+
+	// 重启：还是撤销着的，代次不回到 0，表里记着是谁、为什么。
+	if err := h.stop(); err != nil {
+		t.Fatal(err)
+	}
+	h.start()
+	denied = h.blue()
+	if body := denied.json(t); denied.status != http.StatusForbidden || body["reason_code"] != "ACCOUNT_REVOKED" || body["revocation_epoch"] != float64(1) {
+		t.Fatalf("重启之后的蓝租户：%d %s", denied.status, denied.body)
+	}
+	table := h.revocations("revoker", http.MethodGet, "")
+	accounts, _ := table.json(t)["revoked_accounts"].([]any)
+	if table.status != http.StatusOK || len(accounts) != 1 {
+		t.Fatalf("重启之后的表：%d %s", table.status, table.body)
+	}
+	if entry := accounts[0].(map[string]any); entry["account_id"] != "account-blue" || entry["revoked_by"] != revokerID || entry["reason"] != "key leaked" {
+		t.Fatalf("重启之后的那一行：%v", entry)
+	}
+
+	restored := h.revocations("revoker", http.MethodPost, restoreBlue)
+	if body := restored.json(t); restored.status != http.StatusOK || body["revoked"] != false || body["revocation_epoch"] != float64(2) {
+		t.Fatalf("恢复：%d %s", restored.status, restored.body)
+	}
+	if a := h.blue(); a.status != http.StatusOK || a.header.Get("Authorization") != "Bearer "+blueToken {
+		t.Fatalf("恢复之后：%d %s", a.status, a.body)
+	}
+	if written, err := os.ReadFile(file); err != nil || !strings.Contains(string(written), `"epoch": 2`) || strings.Contains(string(written), "account-blue") {
+		t.Fatalf("恢复之后的文件：%s %v", written, err)
+	}
+
+	logs := h.logs.String()
+	for _, expected := range []string{`"revocations":"file"`, `"revoked_accounts":0`, `"revoked_accounts":1`, `"revocation_epoch":1`,
+		`"revoker_identity":"` + revokerID + `"`, `"msg":"egress revocation"`, `"action":"revoke"`, `"reason":"key leaked"`,
+		`"reason":"REVOKER_WORKLOAD_UNAUTHENTICATED"`} {
+		if !strings.Contains(logs, expected) {
+			t.Errorf("服务日志里没有 %s", expected)
+		}
+	}
+	if strings.Contains(logs, "provider-token") {
+		t.Error("凭证出现在服务日志里")
+	}
+}
+
+// 不给撤销文件和撤销者时，与以前相同：没有改撤销表的接口，拿着撤销者证书的也一样。
+func TestWithoutRevocationFlagsThereIsNoRevocationInterface(t *testing.T) {
+	h := newHarness(t).start()
+	for _, peer := range []string{"revoker", "gateway", "operator"} {
+		for _, request := range [][2]string{{http.MethodPost, revokeBlue}, {http.MethodGet, ""}} {
+			if a := h.revocations(peer, request[0], request[1]); a.status != http.StatusNotFound {
+				t.Errorf("%s %s：%d %s", peer, request[0], a.status, a.body)
+			}
+		}
+	}
+	if a := h.blue(); a.status != http.StatusOK {
+		t.Fatalf("对不存在的接口的调用改变了判定：%d", a.status)
+	}
+	if logs := h.logs.String(); !strings.Contains(logs, `"revocations":"memory"`) || !strings.Contains(logs, `"revoker_identity":""`) {
+		t.Errorf("启动日志没有说明撤销表在内存里：%s", logs)
+	}
+}
+
 func TestStopsWhenAskedTo(t *testing.T) {
 	h := newHarness(t).start()
 	if a := h.must(call{peer: "gateway", path: "/healthz"}); a.status != http.StatusOK {
@@ -622,6 +751,21 @@ func TestRefusesToStart(t *testing.T) {
 		"开发者令牌文件是 Bearer 文件的写法": {append(h.args("127.0.0.1:0"), "--developer-tokens", write("bearer-shape.json", credentialsJSON, 0o600)), "not a JSON object"},
 		"同一个句柄在两个凭证文件里": {append(h.args("127.0.0.1:0"), "--developer-tokens",
 			write("twice.json", developerTokensJSON(greenHandle, greenAccountNo, greenDeveloperToken), 0o600)), "one source only"},
+		"有撤销文件没有撤销者": {append(h.args("127.0.0.1:0"), "--revocations", write("r1.json", nothingRevoked, 0o600)), "go together"},
+		"有撤销者没有撤销文件": {append(h.args("127.0.0.1:0"), "--revoker-identity", revokerID), "go together"},
+		"撤销者就是网关": {append(h.args("127.0.0.1:0"), "--revocations", write("r2.json", nothingRevoked, 0o600),
+			"--revoker-identity", gatewayID), "must differ"},
+		"撤销者就是 Broker": {append(h.args("127.0.0.1:0"), "--revocations", write("r3.json", nothingRevoked, 0o600),
+			"--revoker-identity", brokerID), "must differ"},
+		// 没有文件不是"没有撤销"：文件丢了，服务不启动。
+		"撤销文件不存在": {append(h.args("127.0.0.1:0"), "--revocations", filepath.Join(dir, "missing-revocations.json"),
+			"--revoker-identity", revokerID), "revocations"},
+		"撤销文件别人可读": {append(h.args("127.0.0.1:0"), "--revocations", write("r4.json", nothingRevoked, 0o644),
+			"--revoker-identity", revokerID), "readable by others"},
+		"撤销文件读不懂": {append(h.args("127.0.0.1:0"), "--revocations", write("r5.json", `{"epoch": 0, "revoked_accounts": {`, 0o600),
+			"--revoker-identity", revokerID), "not a JSON object"},
+		"撤销文件里没有写表": {append(h.args("127.0.0.1:0"), "--revocations", write("r6.json", `{"epoch": 0}`, 0o600),
+			"--revoker-identity", revokerID), "both required"},
 		"证书与私钥不配对":            {replace("--tls-key", h.peers["gateway"].KeyFile), "server certificate"},
 		"监听地址不可用":             {replace("--listen", "256.0.0.1:1"), ""},
 		"有 Gatekeeper 地址没有令牌": {append(h.args("127.0.0.1:0"), "--gatekeeper-url", "https://gk.idp.test"), "go together"},

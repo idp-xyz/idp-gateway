@@ -105,6 +105,68 @@ paths:
           description: Unauthenticated Gateway workload
         '403':
           description: Gateway workload lacks this permission
+  /v1/egress/revocations:
+    get:
+      operationId: listRevokedProviderAccounts
+      summary: The provider accounts that are refused on every route, and the revocation epoch
+      description: 'Served by gateway-authz for its own table of revoked accounts (docs/adr/ADR-0012.md). This is
+        not Gatekeeper''s record of grants. Only the one workload identity configured as the revoker may call it;
+        the gateway and the broker may not. Where no revoker is configured the path does not exist.'
+      security:
+      - WorkloadMTLS: []
+      responses:
+        '200':
+          description: The whole table. It holds no credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevocationState'
+        '401':
+          description: The caller is not the revoker workload. Nothing is disclosed.
+        '404':
+          description: No revoker is configured
+    post:
+      operationId: changeProviderAccountRevocation
+      summary: Revoke one provider account, or lift its revocation
+      description: 'A revocation takes effect on the next decision, on every route, and is then written to the file
+        that keeps it across restarts. If it cannot be written the answer is 500 with error
+        revocation_in_effect_but_not_written: the account is refused now and will not be after a restart, unless
+        the request is repeated and written. Lifting a revocation is written first and does not happen if it
+        cannot be written. Repeating either request changes nothing and is not an error. Only an account that the
+        policy names, or that is in the table already, is accepted: a mistyped name is answered 422.'
+      security:
+      - WorkloadMTLS: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RevocationRequest'
+      responses:
+        '200':
+          description: The state of the account after the call
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevocationChange'
+        '400':
+          description: Not a RevocationRequest, or a revocation without a reason. Nothing changed.
+        '401':
+          description: The caller is not the revoker workload. Nothing changed.
+        '404':
+          description: No revoker is configured
+        '422':
+          description: The account is neither named in the policy nor in the table. Nothing changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevocationChange'
+        '500':
+          description: The change could not be written. The body says what is in effect now.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevocationChange'
   /v1/egress/credentials/materialize:
     post:
       operationId: materializeEgressCredential
@@ -295,6 +357,84 @@ components:
         revocation_epoch:
           type: integer
           minimum: 0
+    RevocationRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - account_id
+      - revoked
+      properties:
+        account_id:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: At most 256 bytes of UTF-8, no control characters
+        revoked:
+          type: boolean
+          description: true revokes the account; false lifts its revocation
+        reason:
+          type: string
+          maxLength: 512
+          description: Required and not blank when revoked is true. At most 512 bytes of UTF-8, no control characters.
+            It is kept in the table and written to the service log, so it must not contain a secret.
+    RevocationChange:
+      type: object
+      required:
+      - account_id
+      - revoked
+      - changed
+      - revocation_epoch
+      properties:
+        account_id:
+          type: string
+        revoked:
+          type: boolean
+          description: Whether the account is revoked after this call
+        changed:
+          type: boolean
+          description: false when the account was in that state already
+        revocation_epoch:
+          type: integer
+          minimum: 0
+          description: The epoch after this call. It rises by one with every change and is kept across restarts.
+        error:
+          type: string
+          enum:
+          - unknown_account
+          - revocation_in_effect_but_not_written
+          - revocations_not_changed
+          description: Present on 422 and 500 only
+    RevocationState:
+      type: object
+      required:
+      - revocation_epoch
+      - revoked_accounts
+      properties:
+        revocation_epoch:
+          type: integer
+          minimum: 0
+        revoked_accounts:
+          type: array
+          items:
+            $ref: '#/components/schemas/RevokedAccount'
+    RevokedAccount:
+      type: object
+      required:
+      - account_id
+      - revoked_at
+      - revoked_by
+      - reason
+      properties:
+        account_id:
+          type: string
+        revoked_at:
+          type: string
+          format: date-time
+        revoked_by:
+          type: string
+          description: The workload identity that made the revocation
+        reason:
+          type: string
     CredentialUseRequest:
       type: object
       additionalProperties: false

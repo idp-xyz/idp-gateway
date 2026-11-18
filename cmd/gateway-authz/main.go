@@ -7,6 +7,10 @@
 // 凭证文件有两种，至少给一种（见 docs/adr/ADR-0011.md）：--credentials 是固定的 Bearer
 // 令牌；--developer-tokens 是账号加开发者令牌，认证头里的随机数每个请求现做。一个凭证句柄
 // 只能出现在其中一个文件里。
+//
+// 撤销（见 docs/adr/ADR-0012.md）：--revocations 给出保存撤销表的文件，--revoker-identity
+// 给出唯一能改它的工作负载身份，两个要一起给。都不给时撤销表在内存里、永远是空的，也没有
+// 改它的接口。
 package main
 
 import (
@@ -57,6 +61,8 @@ type options struct {
 	developerTokens string
 	gatewayIdentity string
 	brokerIdentity  string
+	revocations     string
+	revokerIdentity string
 	gatekeeperURL   string
 	gatekeeperToken string
 }
@@ -82,6 +88,9 @@ func parse(args []string, output io.Writer) (options, error) {
 		"认证头是 Hc-OweDeveloper 账号;令牌;随机数，随机数每个请求现做；文件被换掉之后重读", false)
 	add(&o.gatewayIdentity, "gateway-identity", "网关工作负载的身份（证书里的 URI）：可以要判定和凭证", true)
 	add(&o.brokerIdentity, "broker-identity", "本地 Broker 工作负载的身份：只能要判定；不设则没有这样的调用方", false)
+	add(&o.revocations, "revocations", "撤销文件（JSON：代次和被撤销的账户），权限须为 0600 或更严；启动时读，读不成就不启动；"+
+		"之后只由本进程写。要和 --revoker-identity 一起给", false)
+	add(&o.revokerIdentity, "revoker-identity", "能改撤销表的工作负载身份：只能撤销、恢复和读出撤销表。要和 --revocations 一起给", false)
 	add(&o.gatekeeperURL, "gatekeeper-url", "Gatekeeper PDP 的地址；设了它，登记表放行的请求还要 Gatekeeper 确认账户的使用授权", false)
 	add(&o.gatekeeperToken, "gatekeeper-token-file", "访问 Gatekeeper PDP 的 Bearer 令牌文件，权限须为 0600 或更严", false)
 	if err := flags.Parse(args); err != nil {
@@ -107,6 +116,14 @@ func parse(args []string, output io.Writer) (options, error) {
 	}
 	if (o.gatekeeperURL == "") != (o.gatekeeperToken == "") {
 		return o, errors.New("--gatekeeper-url and --gatekeeper-token-file go together")
+	}
+	// 没有文件的写入口改的东西重启就没有了；没有写入口的文件谁也改不了。
+	if (o.revocations == "") != (o.revokerIdentity == "") {
+		return o, errors.New("--revocations and --revoker-identity go together")
+	}
+	if o.revokerIdentity != "" && (o.revokerIdentity == o.gatewayIdentity || o.revokerIdentity == o.brokerIdentity) {
+		return o, errors.New("--revoker-identity must differ from --gateway-identity and --broker-identity: " +
+			"who asks for credentials may not be who lifts a revocation")
 	}
 	return o, nil
 }
@@ -163,12 +180,30 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 		options = append(options, application.WithGrants(grants))
 	}
 
-	revocations := &memory.Revocations{}
-	callers := httpapi.Callers{Gateway: o.gatewayIdentity, Broker: o.brokerIdentity}
+	// 撤销表：给了文件就用文件里的那一张，它也是能改的那一张；没有给就在内存里，没有人能改。
+	revocationStore, revokedAccounts, revocationEpoch := "memory", 0, uint64(0)
+	inMemory := &memory.Revocations{}
+	var revocations ports.Revocations = inMemory
+	var ledger *filestore.Revocations
+	if o.revocations != "" {
+		ledger, err = filestore.LoadRevocations(o.revocations)
+		if err != nil {
+			return err
+		}
+		accounts, epoch, err := ledger.Revoked(ctx)
+		if err != nil {
+			return err
+		}
+		revocations, inMemory = ledger, nil
+		revocationStore, revokedAccounts, revocationEpoch = "file", len(accounts), epoch
+		options = append(options, application.WithRevocationLedger(ledger))
+	}
+	callers := httpapi.Callers{Gateway: o.gatewayIdentity, Broker: o.brokerIdentity, Revoker: o.revokerIdentity}
 	service := application.New(policy, credentials, revocations, options...)
 	var handler http.Handler = httpapi.New(service, callers, logger)
 	var serverLog io.Writer = &serverLogWriter{logger: logger}
-	handler, serverLog, err = install(handler, serverLog, seams{listen: o.listen, callers: callers, revocations: revocations, logger: logger})
+	handler, serverLog, err = install(handler, serverLog, seams{listen: o.listen, callers: callers,
+		revocationsInMemory: inMemory, revocationsInFile: ledger, logger: logger})
 	if err != nil {
 		return err
 	}
@@ -190,7 +225,9 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 	logger.Info("gateway-authz listening", "addr", listener.Addr().String(), "build", buildFlavor,
 		"policy_version", policy.Version, "operations", len(policy.Operations),
 		"credentials", bearerTokens, "developer_tokens", developerTokens,
-		"gateway_identity", o.gatewayIdentity, "broker_identity", o.brokerIdentity, "grants", grantSource)
+		"revocations", revocationStore, "revoked_accounts", revokedAccounts, "revocation_epoch", revocationEpoch,
+		"gateway_identity", o.gatewayIdentity, "broker_identity", o.brokerIdentity, "revoker_identity", o.revokerIdentity,
+		"grants", grantSource)
 	if ready != nil {
 		ready(listener.Addr())
 	}

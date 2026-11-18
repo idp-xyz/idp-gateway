@@ -136,6 +136,22 @@ func (p Policy) SoleAccount(tenantID, providerID, operationID, environment strin
 	return found[0], true
 }
 
+// NamesAccount 报告登记表里有没有哪一行把这个账户授给了某个租户。撤销只接受这样的账户：
+// 账户名打错了，撤销的人要得到一个错误，而不是一次什么都没拦住的"成功"。
+func (p Policy) NamesAccount(accountID string) bool {
+	if accountID == "" {
+		return false
+	}
+	for _, op := range p.Operations {
+		for _, accounts := range op.AccountsByTenant {
+			if slices.Contains(accounts, accountID) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // registered 判断这一行是否写全了。没有写出规范路径前缀或标识不全的行不授权任何请求：
 // 缺省值不能被解释成"全部"。
 func (op Operation) registered() bool {

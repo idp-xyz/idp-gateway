@@ -23,6 +23,7 @@ ID = {
     'operator': 'spiffe://idp.test/poc/operator',              # the runner: PoC controls of the mock
     'business-app': 'spiffe://idp.test/apps/parcel-service',   # a real workload, but not a gateway
     'publisher': 'spiffe://idp.test/gateway-control/publisher',  # publishes the configuration and reads it back
+    'revoker': 'spiffe://idp.test/egress/revoker',             # may change gateway-authz's revocations, nothing else
 }
 # file name -> (issuing CA, identity, the DNS name a server certificate is for; None: a client certificate)
 LEAVES = {
@@ -33,10 +34,12 @@ LEAVES = {
     'operator': ('ca', 'operator', None),
     'business-app': ('ca', 'business-app', None),
     'publisher': ('ca', 'publisher', None),
+    'revoker': ('ca', 'revoker', None),
     # Same names, signed by a CA nobody was told to trust.
     'rogue-gateway': ('rogue-ca', 'gateway', None),
     'rogue-gatekeeper': ('rogue-ca', 'gatekeeper', GATEKEEPER_NAME),
     'rogue-publisher': ('rogue-ca', 'publisher', None),
+    'rogue-revoker': ('rogue-ca', 'revoker', None),
 }
 
 

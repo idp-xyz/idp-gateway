@@ -241,6 +241,39 @@ class ServiceSpeaksTheContract(unittest.TestCase):
         self.assertEqual({name for name, (_, omit) in sent.items() if not omit}, set(DECISION_SCHEMA['required']))
         self.assertIn('credential_handle', sent)
 
+    def test_revocation_interface_fields(self):
+        """The interface that changes gateway-authz's revocations (ADR-0012): what the handler decodes and encodes."""
+        schemas = GATEKEEPER['components']['schemas']
+        request, change = schemas['RevocationRequest'], schemas['RevocationChange']
+        accepted = self.fields('revocationRequest')
+        self.assertIn('DisallowUnknownFields', self.HANDLER)
+        self.assertIs(request['additionalProperties'], False)
+        self.assertEqual(set(accepted), set(request['properties']))
+        self.assertEqual({name for name, (pointer, _) in accepted.items() if pointer}, set(request['required']))
+        for field, constant in {'account_id': 'maxAccountIDBytes', 'reason': 'maxReasonBytes'}.items():
+            limit = re.search(rf'^\s+{constant}\s+= (\d+)$', self.HANDLER, re.M)
+            self.assertIsNotNone(limit, constant)
+            self.assertEqual(request['properties'][field]['maxLength'], int(limit[1]))
+
+        sent = self.fields('revocationChange')
+        self.assertEqual(set(sent), set(change['properties']))
+        self.assertEqual({name for name, (_, omit) in sent.items() if not omit}, set(change['required']))
+        errors = set(re.findall(r'^\s+error\w+\s+= "([a-z_]+)"$', self.HANDLER, re.M))
+        self.assertEqual(errors, set(change['properties']['error']['enum']))
+
+        self.assertEqual(set(self.fields('revocationState')), set(schemas['RevocationState']['required']))
+        self.assertEqual(set(self.fields('revokedAccount')), set(schemas['RevokedAccount']['required']))
+
+        path = GATEKEEPER['paths']['/v1/egress/revocations']
+        self.assertEqual(set(path), {'get', 'post'})
+        for method, operation in path.items():
+            with self.subTest(method=method):
+                self.assertEqual(operation['security'], [{'WorkloadMTLS': []}])
+                self.assertIn('401', operation['responses'])
+        path_constant = re.search(r'^\s+PathRevocations\s+= "([^"]+)"$', self.HANDLER, re.M)
+        self.assertIsNotNone(path_constant)
+        self.assertEqual(path_constant[1], '/v1/egress/revocations')
+
     def test_canonical_path_rule_is_the_same_everywhere(self):
         """One expression: in the service, in the offline preflight and (checked by the Go tests) on the gateway routes."""
         service = re.search(r'CanonicalPathPattern = `([^`]+)`', text('internal/egressauthz/domain/path.go'))

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -20,7 +21,9 @@ import (
 
 	"crypto/tls"
 
+	"go.idp.xyz/idp-gateway/internal/egressauthz/adapters/filestore"
 	"go.idp.xyz/idp-gateway/internal/egressauthz/adapters/httpapi"
+	"go.idp.xyz/idp-gateway/internal/egressauthz/adapters/memory"
 	"go.idp.xyz/idp-gateway/internal/platform/workloadtls"
 )
 
@@ -51,12 +54,69 @@ type entry struct {
 	BodyLen      int64       `json:"body_len"`
 }
 
+// revocationControls 是控制接口对撤销表做的几件事。表在内存里和在文件里各有一种做法。
+type revocationControls interface {
+	revoke(account string) error
+	restore(account string) error
+	restoreAll() error
+	// revoked 返回被撤销的账户（顺序不定）和当前代次。
+	revoked() ([]string, uint64)
+}
+
+type inMemoryRevocations struct{ table *memory.Revocations }
+
+func (m inMemoryRevocations) revoke(account string) error  { m.table.Revoke(account); return nil }
+func (m inMemoryRevocations) restore(account string) error { m.table.Restore(account); return nil }
+func (m inMemoryRevocations) restoreAll() error            { m.table.RestoreAll(); return nil }
+func (m inMemoryRevocations) revoked() ([]string, uint64) {
+	epoch, _ := m.table.Epoch(context.Background())
+	return m.table.Revoked(), epoch
+}
+
+// inFileRevocations 经产品的撤销表做同样的事：控制接口撤销的账户也会落到文件里。
+type inFileRevocations struct{ ledger *filestore.Revocations }
+
+const controlsAsRevoker = "acceptance controls"
+
+func (f inFileRevocations) revoke(account string) error {
+	_, err := f.ledger.Revoke(context.Background(), account, controlsAsRevoker, "revoked through the acceptance controls")
+	return err
+}
+
+func (f inFileRevocations) restore(account string) error {
+	_, err := f.ledger.Restore(context.Background(), account)
+	return err
+}
+
+func (f inFileRevocations) restoreAll() error {
+	accounts, _, err := f.ledger.Revoked(context.Background())
+	if err != nil {
+		return err
+	}
+	for _, account := range accounts {
+		if _, err := f.ledger.Restore(context.Background(), account.AccountID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (f inFileRevocations) revoked() ([]string, uint64) {
+	accounts, epoch, _ := f.ledger.Revoked(context.Background())
+	names := make([]string, 0, len(accounts))
+	for _, account := range accounts {
+		names = append(names, account.AccountID)
+	}
+	return names, epoch
+}
+
 type controls struct {
-	next     http.Handler
-	seams    seams
-	secret   string
-	operator string
-	slow     time.Duration
+	next        http.Handler
+	seams       seams
+	revocations revocationControls
+	secret      string
+	operator    string
+	slow        time.Duration
 
 	mu      sync.Mutex
 	mode    string
@@ -69,10 +129,15 @@ type controls struct {
 func install(handler http.Handler, serverLog io.Writer, s seams) (http.Handler, io.Writer, error) {
 	c := &controls{next: handler, seams: s, mode: "normal",
 		secret: os.Getenv(envAdminSecret), operator: os.Getenv(envOperator)}
+	if s.revocationsInFile != nil {
+		c.revocations = inFileRevocations{s.revocationsInFile}
+	} else {
+		c.revocations = inMemoryRevocations{s.revocationsInMemory}
+	}
 	if len(c.secret) < 16 || c.operator == "" {
 		return nil, nil, fmt.Errorf("acceptance build: %s (16 characters or more) and %s must be set", envAdminSecret, envOperator)
 	}
-	if c.operator == s.callers.Gateway || c.operator == s.callers.Broker {
+	if c.operator == s.callers.Gateway || c.operator == s.callers.Broker || c.operator == s.callers.Revoker {
 		return nil, nil, errors.New("acceptance build: the operator identity must not be a caller identity")
 	}
 	seconds, err := strconv.ParseFloat(os.Getenv(envSlowSeconds), 64)
@@ -184,7 +249,10 @@ func (c *controls) admin(w http.ResponseWriter, r *http.Request) {
 		c.mu.Lock()
 		c.log, c.refused, c.mode = nil, nil, "normal"
 		c.mu.Unlock()
-		c.seams.revocations.RestoreAll()
+		if err := c.revocations.restoreAll(); err != nil {
+			reply(w, http.StatusInternalServerError, map[string]string{"error": "revocations_not_changed"})
+			return
+		}
 		reply(w, http.StatusOK, map[string]bool{"reset": true})
 	case "/admin/mode":
 		mode := query.Get("value")
@@ -202,14 +270,16 @@ func (c *controls) admin(w http.ResponseWriter, r *http.Request) {
 			reply(w, http.StatusBadRequest, map[string]string{"error": "account_required"})
 			return
 		}
+		change := c.revocations.restore
 		if strings.HasSuffix(r.URL.Path, "revoke") {
-			c.seams.revocations.Revoke(account)
-		} else {
-			c.seams.revocations.Restore(account)
+			change = c.revocations.revoke
 		}
-		revoked := c.seams.revocations.Revoked()
+		if err := change(account); err != nil {
+			reply(w, http.StatusInternalServerError, map[string]string{"error": "revocations_not_changed"})
+			return
+		}
+		revoked, epoch := c.revocations.revoked()
 		sort.Strings(revoked)
-		epoch, _ := c.seams.revocations.Epoch(r.Context())
 		reply(w, http.StatusOK, map[string]any{"revoked": revoked, "revocation_epoch": epoch})
 	default:
 		reply(w, http.StatusNotFound, map[string]string{"error": "unknown_admin_operation"})

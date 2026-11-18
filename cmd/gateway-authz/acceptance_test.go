@@ -169,6 +169,58 @@ func TestRevokeAndRestore(t *testing.T) {
 	}
 }
 
+// 给了撤销文件时，控制接口撤销的账户落在同一个文件里：重启之后还在，reset 把它们都恢复。
+func TestControlsWorkOnTheRevocationFile(t *testing.T) {
+	h := newHarness(t)
+	h.withRevocations(nothingRevoked)
+	h.start()
+	state := h.admin("/admin/revoke?account=account-blue").json(t)
+	if state["revocation_epoch"] != float64(1) || len(state["revoked"].([]any)) != 1 {
+		t.Fatalf("撤销后：%v", state)
+	}
+	if err := h.stop(); err != nil {
+		t.Fatal(err)
+	}
+	h.start()
+	if a := h.blue(); a.status != http.StatusForbidden || a.json(t)["reason_code"] != "ACCOUNT_REVOKED" {
+		t.Fatalf("重启之后的蓝租户：%d %s", a.status, a.body)
+	}
+	table := h.revocations("revoker", http.MethodGet, "")
+	if accounts := table.json(t)["revoked_accounts"].([]any); len(accounts) != 1 || accounts[0].(map[string]any)["revoked_by"] != controlsAsRevoker {
+		t.Fatalf("重启之后的表：%s", table.body)
+	}
+
+	// 产品接口撤销的账户，reset 一样恢复。
+	if a := h.revocations("revoker", http.MethodPost, `{"account_id":"account-green","revoked":true,"reason":"through the product interface"}`); a.status != http.StatusOK {
+		t.Fatalf("产品接口的撤销：%d %s", a.status, a.body)
+	}
+	h.admin("/admin/reset")
+	for _, tenant := range []string{"tenant-blue", "tenant-green"} {
+		if a := h.must(call{peer: "gateway", path: extAuthzPath, headers: trusted(tenant)}); a.status != http.StatusOK {
+			t.Errorf("reset 之后的 %s：%d", tenant, a.status)
+		}
+	}
+	if err := h.stop(); err != nil {
+		t.Fatal(err)
+	}
+	h.start()
+	table = h.revocations("revoker", http.MethodGet, "")
+	if body := table.json(t); len(body["revoked_accounts"].([]any)) != 0 || body["revocation_epoch"] != float64(4) {
+		t.Fatalf("reset 再重启之后的表：%s", table.body)
+	}
+
+	// 操作者不能同时是撤销者。
+	if err := h.stop(); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(envOperator, revokerID)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := run(ctx, append(h.args("127.0.0.1:0"), h.extra...), io.Discard, nil); err == nil || !strings.Contains(err.Error(), "acceptance build") {
+		t.Errorf("操作者就是撤销者：%v", err)
+	}
+}
+
 func TestRefusedHandshakesAreCounted(t *testing.T) {
 	h := newHarness(t).start()
 	for _, peer := range []string{"", "rogue-gateway"} {

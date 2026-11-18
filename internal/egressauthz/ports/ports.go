@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 )
 
 // ErrCredentialNotHeld 表示凭证来源里没有这个账户的凭证。
@@ -24,6 +25,43 @@ type Revocations interface {
 	State(ctx context.Context, accountID string) (revoked bool, epoch uint64, err error)
 	// Epoch 返回当前的撤销代次。
 	Epoch(ctx context.Context) (uint64, error)
+}
+
+// ErrRevocationNotWritten 表示一次撤销已经在内存里生效，却没有写到保存它的地方：现在的
+// 请求会被拒绝，重启之后这次撤销就没有了。
+var ErrRevocationNotWritten = errors.New("egressauthz: revocation in effect but not written")
+
+// RevokedAccount 是撤销表里的一行。
+type RevokedAccount struct {
+	AccountID string
+	At        time.Time
+	// By 是做这次撤销的工作负载身份。
+	By     string
+	Reason string
+}
+
+// RevocationChange 是一次撤销或恢复之后的情况。
+type RevocationChange struct {
+	// Changed 为 false 表示这次调用之前就已经是这个状态。
+	Changed bool
+	// Revoked 是这次调用之后账户是否处于被撤销的状态。
+	Revoked bool
+	// Epoch 是这次调用之后的撤销代次。
+	Epoch uint64
+}
+
+// RevocationLedger 是撤销状态可以改的那一侧（docs/adr/ADR-0012.md）。读的一侧仍是 Revocations。
+//
+// 改动只往收紧的方向偏：Revoke 先生效再保存，保存不成时返回包装了 ErrRevocationNotWritten
+// 的错误，撤销仍然有效；Restore 先保存，保存不成就不恢复。
+type RevocationLedger interface {
+	Revocations
+	// Revoke 撤销一个账户。by 是做这件事的工作负载身份。
+	Revoke(ctx context.Context, accountID, by, reason string) (RevocationChange, error)
+	// Restore 取消对一个账户的撤销。
+	Restore(ctx context.Context, accountID string) (RevocationChange, error)
+	// Revoked 返回整张表（按账户排序）和当前代次。
+	Revoked(ctx context.Context) ([]RevokedAccount, uint64, error)
 }
 
 // Grants 回答某个调用方此刻有没有被授予某个 Provider 账户的使用权。授权数据不在本服务里。

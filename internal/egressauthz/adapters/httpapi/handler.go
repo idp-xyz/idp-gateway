@@ -1,6 +1,6 @@
-// Package httpapi 把出站判定接到 HTTP 上：agentgateway 的 HTTP ExtAuthZ 交换，以及只返回
-// 判定、不返回凭证的 JSON 接口。线上契约是 contracts/gatekeeper/openapi.yaml 里的
-// /v1/extauthz/check 与 /v1/egress/authorizations/decision。
+// Package httpapi 把出站判定接到 HTTP 上：agentgateway 的 HTTP ExtAuthZ 交换，只返回判定、
+// 不返回凭证的 JSON 接口，以及改撤销表的接口。线上契约是 contracts/gatekeeper/openapi.yaml
+// 里的 /v1/extauthz/check、/v1/egress/authorizations/decision 与 /v1/egress/revocations。
 //
 // 调用方是谁只看 TLS 握手中已验证的客户端证书，不看任何请求头。
 package httpapi
@@ -12,16 +12,21 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"go.idp.xyz/idp-gateway/internal/egressauthz/application"
+	"go.idp.xyz/idp-gateway/internal/egressauthz/ports"
 	"go.idp.xyz/idp-gateway/internal/platform/workloadtls"
 )
 
 const (
-	PathHealth   = "/healthz"
-	PathExtAuthz = "/v1/extauthz/check"
-	PathDecision = "/v1/egress/authorizations/decision"
+	PathHealth      = "/healthz"
+	PathExtAuthz    = "/v1/extauthz/check"
+	PathDecision    = "/v1/egress/authorizations/decision"
+	PathRevocations = "/v1/egress/revocations"
 )
 
 // 网关写入的可信上下文。每一项都必须恰好出现零次或一次：出现第二份，说明有网关以外的
@@ -45,15 +50,22 @@ const (
 	resultDeny          = "DENY"
 	resultIndeterminate = "INDETERMINATE"
 
-	reasonCallerUnauthenticated = "GATEWAY_WORKLOAD_UNAUTHENTICATED"
-	reasonAmbiguousContext      = "AMBIGUOUS_TRUSTED_CONTEXT"
-	reasonAmbiguousAccount      = "AMBIGUOUS_ACCOUNT_REQUEST"
+	reasonCallerUnauthenticated  = "GATEWAY_WORKLOAD_UNAUTHENTICATED"
+	reasonRevokerUnauthenticated = "REVOKER_WORKLOAD_UNAUTHENTICATED"
+	reasonAmbiguousContext       = "AMBIGUOUS_TRUSTED_CONTEXT"
+	reasonAmbiguousAccount       = "AMBIGUOUS_ACCOUNT_REQUEST"
 )
 
 // decisionTTL 是只返回判定的接口给出的有效期。
 const decisionTTL = 30 * time.Second
 
-const maxDecisionRequestBytes = 64 << 10
+const (
+	maxDecisionRequestBytes   = 64 << 10
+	maxRevocationRequestBytes = 8 << 10
+	// 账户名和撤销原因的长度上限（字节）。原因是自由文本，会进撤销表和日志。
+	maxAccountIDBytes = 256
+	maxReasonBytes    = 512
+)
 
 // Callers 是允许调用本服务的工作负载身份（证书 subjectAltName 里的 URI）。
 type Callers struct {
@@ -61,6 +73,8 @@ type Callers struct {
 	Gateway string
 	// Broker 只能要判定。为空表示没有这样的调用方。
 	Broker string
+	// Revoker 可以改撤销表，别的都不能做。为空表示没有这样的调用方，改撤销表的接口也就不存在。
+	Revoker string
 }
 
 // MayCall 报告持有该身份的工作负载能否调用该路径。
@@ -73,6 +87,8 @@ func (c Callers) MayCall(path, identity string) bool {
 		return identity == c.Gateway
 	case PathDecision:
 		return identity == c.Gateway || identity == c.Broker
+	case PathRevocations:
+		return identity == c.Revoker
 	}
 	return false
 }
@@ -98,6 +114,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.extAuthz(w, r)
 	case PathDecision:
 		h.decision(w, r)
+	case PathRevocations:
+		// 没有配置撤销者时，这个接口不存在，对谁都一样。
+		if h.callers.Revoker == "" {
+			writeJSON(w, http.StatusNotFound, errorBody{Error: "not_found"})
+			return
+		}
+		h.revocations(w, r)
 	default:
 		writeJSON(w, http.StatusNotFound, errorBody{Error: "not_found"})
 	}
@@ -280,6 +303,142 @@ func readDecisionRequest(w http.ResponseWriter, r *http.Request) (*decisionReque
 		return nil, errors.New("required field missing")
 	}
 	return &request, nil
+}
+
+// revocationRequest 对应契约里的 RevocationRequest：把一个账户置为撤销或没有撤销。两项必填用
+// 指针，是为了区分"没有给"和"给了零值"；撤销时还必须写原因。
+type revocationRequest struct {
+	AccountID *string `json:"account_id"`
+	Revoked   *bool   `json:"revoked"`
+	Reason    string  `json:"reason"`
+}
+
+// revocationChange 对应契约里的 RevocationChange。出错时 Error 说明是哪一种，其余各项仍是
+// 这次调用之后的实际情况。
+type revocationChange struct {
+	AccountID       string `json:"account_id"`
+	Revoked         bool   `json:"revoked"`
+	Changed         bool   `json:"changed"`
+	RevocationEpoch uint64 `json:"revocation_epoch"`
+	Error           string `json:"error,omitempty"`
+}
+
+// revocationState 对应契约里的 RevocationState：整张撤销表。
+type revocationState struct {
+	RevocationEpoch uint64           `json:"revocation_epoch"`
+	RevokedAccounts []revokedAccount `json:"revoked_accounts"`
+}
+
+type revokedAccount struct {
+	AccountID string `json:"account_id"`
+	RevokedAt string `json:"revoked_at"`
+	RevokedBy string `json:"revoked_by"`
+	Reason    string `json:"reason"`
+}
+
+const (
+	errorUnknownAccount        = "unknown_account"
+	errorRevocationNotWritten  = "revocation_in_effect_but_not_written"
+	errorRevocationsNotChanged = "revocations_not_changed"
+)
+
+// revocations 是改撤销表的接口（docs/adr/ADR-0012.md）：GET 读出整张表，POST 撤销或恢复一个账户。
+// 只有撤销者的身份能调，应答里没有凭证。
+func (h *Handler) revocations(w http.ResponseWriter, r *http.Request) {
+	caller := workloadtls.PeerIdentity(r.TLS)
+	if !h.callers.MayCall(PathRevocations, caller) {
+		h.refuse(w, r, PathRevocations, caller, http.StatusUnauthorized, reasonRevokerUnauthenticated)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		accounts, epoch, err := h.service.RevokedAccounts(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, errorBody{Error: "revocations_unavailable"})
+			return
+		}
+		state := revocationState{RevocationEpoch: epoch, RevokedAccounts: make([]revokedAccount, 0, len(accounts))}
+		for _, account := range accounts {
+			state.RevokedAccounts = append(state.RevokedAccounts, revokedAccount{AccountID: account.AccountID,
+				RevokedAt: account.At.UTC().Format(time.RFC3339), RevokedBy: account.By, Reason: account.Reason})
+		}
+		writeJSON(w, http.StatusOK, state)
+	case http.MethodPost:
+		h.changeRevocation(w, r, caller)
+	default:
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
+		writeJSON(w, http.StatusMethodNotAllowed, errorBody{Error: "method_not_allowed"})
+	}
+}
+
+func (h *Handler) changeRevocation(w http.ResponseWriter, r *http.Request, caller string) {
+	request, err := readRevocationRequest(w, r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Error: "invalid_revocation_request"})
+		return
+	}
+	account, action := *request.AccountID, "restore"
+	var change ports.RevocationChange
+	if *request.Revoked {
+		action = "revoke"
+		change, err = h.service.RevokeAccount(r.Context(), account, caller, request.Reason)
+	} else {
+		change, err = h.service.RestoreAccount(r.Context(), account)
+	}
+	status := http.StatusOK
+	body := revocationChange{AccountID: account, Revoked: change.Revoked, Changed: change.Changed, RevocationEpoch: change.Epoch}
+	switch {
+	case err == nil:
+	case errors.Is(err, application.ErrUnknownAccount):
+		status, body.Error = http.StatusUnprocessableEntity, errorUnknownAccount
+	case errors.Is(err, ports.ErrRevocationNotWritten):
+		// 撤销已经生效，只是重启之后就没有了。调用方要知道，所以不是 200。
+		status, body.Error = http.StatusInternalServerError, errorRevocationNotWritten
+	default:
+		status, body.Error = http.StatusInternalServerError, errorRevocationsNotChanged
+	}
+	writeJSON(w, status, body)
+
+	// 每次改动一行：谁、哪个账户、撤销还是恢复、为什么、之后的代次。
+	level := slog.LevelInfo
+	attrs := []slog.Attr{
+		slog.String("endpoint", PathRevocations), slog.String("caller", caller), slog.Int("status", status),
+		slog.String("action", action), slog.String("account", account), slog.String("reason", request.Reason),
+		slog.Bool("changed", change.Changed), slog.Bool("revoked", change.Revoked), slog.Uint64("revocation_epoch", change.Epoch),
+	}
+	if err != nil {
+		level = slog.LevelError
+		attrs = append(attrs, slog.String("error", err.Error()))
+	}
+	h.log.LogAttrs(r.Context(), level, "egress revocation", attrs...)
+}
+
+func readRevocationRequest(w http.ResponseWriter, r *http.Request) (*revocationRequest, error) {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRevocationRequestBytes))
+	decoder.DisallowUnknownFields()
+	var request revocationRequest
+	if err := decoder.Decode(&request); err != nil {
+		return nil, err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return nil, errors.New("unexpected data after the request document")
+	}
+	switch {
+	case request.AccountID == nil || request.Revoked == nil:
+		return nil, errors.New("required field missing")
+	case *request.AccountID == "" || !plainText(*request.AccountID, maxAccountIDBytes):
+		return nil, errors.New("account_id is empty, too long or not plain text")
+	case !plainText(request.Reason, maxReasonBytes):
+		return nil, errors.New("reason is too long or not plain text")
+	case *request.Revoked && strings.TrimSpace(request.Reason) == "":
+		return nil, errors.New("a revocation needs a reason")
+	}
+	return &request, nil
+}
+
+// plainText 报告 s 是不是一段不超过 limit 字节、没有控制字符的 UTF-8 文本。
+func plainText(s string, limit int) bool {
+	return len(s) <= limit && utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl)
 }
 
 // refuse 回答没有进入判定的请求：调用方身份不对，或可信上下文有歧义。

@@ -191,6 +191,29 @@ func TestIncompleteRowAuthorisesNothing(t *testing.T) {
 	}
 }
 
+func TestNamesAccount(t *testing.T) {
+	policy := examplePolicy()
+	for _, account := range []string{"account-blue", "account-green"} {
+		if !policy.NamesAccount(account) {
+			t.Errorf("登记表里的账户 %q 没有被认出来", account)
+		}
+	}
+	// 差一个字母、大小写不同、多一个空格、拿租户或凭证绑定的名字来问：都不是登记表里的账户。
+	for _, account := range []string{"", "account-bleu", "Account-Blue", "account-blue ", "tenant-blue", "gatekeeper:mockcarrier-test"} {
+		if policy.NamesAccount(account) {
+			t.Errorf("%q 被当成了登记表里的账户", account)
+		}
+	}
+	// 只在后面某一行里出现的账户也算。
+	policy.Operations = append(policy.Operations, Operation{AccountsByTenant: map[string][]string{"tenant-red": {"account-red"}}})
+	if !policy.NamesAccount("account-red") {
+		t.Error("第二行里的账户没有被认出来")
+	}
+	if (Policy{}).NamesAccount("account-blue") {
+		t.Error("空的登记表认出了账户")
+	}
+}
+
 func TestSoleAccount(t *testing.T) {
 	policy := examplePolicy()
 	if account, ok := policy.SoleAccount("tenant-blue", "mockcarrier", "tracking.get", "TEST"); !ok || account != "account-blue" {

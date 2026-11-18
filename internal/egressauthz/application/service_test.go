@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -287,6 +288,179 @@ func TestRevokedAccountIsNotAskedAbout(t *testing.T) {
 	out, _ := service.Decide(context.Background(), blueInput())
 	if out.Allowed || out.Reason != ReasonAccountRevoked || len(grants.asked) != 0 {
 		t.Fatalf("%+v，问了 %v", out, grants.asked)
+	}
+}
+
+// fakeLedger 是可以改的撤销表。fail 不为 nil 时改动"没有写下去"：撤销照样生效，恢复不生效。
+type fakeLedger struct {
+	fakeRevocations
+	fail  error
+	calls []string
+}
+
+func (f *fakeLedger) Revoke(_ context.Context, accountID, by, reason string) (ports.RevocationChange, error) {
+	f.calls = append(f.calls, "revoke "+accountID+" by "+by+" because "+reason)
+	changed := !f.revoked[accountID]
+	if changed {
+		f.revoked[accountID] = true
+		f.epoch++
+	}
+	return ports.RevocationChange{Changed: changed, Revoked: true, Epoch: f.epoch}, f.fail
+}
+
+func (f *fakeLedger) Restore(_ context.Context, accountID string) (ports.RevocationChange, error) {
+	f.calls = append(f.calls, "restore "+accountID)
+	if !f.revoked[accountID] {
+		return ports.RevocationChange{Epoch: f.epoch}, nil
+	}
+	if f.fail != nil {
+		return ports.RevocationChange{Revoked: true, Epoch: f.epoch}, f.fail
+	}
+	delete(f.revoked, accountID)
+	f.epoch++
+	return ports.RevocationChange{Changed: true, Epoch: f.epoch}, nil
+}
+
+func (f *fakeLedger) Revoked(context.Context) ([]ports.RevokedAccount, uint64, error) {
+	var accounts []ports.RevokedAccount
+	for account := range f.revoked {
+		accounts = append(accounts, ports.RevokedAccount{AccountID: account})
+	}
+	return accounts, f.epoch, f.err
+}
+
+func newServiceWithLedger() (*Service, *fakeCredentials, *fakeLedger) {
+	_, credentials, _ := newService()
+	// account-gone 是登记表换过之后留在撤销表里的账户：登记表里已经没有它了。
+	ledger := &fakeLedger{fakeRevocations: fakeRevocations{revoked: map[string]bool{"account-gone": true}, epoch: 3}}
+	return New(twoTenantPolicy(), credentials, ledger, WithRevocationLedger(ledger)), credentials, ledger
+}
+
+func TestRevokingAnAccountStopsItFromTheNextDecision(t *testing.T) {
+	ctx := context.Background()
+	service, credentials, ledger := newServiceWithLedger()
+	if out, _, err := service.Authorize(ctx, blueInput()); err != nil || !out.Allowed {
+		t.Fatalf("撤销之前：%+v %v", out, err)
+	}
+	credentials.asked = nil
+
+	change, err := service.RevokeAccount(ctx, "account-blue", "spiffe://idp.test/revoker", "key leaked")
+	if err != nil || change != (ports.RevocationChange{Changed: true, Revoked: true, Epoch: 4}) {
+		t.Fatalf("撤销：%+v %v", change, err)
+	}
+	if len(ledger.calls) != 1 || ledger.calls[0] != "revoke account-blue by spiffe://idp.test/revoker because key leaked" {
+		t.Fatalf("交给撤销表的是 %v", ledger.calls)
+	}
+	out, credential, err := service.Authorize(ctx, blueInput())
+	if err != nil || out.Allowed || out.Reason != ReasonAccountRevoked || out.RevocationEpoch != 4 || !credential.IsZero() || len(credentials.asked) != 0 {
+		t.Fatalf("撤销之后：%+v %v，问过凭证来源 %v", out, err, credentials.asked)
+	}
+	green := blueInput()
+	green.Tenant = "tenant-green"
+	if out, _, err := service.Authorize(ctx, green); err != nil || !out.Allowed {
+		t.Fatalf("撤销蓝账户影响了绿租户：%+v %v", out, err)
+	}
+
+	change, err = service.RestoreAccount(ctx, "account-blue")
+	if err != nil || change != (ports.RevocationChange{Changed: true, Epoch: 5}) {
+		t.Fatalf("恢复：%+v %v", change, err)
+	}
+	if out, _, err := service.Authorize(ctx, blueInput()); err != nil || !out.Allowed || out.RevocationEpoch != 5 {
+		t.Fatalf("恢复之后：%+v %v", out, err)
+	}
+	// 恢复一个登记表里有、但没有被撤销的账户：不算错，什么都不改。
+	if change, err := service.RestoreAccount(ctx, "account-green"); err != nil || change != (ports.RevocationChange{Epoch: 5}) {
+		t.Fatalf("恢复没撤销过的账户：%+v %v", change, err)
+	}
+	if accounts, epoch, err := service.RevokedAccounts(ctx); err != nil || epoch != 5 || len(accounts) != 1 || accounts[0].AccountID != "account-gone" {
+		t.Fatalf("读表：%+v %d %v", accounts, epoch, err)
+	}
+}
+
+// 名字打错了要得到一个错误，不是一次什么都没拦住的成功。
+func TestRevocationsAreOnlyChangedForAccountsTheServiceKnows(t *testing.T) {
+	ctx := context.Background()
+	service, _, ledger := newServiceWithLedger()
+	for _, account := range []string{"account-bleu", "Account-Blue", "tenant-blue", ""} {
+		if change, err := service.RevokeAccount(ctx, account, "spiffe://idp.test/revoker", "typo"); !errors.Is(err, ErrUnknownAccount) || change != (ports.RevocationChange{Epoch: 3}) {
+			t.Errorf("撤销 %q：%+v %v", account, change, err)
+		}
+		if change, err := service.RestoreAccount(ctx, account); !errors.Is(err, ErrUnknownAccount) || change != (ports.RevocationChange{Epoch: 3}) {
+			t.Errorf("恢复 %q：%+v %v", account, change, err)
+		}
+	}
+	if len(ledger.calls) != 0 {
+		t.Fatalf("不认识的账户仍交给了撤销表：%v", ledger.calls)
+	}
+
+	// 登记表里已经没有、撤销表里还留着的账户：重复撤销不算错，也恢复得了；恢复之后它就是不认识的了。
+	if change, err := service.RevokeAccount(ctx, "account-gone", "spiffe://idp.test/revoker", "again"); err != nil || change != (ports.RevocationChange{Revoked: true, Epoch: 3}) {
+		t.Fatalf("重复撤销留在表里的账户：%+v %v", change, err)
+	}
+	if change, err := service.RestoreAccount(ctx, "account-gone"); err != nil || change != (ports.RevocationChange{Changed: true, Epoch: 4}) {
+		t.Fatalf("恢复留在表里的账户：%+v %v", change, err)
+	}
+	if _, err := service.RestoreAccount(ctx, "account-gone"); !errors.Is(err, ErrUnknownAccount) {
+		t.Fatalf("再恢复一次：%v", err)
+	}
+}
+
+func TestRevocationThatWasNotWrittenIsReportedAndStillInEffect(t *testing.T) {
+	ctx := context.Background()
+	service, _, ledger := newServiceWithLedger()
+	ledger.fail = fmt.Errorf("%w: disk full", ports.ErrRevocationNotWritten)
+	change, err := service.RevokeAccount(ctx, "account-blue", "spiffe://idp.test/revoker", "key leaked")
+	if !errors.Is(err, ports.ErrRevocationNotWritten) || change != (ports.RevocationChange{Changed: true, Revoked: true, Epoch: 4}) {
+		t.Fatalf("没写下去的撤销：%+v %v", change, err)
+	}
+	if out, _, _ := service.Authorize(ctx, blueInput()); out.Allowed || out.Reason != ReasonAccountRevoked {
+		t.Fatalf("没写下去的撤销没有生效：%+v", out)
+	}
+	// 恢复没写下去：不生效，错误原样传出来。
+	ledger.fail = errors.New("restore not applied: disk full")
+	if change, err := service.RestoreAccount(ctx, "account-blue"); err == nil || change != (ports.RevocationChange{Revoked: true, Epoch: 4}) {
+		t.Fatalf("没写下去的恢复：%+v %v", change, err)
+	}
+	if out, _, _ := service.Authorize(ctx, blueInput()); out.Allowed {
+		t.Fatal("没写下去的恢复却生效了")
+	}
+}
+
+func TestRevocationStateThatCannotBeReadIsNotMistakenForAnUnknownAccount(t *testing.T) {
+	ctx := context.Background()
+	service, _, ledger := newServiceWithLedger()
+	ledger.err = errors.New("revocation store down")
+	for name, change := range map[string]func() error{
+		"撤销": func() error {
+			_, err := service.RevokeAccount(ctx, "account-bleu", "spiffe://idp.test/revoker", "typo")
+			return err
+		},
+		"恢复": func() error { _, err := service.RestoreAccount(ctx, "account-blue"); return err },
+		"读表": func() error { _, _, err := service.RevokedAccounts(ctx); return err },
+	} {
+		if err := change(); err == nil || errors.Is(err, ErrUnknownAccount) || !strings.Contains(err.Error(), "revocation store down") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if len(ledger.calls) != 0 {
+		t.Fatalf("状态读不出来时仍去改了撤销表：%v", ledger.calls)
+	}
+}
+
+func TestWithoutALedgerRevocationsCannotBeChanged(t *testing.T) {
+	ctx := context.Background()
+	service, _, _ := newService()
+	if _, err := service.RevokeAccount(ctx, "account-blue", "spiffe://idp.test/revoker", "key leaked"); !errors.Is(err, ErrNoRevocationLedger) {
+		t.Errorf("撤销：%v", err)
+	}
+	if _, err := service.RestoreAccount(ctx, "account-blue"); !errors.Is(err, ErrNoRevocationLedger) {
+		t.Errorf("恢复：%v", err)
+	}
+	if _, _, err := service.RevokedAccounts(ctx); !errors.Is(err, ErrNoRevocationLedger) {
+		t.Errorf("读表：%v", err)
+	}
+	if out, _, err := service.Authorize(ctx, blueInput()); err != nil || !out.Allowed {
+		t.Fatalf("被拒绝的改动影响了判定：%+v %v", out, err)
 	}
 }
 
