@@ -417,32 +417,39 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
         deleted = delete_parcel(code)
         r.check('delete: status 200, Succeeded true', deleted['status'] == 200 and data(deleted).get('Succeeded') is True)
         after = req('GET', f'{BASE}/parcels/{code}', tok['blue'], sample_peers=sandbox)
-        if sandbox:
-            r.note('get after delete (the sandbox\'s answer, not judged)', {'status': after['status'], 'Succeeded': data(after).get('Succeeded'),
-                                                                           'Error.Code': (data(after).get('Error') or {}).get('Code') if isinstance(data(after).get('Error'), dict) else None})
-        else:
-            r.check('get after delete: Succeeded false (the stand-in: Error.Code 0x100001)', data(after).get('Succeeded') is False)
+        r.check('get after delete: HTTP 404, as the carrier answered it, passed on by the gateway unchanged', after['status'] == 404)
 
     # WB-03
     STATE['label'] = 'WB-03'
-    r.case('WB-03', 'the same ReferenceId again: HTTP 200, Succeeded false, Error.Code 0x100005, unchanged on the way to the caller')
+    r.case('WB-03', 'the same ReferenceId again: identical body gets the existing parcel back; a changed body gets 0x100005 (HTTP 200, Succeeded false), unchanged to the caller')
     reference = new_reference()
-    first = req('POST', f'{BASE}/parcels', tok['blue'], parcel_body(reference), sample_peers=sandbox)
+    body_one = parcel_body(reference)
+    first = req('POST', f'{BASE}/parcels', tok['blue'], body_one, sample_peers=sandbox)
     first_code = (data(first).get('Data') or {}).get('ProcessCode') if isinstance(data(first).get('Data'), dict) else None
     if first_code:
         CREATED[first_code] = 'created'
     r.check('the first create succeeded', data(first).get('Succeeded') is True and bool(first_code))
-    again = req('POST', f'{BASE}/parcels', tok['blue'], parcel_body(reference), sample_peers=sandbox)
-    again_data = data(again).get('Data')
-    again_code = again_data.get('ProcessCode') if isinstance(again_data, dict) else None
-    if again_code and again_code != first_code:
-        CREATED[again_code] = 'created'      # unexpected success of a repeat: still a parcel to delete (the checks below fail)
-    error = data(again).get('Error')
-    r.check('the second: HTTP status 200', again['status'] == 200)
-    r.check('the second: Succeeded false', data(again).get('Succeeded') is False)
-    r.check('the second: Error.Code is 0x100005', isinstance(error, dict) and error.get('Code') == '0x100005')
+
+    def created_code(answer: dict):
+        d = data(answer).get('Data')
+        code = d.get('ProcessCode') if isinstance(d, dict) else None
+        if code and code != first_code:
+            CREATED[code] = 'created'        # a parcel that was not expected: still one to delete (the checks fail)
+        return code
+    same = req('POST', f'{BASE}/parcels', tok['blue'], parcel_body(reference), sample_peers=sandbox)
+    same_code = created_code(same)
+    r.check('identical body: HTTP 200, Succeeded true', same['status'] == 200 and data(same).get('Succeeded') is True)
+    r.check('identical body: the ProcessCode is the first one (nothing new was made)', bool(first_code) and same_code == first_code)
+    changed_body = parcel_body(reference)
+    changed_body['WeightInKg'] = 1.3
+    changed = req('POST', f'{BASE}/parcels', tok['blue'], changed_body, sample_peers=sandbox)
+    created_code(changed)
+    error = data(changed).get('Error')
+    r.check('changed body: HTTP status 200', changed['status'] == 200)
+    r.check('changed body: Succeeded false', data(changed).get('Succeeded') is False)
+    r.check('changed body: Error.Code is 0x100005', isinstance(error, dict) and error.get('Code') == '0x100005')
     if not (isinstance(error, dict) and error.get('Code') == '0x100005'):
-        r.note('the second answer: Error', error)
+        r.note('the changed-body answer: Error', error)
     if first_code:
         r.check('the parcel made for this case is deleted', data(delete_parcel(first_code)).get('Succeeded') is True)
 

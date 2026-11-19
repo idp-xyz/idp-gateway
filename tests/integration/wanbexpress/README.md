@@ -32,17 +32,21 @@ tests/integration/gatekeeper/stack.sh up                                   # 本
 
 ## 替身照文档做了什么，哪些是我们的假设
 
-照文档：`Authorization` 恰好一个、格式 `Hc-OweDeveloper 账号;令牌;随机数`（缺或格式错 403，账号令牌不对 401，随机数只含字母数字 `-` `_`）；`Accept` 要 `application/json`；`whoami`；创建的信封，`ReferenceId` 全局唯一，重复是 HTTP 200 加 `Succeeded: false`、`Error.Code` `0x100005`；`Status` 是 `Original`（`AutoConfirm` 为 true 时 `Confirmed`）；取回；删除只在确认交运之前。
+照文档：`Authorization` 恰好一个、格式 `Hc-OweDeveloper 账号;令牌;随机数`（缺或格式错 403，账号令牌不对 401）；`Accept` 要 `application/json`；`whoami`；创建的信封，`Status` 是 `Original`（`AutoConfirm` 为 true 时 `Confirmed`）；取回；删除只在确认交运之前。
 
-**我们的假设（文档没写）**：随机数用过就拒（403；文档说以后的版本会限定）；`Accept` 不对答 406；处理号不存在或不是这个账户的，HTTP 200、`Error.Code` `0x100001`；删除已确认的包裹答 `0x100002`；删除成功答 `{"Succeeded": true, "Error": null}`（文档说删除"无明确返回数据格式"）；创建只查 `ReferenceId`、`ShippingAddress`、`ItemDetails` 非空；替身每个应答都带一个 `Set-Cookie`（为了看网关去不去掉它）。承运商真正怎么回应，要等真实沙箱。
+**照 2026-11-19 在真实沙箱上量到的**（文档没写）：同一个 `ReferenceId`、正文相同再创建，HTTP 200、`Succeeded` 真、答回已有的处理号；正文不同，HTTP 200、`Succeeded` 假、`0x100005`、Message 带客单号和已有的处理号、`SystemError` 为 null、没有 `Data`；删除之后客单号可以再用；再删一次已删的，HTTP 200、`Succeeded` 真；查不到或已删除的处理号，HTTP 404、正文为空、没有 `Content-Type`。
+
+**替身比沙箱今天严的两处，照文档从严**：随机数用过就拒（403，沙箱两次都接受）；`Accept` 不是 `application/json` 就拒（406，状态码是我们定的，沙箱答 200 JSON）。这两处保留，`no-accept` 对照靠它。
+
+**别的假设（我们的，文档和量到的都没写）**：删除已确认的包裹答 `0x100002`；创建只查 `ReferenceId`、`ShippingAddress`、`ItemDetails` 非空；替身每个应答都带一个 `Set-Cookie`（为了看网关去不去掉它）。
 
 ## 用例
 
 | 用例 | 检查什么 |
 |---|---|
 | WB-01 | blue 的真实 Gatekeeper 令牌经网关调 `whoami`：200，`Succeeded` 真，`Data` 是该账户的账号（只记对不对），判定是 `ACTIVE_ACCOUNT_GRANT`、操作 `whoami.get`，承运商的 `Set-Cookie` 没到调用方（替身） |
-| WB-02 | 创建 → 按处理号取回（`ReferenceId`、处理号对得上）→ 删除；删除后再取：替身答"查不到"（沙箱上只记录，不判） |
-| WB-03 | 同一个 `ReferenceId` 再创建：HTTP 200、`Succeeded` 假、`Error.Code` 是 `0x100005`，原样到调用方；第一个包裹删除 |
+| WB-02 | 创建 → 按处理号取回（`ReferenceId`、处理号对得上）→ 删除；删除后再取：HTTP 404（承运商答 404，网关原样给调用方），两种跑法都判 |
+| WB-03 | 同一个 `ReferenceId`：正文相同再创建，HTTP 200、`Succeeded` 真、处理号与第一次相同；改一个字段（`WeightInKg`）再创建，HTTP 200、`Succeeded` 假、`Error.Code` 是 `0x100005`，原样到调用方；凡是答了处理号的都记下并删除 |
 | WB-04 | 替身：三个请求，每个上游恰好一个 `Authorization`，形状对、是 blue 账户自己的账号和令牌，随机数三个互不相同；`Accept` 恰为 `application/json`（调用方带的是 `text/html`）；`Host` 是沙箱的名字；`x-provider-account`、`cookie`、转发类的头、调用方自造的 `X-Evil-Probe`、`x-idp-*` 都没到；调用方的 Gatekeeper 令牌和它自己塞的 `Authorization` 没到；另记下上游看到的头名（观察，不判：`accept`、`authorization`、`host`） |
 | WB-05 | 不带令牌、别的受众、伪造签名：401，`gateway-authz` 没有被问，替身没收到 |
 | WB-06 | 替身：green 的令牌得到 green 的账户，上游看到的是 green 的凭证；blue 指定 green 的账户：403 `ACCOUNT_NOT_GRANTED`，替身没收到。`--sandbox`：green 被拒 403（原因码记下，不判），其余跳过 |
@@ -57,11 +61,11 @@ tests/integration/gatekeeper/stack.sh up                                   # 本
 
 ## 结果
 
-2026-11-19，仓库 `a978aaa` 加上这一轮的改动，agentgateway 1.7.0，Gatekeeper `f36dc06`，上游是替身，连跑两遍：**两遍都是 10/10，每遍 111 项检查，没有跳过**。每遍约两秒。
+2026-11-19，仓库 `a978aaa` 加上这一轮的改动，agentgateway 1.7.0，Gatekeeper `f36dc06`，上游是替身，连跑两遍：**两遍都是 10/10，每遍 113 项检查，没有跳过**。每遍约两秒。
 
 | 用例 | 检查数 |
 |---|---|
-| WB-01 / 02 / 03 / 04 / 05 | 5 / 7 / 5 / 10 / 9 |
+| WB-01 / 02 / 03 / 04 / 05 | 5 / 7 / 7 / 10 / 9 |
 | WB-06 / 07 / 08 / 09 / 10 | 5 / 3 / 48 / 15 / 4 |
 
 这是联调，不是验收证据；不改变任何验收用例的 `NOT_RUN`。
@@ -78,4 +82,16 @@ tests/integration/gatekeeper/stack.sh up                                   # 本
 
 ## 真实沙箱的结果
 
-（仓库所有者跑完后填。）
+2026-11-19，凭证文件是仓库所有者给的，放在仓库之外（0600）；Gatekeeper `f36dc06`（本机实例），agentgateway 1.7.0，在开发机上跑。网关进程起在去掉了代理环境变量的环境里，连着的对端是 `47.106.164.236:80` 和 `47.107.36.179:80`，就是沙箱的名字解析到的两个地址。
+
+| 哪一遍 | 结果 |
+|---|---|
+| 第 1 遍（`b658361`） | 9/10。`WB-03` 不通过：它照文档期望重复的客单号答 `0x100005`，沙箱对正文相同的重复创建答的是成功和已有的处理号。网关没有问题，错的是照文档写的期望 |
+| 改了替身和 `WB-03` 之后，连跑两遍 | 都是 10/10：103 项检查，67 项通过，36 项跳过（只有替身上看得到的那些），没有不通过的 |
+
+- 这是第一次经过整条链的真实调用：Gatekeeper 签的令牌，agentgateway 验证，`gateway-authz` 问 Gatekeeper 的 PDP 并给出凭证，请求到了承运商的沙箱。验证授权、创建、按处理号取回、删除都成了。
+- 三遍创建的包裹都删掉了，结果里"要手工删除的"是空的。客单号是 `IDPGW-` 开头的。
+- 令牌和这种认证头的值，在标准输出、结果文件、网关和 `gateway-authz` 的日志里都是 0 处（套件自己扫一遍，我另外扫了一遍）。
+- 耗时（经网关）：第 1 遍的第一次创建 8.5 秒，是唯一一次超过 1 秒的；其余的创建 105 到 275 毫秒，取 50 到 360 毫秒，删除 73 到 102 毫秒，验证授权 50 到 200 毫秒。
+- 沙箱的行为与文档不同或文档没写的几处，是另外直接对着沙箱量的（不经网关，一个包裹，用完删除），写在上面"替身的假设"和 [deploy/providers/wanbexpress/README.md](../../../deploy/providers/wanbexpress/README.md) 里。
+- **这里没有验的**：承运商实际收到的头（只在替身上看得到）；两个账户之间的隔离（只有一个沙箱账号）；到承运商的 TLS（沙箱只有明文 HTTP）；从 compose 池里发出去（这里的网关是本机进程，没有出口规则）。这些结果算不算验收证据（开发计划 1.6）没有定。

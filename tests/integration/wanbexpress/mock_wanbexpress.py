@@ -11,12 +11,16 @@ From the documentation (How-To-Start, whoami, parcels/Create-Parcel, Get-Parcel,
   - GET /api/parcels/{processCode}, DELETE /api/parcels/{processCode} (only before the parcel is confirmed).
   - A business error is HTTP 200 with Succeeded false and Error.Code / Error.Message.
 
-Our own assumptions, because the documentation does not say (they are also written in the suite's README):
-  - a nonce seen before is refused with 403 (the documentation says a future version will limit repeats);
-  - an Accept that is not application/json is refused with 406;
-  - a process code that does not exist, or belongs to another account, is HTTP 200, Succeeded false, Error.Code 0x100001;
-  - a DELETE of a confirmed parcel is HTTP 200, Succeeded false, Error.Code 0x100002; a successful DELETE answers
-    {"Succeeded": true, "Error": null};
+Measured at the real sandbox on 2026-11-19 (the documentation does not say; the stand-in follows the measurements):
+  - the same ReferenceId with an identical body: HTTP 200, Succeeded true, the same ProcessCode (nothing new is made);
+  - the same ReferenceId with a different body: HTTP 200, Succeeded false, Error.Code 0x100005, a Message that names the ReferenceId and the
+    existing process code, SystemError null, no Data;
+  - after a delete the ReferenceId can be used again; deleting what is already gone: HTTP 200, Succeeded true;
+  - a process code that does not exist or was deleted: HTTP 404, empty body, no Content-Type.
+Stricter than the sandbox, following the documentation: a nonce seen before is refused with 403 (the sandbox accepts it);
+an Accept that is not application/json is refused with 406 (the sandbox answers 200 JSON). The 406 is our own choice of status.
+Other assumptions of ours:
+  - a DELETE of a confirmed parcel is HTTP 200, Succeeded false, Error.Code 0x100002;
   - the body of a create is checked for ReferenceId (a string), ShippingAddress (an object) and a non-empty ItemDetails only.
 Every request is recorded as the mock received it (method, raw target, every header in order, body length and hash,
 ReferenceId), for the suite to read at /admin/hits with the admin secret. The recorded headers hold the credential;
@@ -49,9 +53,10 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _send(self, status: int, payload: dict | None):
-        body = json.dumps(payload).encode()
+        body = b'' if payload is None else json.dumps(payload).encode()
         self.send_response(status)
-        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        if payload is not None:
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
         self.send_header('X-Mock-Provider', 'wanbexpress')
         # What a provider must not be able to do to the caller (tests the gateway's response header removal).
@@ -116,12 +121,17 @@ class Handler(BaseHTTPRequestHandler):
         reference = parsed['ReferenceId']
         with LOCK:
             if reference in REFERENCES:
-                return self._send(200, failure('0x100005', 'ReferenceId already exists'))
+                known = PARCELS[REFERENCES[reference]]
+                if known['body'] == parsed:    # measured at the sandbox: the same body is answered with the parcel that exists
+                    return self._send(200, {'Data': {'ProcessCode': REFERENCES[reference], 'ReferenceId': reference, 'Status': known['status']},
+                                            'Succeeded': True, 'Error': None})
+                answer = failure('0x100005', f'ReferenceId {reference} already exists, process code {REFERENCES[reference]}')
+                return self._send(200, answer)
             SERIAL[0] += 1
             code = f'SBXPAA{SERIAL[0]:010d}YQ'
             status = 'Confirmed' if parsed.get('AutoConfirm') is True else 'Original'
             REFERENCES[reference] = code
-            PARCELS[code] = {'account': account, 'reference': reference, 'status': status}
+            PARCELS[code] = {'account': account, 'reference': reference, 'status': status, 'body': parsed}
         return self._send(200, {'Data': {'ProcessCode': code, 'IndexNumber': f'9001{SERIAL[0]:010d}', 'ReferenceId': reference,
                                          'TrackingNumber': '', 'IsVirtualTrackingNumber': False, 'SortCode': '',
                                          'IsRemoteArea': False, 'Status': status}, 'Succeeded': True, 'Error': None})
@@ -130,7 +140,9 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             parcel = PARCELS.get(code)
             if parcel is None or parcel['account'] != account:
-                return self._send(200, failure('0x100001', 'Parcel not found'))
+                if self.command == 'DELETE':      # measured at the sandbox: deleting what is gone succeeds
+                    return self._send(200, {'Succeeded': True, 'Error': None})
+                return self._send(404, None)      # measured: HTTP 404, empty body, no Content-Type
             if self.command == 'GET':
                 return self._send(200, {'Data': {'AccountNo': account, 'ReferenceId': parcel['reference'], 'ProcessCode': code,
                                                  'Status': parcel['status']}, 'Succeeded': True, 'Error': None})
