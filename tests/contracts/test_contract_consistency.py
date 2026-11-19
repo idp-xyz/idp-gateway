@@ -381,6 +381,62 @@ class ServiceSpeaksTheContract(unittest.TestCase):
         self.assertEqual('^' + preflight[1] + '$', service[1])
 
 
+class RevokerClientSpeaksTheContract(unittest.TestCase):
+    """What gateway-control's revocation commands send and read, from the client's source, against the contract.
+
+    The Go tests cover behaviour. These compare names, as ServiceSpeaksTheContract does for the server:
+    the JSON fields of the structs of internal/egressauthz/adapters/revokerclient, the path, the errors it
+    recognises and the status codes it tells apart.
+    """
+    CLIENT = text('internal/egressauthz/adapters/revokerclient/client.go')
+    SERVER = ServiceSpeaksTheContract.HANDLER
+    HANDLER = CLIENT   # ServiceSpeaksTheContract.fields reads its structs from HANDLER: here that is the client's source
+    fields = ServiceSpeaksTheContract.fields
+
+    def test_what_it_sends(self):
+        request = GATEKEEPER['components']['schemas']['RevocationRequest']
+        sent = self.fields('revocationRequest')
+        self.assertEqual(set(sent), set(request['properties']))
+        self.assertTrue(set(request['required']) <= {name for name, (_, omit) in sent.items() if not omit},
+                        'a required field may not be left out')
+        self.assertEqual({name for name, (_, omit) in sent.items() if omit}, set(request['properties']) - set(request['required']))
+
+    def test_what_it_reads(self):
+        """Every field the contract requires is a pointer, so that "missing" is told from "zero"."""
+        schemas = GATEKEEPER['components']['schemas']
+        for struct, schema in (('revocationChange', 'RevocationChange'), ('revocationState', 'RevocationState')):
+            with self.subTest(struct=struct):
+                read, contract = self.fields(struct), schemas[schema]
+                self.assertEqual(set(read), set(contract['properties']))
+                required = {name for name, (pointer, _) in read.items() if pointer or name == 'revoked_accounts'}
+                self.assertEqual(required, set(contract['required']))
+        account = self.fields('revokedAccount')
+        self.assertEqual(set(account), set(schemas['RevokedAccount']['required']))
+        self.assertTrue(all(pointer for pointer, _ in account.values()))
+
+    def test_the_path_and_the_errors_it_recognises(self):
+        path = re.search(r'^const Path = "([^"]+)"$', self.CLIENT, re.M)
+        self.assertIsNotNone(path)
+        self.assertIn(path[1], GATEKEEPER['paths'])
+        recognised = set(re.findall(r'^\s+error\w+\s+= "([a-z_]+)"$', self.CLIENT, re.M))
+        enum = set(GATEKEEPER['components']['schemas']['RevocationChange']['properties']['error']['enum'])
+        self.assertEqual(recognised, {'revocation_in_effect_but_not_written', 'revocations_not_changed'})
+        self.assertLessEqual(recognised, enum)
+        # The server sends exactly these two names with a 500: the ones the client tells apart.
+        self.assertEqual(recognised, {name for name in re.findall(r'^\s+error\w+\s+= "([a-z_]+)"$', self.SERVER, re.M)
+                                      if name != 'unknown_account'})
+
+    def test_the_statuses_it_tells_apart_are_the_ones_the_contract_lists(self):
+        statuses = {'http.StatusOK': '200', 'http.StatusBadRequest': '400', 'http.StatusUnauthorized': '401',
+                    'http.StatusNotFound': '404', 'http.StatusUnprocessableEntity': '422', 'http.StatusInternalServerError': '500'}
+        used = set(re.findall(r'http\.Status[A-Z]\w+', self.CLIENT))
+        self.assertEqual(used, set(statuses))
+        post = GATEKEEPER['paths']['/v1/egress/revocations']['post']['responses']
+        get = GATEKEEPER['paths']['/v1/egress/revocations']['get']['responses']
+        self.assertEqual({statuses[u] for u in used}, set(post) | {'200'})
+        self.assertLessEqual({'200', '401', '404'}, set(get))
+
+
 class AgentgatewayPin(unittest.TestCase):
     """One agentgateway build is pinned, and the project manifest names the same release."""
     LOCK = json.loads(text('deploy/agentgateway/agentgateway.lock.json'))

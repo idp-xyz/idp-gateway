@@ -6,6 +6,14 @@
 //	gateway-control place     --config-dir <池的配置目录>
 //	gateway-control keep      --config-dir <池的配置目录> --read-back <host:port> … [--compose-file <文件>]
 //
+// 另有三条命令不属于池，对着一个 gateway-authz 的撤销接口发一次请求（revoke.go，docs/adr/ADR-0012.md V1.2）：
+//
+//	gateway-control revoke      --account <账户> --reason <原因> --authz <host:port> --authz-name <名字> --tls-cert … --tls-key … --tls-ca …
+//	gateway-control restore     --account <账户> --authz … （其余同上）
+//	gateway-control revocations --authz … （其余同上）
+//
+// 它们的结局和退出码在 revoke.go 的开头写着；下面说的退出码是前五条命令的。
+//
 // publish 把一份网关配置发布到池里，网关不重启。restart 发布一份要重启网关才能全部生效的配置
 // （启动设置变了的那种），会让这个池中断一下；不给 --snapshot 时，用的是这个池上最后一次得到确认的那一份。
 // reconcile 对账：池和记录对不上时，把最后一次得到确认的那一份放回去。
@@ -114,8 +122,12 @@ func main() {
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer, docker dockerRunner) int {
 	known := map[string]bool{commandPublish: true, commandRestart: true, commandReconcile: true, commandPlace: true, commandKeep: true}
+	if len(args) > 0 && isRevocationCommand(args[0]) {
+		return runRevocation(ctx, args[0], args[1:], stdout, stderr)
+	}
 	if len(args) == 0 || !known[args[0]] {
 		fmt.Fprintln(stderr, "usage: gateway-control publish|restart|reconcile|place|keep [flags]   (gateway-control <command> --help lists them)")
+		fmt.Fprintln(stderr, "       gateway-control revoke|restore|revocations [flags]   (revoke or lift the revocation of a Provider account in gateway-authz, or read its table)")
 		return exitUsage
 	}
 	o, err := parse(args[0], args[1:], stderr)

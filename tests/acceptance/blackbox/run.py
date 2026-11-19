@@ -225,6 +225,8 @@ def stop(name: str, port: int | None = None):
 
 AUTHZ_BINARY = RUN / 'gateway-authz'
 AUTHZ_BUILD = ['build', '-trimpath', '-tags', 'acceptance', '-o', 'tests/acceptance/blackbox/.run/gateway-authz', './cmd/gateway-authz']
+CONTROL_BINARY = RUN / 'gateway-control'
+CONTROL_BUILD = ['build', '-trimpath', '-o', 'tests/acceptance/blackbox/.run/gateway-control', './cmd/gateway-control']   # the product build: no tag
 MOCKS = ('mock_broker.py', 'mock_provider.py', 'pki.py', 'pin.py')   # the modules beside this file; not all of them are mocks
 
 
@@ -246,6 +248,16 @@ def build_authz(go: str) -> str:
     if built.returncode != 0 or not AUTHZ_BINARY.exists():
         return (built.stdout + built.stderr).strip() or 'no binary produced'
     os.chmod(AUTHZ_BINARY, 0o700)
+    return ''
+
+
+def build_control(go: str) -> str:
+    """Build gateway-control (the product build) into .run/. -> what the toolchain said, '' on success."""
+    CONTROL_BINARY.unlink(missing_ok=True)
+    built = subprocess.run([go, *CONTROL_BUILD], cwd=ROOT, capture_output=True, text=True, timeout=600)
+    if built.returncode != 0 or not CONTROL_BINARY.exists():
+        return (built.stdout + built.stderr).strip() or 'no binary produced'
+    os.chmod(CONTROL_BINARY, 0o700)
     return ''
 
 
@@ -1854,6 +1866,260 @@ def _(c):
     c.check('the revocation is lifted: blue allowed again', gw('GET', TRACKING + '/TRK-1', blue())['status'] == 200)
 
 
+# ---- revocation through the operator's command (ADR-0012 V1.2) --------------------------------------------
+# The same interface, called by the product's own client: gateway-control, built here from the tree. It runs
+# under the revoker certificate made for the run, or under another one where a case says so. What it prints
+# is collected, so that P1-RV-11 can look for key and certificate text in all of it.
+CONTROL_OUTPUT: list[str] = []
+CONTROL_REASON = 'black-box: revoked with gateway-control'
+
+
+def control(*args: str, cert: str = 'revoker', name: str | None = None, ca: str = 'ca') -> dict:
+    """Run gateway-control against the gateway-authz of this run. -> {'code', 'stdout', 'stderr', 'json'}; json is None
+    unless standard output is exactly one line of JSON."""
+    argv = [str(CONTROL_BINARY), *args, '--authz', f"127.0.0.1:{PORTS['gatekeeper']}", '--authz-name', name or pki.GATEKEEPER_NAME,
+            '--tls-cert', str(TLS / f'{cert}.crt'), '--tls-key', str(TLS / f'{cert}.key'), '--tls-ca', str(TLS / f'{ca}.crt'), '--timeout', '5s']
+    done = subprocess.run(argv, cwd=HERE, capture_output=True, text=True, timeout=60)
+    CONTROL_OUTPUT.append(done.stdout + done.stderr)
+    parsed = None
+    if done.stdout.count('\n') == 1 and done.stdout.endswith('\n'):
+        try:
+            parsed = json.loads(done.stdout)
+        except ValueError:
+            pass
+    return {'code': done.returncode, 'stdout': done.stdout, 'stderr': done.stderr, 'json': parsed}
+
+
+def said(r: dict, *words: str) -> bool:
+    """Standard error is one line and has each of the words in it."""
+    return r['stderr'].count('\n') == 1 and all(w in r['stderr'] for w in words)
+
+
+def outcome_is(r: dict, outcome: str, code: int, **fields) -> bool:
+    j = r['json'] or {}
+    return r['code'] == code and j.get('outcome') == outcome and all(j.get(k) == v for k, v in fields.items())
+
+
+def authz_log_lines() -> list[str]:
+    return (RUN / 'gateway-authz.log').read_text(encoding='utf-8', errors='replace').splitlines()
+
+
+@case('P1-RV-06', 'the operator\'s command revokes an account',
+      'gateway-control revoke exits 0 and says REVOKED; the next request for that account is refused on the gateway and not forwarded; '
+      'gateway-control revocations reads the table with the reason and the revoker\'s identity; revoking again changes nothing; '
+      'gateway-authz logged who revoked it and why',
+      ('GW-AT-026', 'GW-AT-047', 'GW-FR-026', 'GW-FR-047'))
+def _(c):
+    epoch, accounts = revocation_table()
+    c.check('before: nothing is revoked and blue is allowed', accounts == [] and gw('GET', TRACKING + '/TRK-1', blue())['status'] == 200)
+    send(PORTS['provider'], 'POST', '/admin/reset', ADMIN(), b'')
+    try:
+        r = control('revoke', '--account', 'account-blue', '--reason', CONTROL_REASON)
+        c.note('revoke', {'exit': r['code'], 'stdout': r['stdout'], 'stderr': r['stderr']})
+        c.check('revoke: exit 0, REVOKED, the account is revoked, changed, the epoch is one higher',
+                outcome_is(r, 'REVOKED', 0, command='revoke', account='account-blue', revoked=True, changed=True, revocation_epoch=epoch + 1))
+        c.check('...and standard error is one sentence that names the account', said(r, 'REVOKED', 'account-blue'))
+        for label, target in (('the Bearer route', TRACKING + '/TRK-1'), ('the Mode B route', MANIFESTS + '/MAN-1')):
+            c.check(f'the very next blue request on {label}: 403 ACCOUNT_REVOKED', refused_as_revoked(gw('GET', target, blue())))
+        c.check('...and the provider received none of them', len(provider_hits()) == 0)
+        g = gw('GET', TRACKING + '/TRK-2', green())
+        c.check('green is still allowed', g['status'] == 200 and body_json(g).get('account') == 'account-green')
+
+        t = control('revocations')
+        c.note('revocations', {'exit': t['code'], 'stdout': t['stdout'], 'stderr': t['stderr']})
+        rows = (t['json'] or {}).get('revoked_accounts') or []
+        c.check('revocations: exit 0, LISTED, the epoch, and that one account with the revoker\'s identity and the reason given',
+                outcome_is(t, 'LISTED', 0, command='revocations', revocation_epoch=epoch + 1) and len(rows) == 1
+                and rows[0].get('account_id') == 'account-blue' and rows[0].get('revoked_by') == pki.ID['revoker'] and rows[0].get('reason') == CONTROL_REASON
+                and bool(rows[0].get('revoked_at')))
+        c.check('...and it is the table gateway-authz keeps: the interface reads the same', revocation_table() == (epoch + 1, ['account-blue']))
+
+        again = control('revoke', '--account', 'account-blue', '--reason', CONTROL_REASON)
+        c.note('revoke_again', {'exit': again['code'], 'stdout': again['stdout'], 'stderr': again['stderr']})
+        c.check('revoking again: exit 0, REVOKED, changed is false, the epoch has not moved',
+                outcome_is(again, 'REVOKED', 0, revoked=True, changed=False, revocation_epoch=epoch + 1) and said(again, 'already'))
+        c.check('gateway-authz logged the revocation with who made it and why',
+                any('"msg":"egress revocation"' in l and '"action":"revoke"' in l and pki.ID['revoker'] in l and CONTROL_REASON in l
+                    and '"changed":true' in l for l in authz_log_lines()))
+    finally:
+        revocations('POST', RESTORE_BLUE)
+    c.check('with the revocation lifted again, blue is allowed', gw('GET', TRACKING + '/TRK-1', blue())['status'] == 200)
+
+
+@case('P1-RV-07', 'the operator\'s command lifts a revocation',
+      'gateway-control restore exits 0 and says LIFTED; the account is served again and is gone from the table; lifting it again changes nothing',
+      ('GW-AT-026', 'GW-AT-047', 'GW-FR-026', 'GW-FR-047'))
+def _(c):
+    epoch, _accounts = revocation_table()
+    r = control('revoke', '--account', 'account-blue', '--reason', CONTROL_REASON)
+    c.check('revoke through the command: REVOKED', outcome_is(r, 'REVOKED', 0, revocation_epoch=epoch + 1))
+    try:
+        c.check('blue is refused', refused_as_revoked(gw('GET', TRACKING + '/TRK-1', blue())))
+        send(PORTS['provider'], 'POST', '/admin/reset', ADMIN(), b'')
+        r = control('restore', '--account', 'account-blue')
+        c.note('restore', {'exit': r['code'], 'stdout': r['stdout'], 'stderr': r['stderr']})
+        c.check('restore: exit 0, LIFTED, the account is not revoked, changed, the epoch is one higher again',
+                outcome_is(r, 'LIFTED', 0, command='restore', account='account-blue', revoked=False, changed=True, revocation_epoch=epoch + 2)
+                and said(r, 'LIFTED', 'account-blue'))
+        served = gw('GET', TRACKING + '/TRK-1', blue())
+        c.check('the next blue request is served and reaches the provider', served['status'] == 200 and len(provider_hits()) == 1)
+        t = control('revocations')
+        c.check('revocations: LISTED, the account is not in the table, the epoch is the one restore gave',
+                outcome_is(t, 'LISTED', 0, revocation_epoch=epoch + 2) and (t['json'] or {}).get('revoked_accounts') == []
+                and '"revoked_accounts":[]' in t['stdout'])
+        again = control('restore', '--account', 'account-blue')
+        c.note('restore_again', {'exit': again['code'], 'stdout': again['stdout'], 'stderr': again['stderr']})
+        c.check('restoring again: exit 0, LIFTED, changed is false, the epoch has not moved',
+                outcome_is(again, 'LIFTED', 0, revoked=False, changed=False, revocation_epoch=epoch + 2) and said(again, 'was not revoked'))
+        c.check('gateway-authz logged the restoration with the revoker\'s identity',
+                any('"msg":"egress revocation"' in l and '"action":"restore"' in l and '"account":"account-blue"' in l
+                    and pki.ID['revoker'] in l for l in authz_log_lines()))
+    finally:
+        revocations('POST', RESTORE_BLUE)
+
+
+@case('P1-RV-08', 'the operator\'s command with a certificate that is not the revoker\'s, and with an account that does not exist',
+      'a certificate of another workload: NOT_REVOKER, exit 3, and neither the table nor the epoch has moved; an account the policy does '
+      'not name: UNKNOWN_ACCOUNT, exit 3, nothing changed; neither is mistaken for success',
+      ('GW-ST-018', 'GW-AT-021', 'GW-FR-021', 'GW-FR-047'))
+def _(c):
+    r = control('revoke', '--account', 'account-blue', '--reason', CONTROL_REASON)
+    epoch = (r['json'] or {}).get('revocation_epoch')
+    c.check('the revoker revokes account-blue through the command', outcome_is(r, 'REVOKED', 0) and isinstance(epoch, int))
+    try:
+        before = revocation_table()
+        for label, cert in (('the publisher', 'publisher'), ('the gateway', 'gateway'), ('a business app', 'business-app'), ('the local broker', 'broker')):
+            runs = [control('revoke', '--account', 'account-green', '--reason', 'black-box: not this workload\'s to revoke', cert=cert),
+                    control('restore', '--account', 'account-blue', cert=cert), control('revocations', cert=cert)]
+            c.note(label, [{'exit': x['code'], 'outcome': (x['json'] or {}).get('outcome')} for x in runs])
+            c.check(f'{label}: revoke, restore and revocations are each NOT_REVOKER, exit 3, HTTP 401',
+                    all(outcome_is(x, 'NOT_REVOKER', 3, http_status=401) and said(x, 'NOT_REVOKER', 'Nothing changed') for x in runs))
+            c.check(f'{label}: told nothing of the table, and no state of any account in the answer',
+                    not any('account-blue' in x['stdout'] and x['json'].get('command') == 'revocations' for x in runs)
+                    and not any('revocation_epoch' in (x['json'] or {}) for x in runs))
+        c.check('after all of that the table and the epoch are as they were', revocation_table() == before == (epoch, ['account-blue']))
+        c.check('...blue is still refused, green is not revoked and is served',
+                refused_as_revoked(gw('GET', TRACKING + '/TRK-1', blue())) and gw('GET', TRACKING + '/TRK-2', green())['status'] == 200)
+
+        r = control('revoke', '--account', 'account-bleu', '--reason', 'black-box: a mistyped account')
+        c.note('mistyped_revoke', {'exit': r['code'], 'stdout': r['stdout'], 'stderr': r['stderr']})
+        c.check('an account the policy does not name: UNKNOWN_ACCOUNT, exit 3, HTTP 422, and the sentence says the name is probably mistyped',
+                outcome_is(r, 'UNKNOWN_ACCOUNT', 3, account='account-bleu', http_status=422) and said(r, 'UNKNOWN_ACCOUNT', 'mistyped', 'Nothing changed'))
+        r = control('restore', '--account', 'account-bleu')
+        c.check('restoring it: UNKNOWN_ACCOUNT, exit 3', outcome_is(r, 'UNKNOWN_ACCOUNT', 3, account='account-bleu'))
+        c.check('nothing changed: the table and the epoch are as they were', revocation_table() == before)
+    finally:
+        revocations('POST', RESTORE_BLUE)
+
+
+@case('P1-RV-09', 'the operator\'s command when it gets no answer',
+      'with gateway-authz stopped, revoke ends UNKNOWN with exit 5 and says that running it again is safe and that the account is not to be '
+      'taken as revoked before the table has been read; a TLS session that cannot be built is the same; it does not retry; '
+      'once gateway-authz is back the table does not have the account, which this time never arrived',
+      ('GW-ST-018', 'GW-AT-047', 'GW-FR-047'))
+def _(c):
+    before = revocation_table()
+    stopped = []
+    try:
+        stop('gateway-authz', PORTS['gatekeeper'])
+        stopped.append(control('revoke', '--account', 'account-blue', '--reason', CONTROL_REASON))
+        stopped.append(control('revocations'))
+        r = stopped[0]
+        c.note('revoke_while_stopped', {'exit': r['code'], 'stdout': r['stdout'], 'stderr': r['stderr']})
+        c.check('revoke: UNKNOWN, exit 5, no HTTP status and no state in the output',
+                outcome_is(r, 'UNKNOWN', 5, command='revoke', account='account-blue') and 'http_status' not in r['json'] and 'revoked' not in r['json'])
+        c.check('...and the sentence says it may or may not have taken effect, that running it again is safe, and not to take the account as '
+                'revoked before the table has been read',
+                said(r, 'may or may not be revoked', 'Running the same command again is safe', 'revocations', 'do not take it as revoked'))
+        c.check('...and that nothing was retried automatically', 'Nothing was retried automatically' in r['stderr'])
+        c.check('revocations while stopped: UNKNOWN, exit 5, the table was not read',
+                outcome_is(stopped[1], 'UNKNOWN', 5, command='revocations') and said(stopped[1], 'table was not read'))
+    finally:
+        if 'gateway-authz' not in PROCS:
+            start_gatekeeper()
+    c.check('gateway-authz is back: the table does not have the account, and the epoch is as before (this one did not arrive)',
+            revocation_table() == before and 'account-blue' not in before[1])
+    c.check('...and blue is allowed', gw('GET', TRACKING + '/TRK-1', blue())['status'] == 200)
+    for label, args in (('a revoker certificate from another CA', {'cert': 'rogue-revoker'}),
+                        ('the name of another server', {'name': 'someone-else.idp.test'})):
+        r = control('revoke', '--account', 'account-blue', '--reason', CONTROL_REASON, **args)
+        c.note(label, {'exit': r['code'], 'stderr': r['stderr']})
+        c.check(f'{label}: no TLS session, so UNKNOWN, exit 5; and nothing changed',
+                outcome_is(r, 'UNKNOWN', 5) and 'http_status' not in r['json'] and revocation_table() == before)
+
+
+@case('P1-RV-10', 'the operator\'s command when gateway-authz cannot write its revocations file',
+      'the revocation is in effect but not written: REVOKED_NOT_WRITTEN, a non-zero exit of its own, the account is refused now; the sentence says '
+      'what to do; running the same command again once the file can be written writes it and is a success; a restoration that cannot be written '
+      'is LIFT_NOT_WRITTEN and the account stays revoked',
+      ('GW-AT-026', 'GW-AT-047', 'GW-FR-026', 'GW-FR-047'))
+def _(c):
+    if os.geteuid() == 0:
+        c.check('this case needs a user that file permissions bind: it makes the directory of the revocations file unwritable', False)
+        return
+    mode = RUN.stat().st_mode & 0o777
+    epoch, _accounts = revocation_table()
+    unwritten = None
+    try:
+        os.chmod(RUN, 0o500)
+        unwritten = control('revoke', '--account', 'account-blue', '--reason', CONTROL_REASON)
+        c.note('revoke_not_written', {'exit': unwritten['code'], 'stdout': unwritten['stdout'], 'stderr': unwritten['stderr']})
+        c.check('revoke: REVOKED_NOT_WRITTEN, exit 7, HTTP 500, and the state that is in effect: revoked, changed, the epoch one higher',
+                outcome_is(unwritten, 'REVOKED_NOT_WRITTEN', 7, account='account-blue', http_status=500, revoked=True, changed=True, revocation_epoch=epoch + 1))
+        c.check('...and the sentence says the account is refused now, will not be after a restart, and what to do',
+                said(unwritten, 'REVOKED_NOT_WRITTEN', 'is refused now', 'will not be refused after gateway-authz restarts',
+                     'why that file cannot be written', 'run the same command again'))
+        c.check('the account is refused now: 403 ACCOUNT_REVOKED', refused_as_revoked(gw('GET', TRACKING + '/TRK-1', blue())))
+        c.check('...but the file does not have it', json.loads(REVOCATIONS.read_text(encoding='utf-8')).get('revoked_accounts') == {})
+    finally:
+        os.chmod(RUN, mode)
+    again = control('revoke', '--account', 'account-blue', '--reason', CONTROL_REASON)
+    c.note('revoke_again_after_the_fix', {'exit': again['code'], 'stdout': again['stdout']})
+    c.check('with the file writable again, the same command: REVOKED, exit 0, the epoch of the first call',
+            outcome_is(again, 'REVOKED', 0, revoked=True, revocation_epoch=epoch + 1))
+    on_disk = json.loads(REVOCATIONS.read_text(encoding='utf-8'))
+    c.check('...and now the file has the account, who revoked it and why',
+            on_disk.get('epoch') == epoch + 1 and list(on_disk.get('revoked_accounts', {})) == ['account-blue']
+            and on_disk['revoked_accounts']['account-blue'].get('by') == pki.ID['revoker']
+            and on_disk['revoked_accounts']['account-blue'].get('reason') == CONTROL_REASON)
+    try:
+        os.chmod(RUN, 0o500)
+        lift = control('restore', '--account', 'account-blue')
+        c.note('restore_not_written', {'exit': lift['code'], 'stdout': lift['stdout'], 'stderr': lift['stderr']})
+        c.check('restore that cannot be written: LIFT_NOT_WRITTEN, exit 3, HTTP 500, the account is still revoked',
+                outcome_is(lift, 'LIFT_NOT_WRITTEN', 3, account='account-blue', http_status=500, revoked=True, changed=False, revocation_epoch=epoch + 1)
+                and said(lift, 'LIFT_NOT_WRITTEN', 'NOT lifted', 'still revoked'))
+        c.check('...and blue is still refused', refused_as_revoked(gw('GET', TRACKING + '/TRK-1', blue())))
+    finally:
+        os.chmod(RUN, mode)
+    lift = control('restore', '--account', 'account-blue')
+    c.check('with the file writable again, the same command: LIFTED, exit 0', outcome_is(lift, 'LIFTED', 0, revoked=False, changed=True, revocation_epoch=epoch + 2))
+    c.check('blue is allowed again', gw('GET', TRACKING + '/TRK-1', blue())['status'] == 200)
+    revocations('POST', RESTORE_BLUE)
+
+
+@case('P1-RV-11', 'what the operator\'s command prints, and what gateway-authz logs of it',
+      'no private key and no certificate text in anything gateway-control printed in P1-RV-06 to 10, in the log of gateway-authz or in the '
+      'log of the gateway; the output is one line of JSON and one sentence',
+      ('GW-ST-018', 'GW-FR-021'))
+def _(c):
+    printed = '\n'.join(CONTROL_OUTPUT)
+    c.check('gateway-control was run in the earlier cases and printed something', len(CONTROL_OUTPUT) >= 20 and bool(printed.strip()))
+    pem_lines = set()
+    for f in sorted(TLS.glob('*.key')) + sorted(TLS.glob('*.crt')):
+        pem_lines |= {l for l in f.read_text(encoding='utf-8').splitlines() if len(l) >= 40 and not l.startswith('-----')}
+    c.check('the certificates and keys made for the run were found', len(pem_lines) > 10)
+    logs = {'what gateway-control printed': printed}
+    for name in ('gateway-authz.log', 'agentgateway.log'):
+        if (RUN / name).exists():
+            logs[name] = (RUN / name).read_text(encoding='utf-8', errors='replace')
+    for name, text in logs.items():
+        c.check(f'{name}: no PEM header and no line of any key or certificate of the run',
+                '-----BEGIN' not in text and not any(l in text for l in pem_lines))
+    c.check('every run of the command printed one line of JSON at most, and one sentence on standard error',
+            all(o.count('\n') <= 3 for o in CONTROL_OUTPUT))
+
+
 # ---- reading back what a publisher has published -----------------------------------------------------
 # A publisher replaces the file the gateway runs from and has to learn, per instance, whether
 # the new file is what is now in effect (G03 §3-4). These cases replace the file under the
@@ -3147,6 +3413,9 @@ def main() -> int:
     build_said = build_authz(go)
     if build_said:
         print('gateway-authz did not build:', build_said); return 2
+    control_said = build_control(go)
+    if control_said:
+        print('gateway-control did not build:', control_said); return 2
     go_version = sh([go, 'version'])
     print('gateway-authz (acceptance build):', go_version)
     config_ok, config_said = stage_config(binary)
@@ -3240,8 +3509,13 @@ def main() -> int:
                                               'account numbers with developer tokens (--developer-tokens), and OAuth2 clients '
                                               '(--oauth-clients)',
                           'revocations': 'a file written for the run (--revocations), empty at the start; changed through the '
-                                         'acceptance controls and, in P1-RV-02 to 05, through the product interface',
+                                         'acceptance controls and, in P1-RV-02 to 05, through the product interface and, in P1-RV-06 to 11, '
+                                         'through gateway-control',
                           'http_versions_seen_from_the_gateway': sorted(S.pdp_protocols)},
+        'gateway_control': {'what_ran': 'cmd/gateway-control, the product build (no tag); P1-RV-06 to 11 run its revoke, restore and '
+                                        'revocations commands against the gateway-authz above, under the revoker certificate made for the run',
+                            'build_command': 'go ' + ' '.join(CONTROL_BUILD),
+                            'binary_sha256': hashlib.sha256(CONTROL_BINARY.read_bytes()).hexdigest()},
         'mocks_sha256': {f: hashlib.sha256((HERE / f).read_bytes()).hexdigest() for f in MOCKS},
         'front_proxy': {'image': FRONT_IMAGE, 'version': front_version, 'config_file': 'tests/acceptance/blackbox/front.nginx.conf',
                         'config_sha256': hashlib.sha256(FRONT_CONF.read_bytes()).hexdigest(),
