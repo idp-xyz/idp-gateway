@@ -2401,6 +2401,72 @@ def _(c):
     c.check('...nothing of the forged id is in the line', 'forged-by-provider' not in (reqs[-1] if reqs else 'forged-by-provider'))
 
 
+@case('P1-CO-09', 'calls refused on the Mode B route, and a call the broker could not get a decision for',
+      'on the route that asks the local broker, a refused call carries the id of the decision gateway-authz made when the broker '
+      'asked it: the caller\'s 403 has it in the X-Idp-Decision-Id header and as decision_id in the body, the same one; the gateway '
+      'line has it as authz_decision_id; gateway-authz has exactly one DENY line with it; nothing is forwarded. When the broker '
+      'cannot get a decision there is none, and neither the answer nor the line has a decision id',
+      ('GW-FR-017',))
+def _(c):
+    def refused(name, make_call, before=None, after=None, reason='ACCOUNT_NOT_GRANTED'):
+        reset_all()
+        if before:
+            before()
+        try:
+            mark_gw, mark_az = gateway_log_size(), authz_log_size()
+            r = make_call()
+            reqs = gateway_request_lines(mark_gw)
+            decisions = authz_decisions(mark_az)
+        finally:
+            if after:
+                after()
+        body = body_json(r)
+        f = line_fields(reqs[-1]) if reqs else {}
+        in_header = header(r, 'x-idp-decision-id')
+        c.note(f'{name}: the gateway line', {k: f.get(k) for k in ('http.status', 'reason', 'route', 'authz_decision_id', 'tenant_ref')})
+        c.note(f'{name}: the 403 body', {k: v for k, v in body.items()})
+        c.note(f'{name}: the X-Idp-Decision-Id header of the 403', in_header)
+        c.check(f'{name}: 403 with the PDP\'s reason {reason}, nothing forwarded',
+                r['status'] == 403 and body.get('reason_code') == reason and len(provider_hits()) == 0)
+        decision = body.get('decision_id')
+        c.check(f'{name}: the 403 carries a decision id, in the header and in the body, the same one',
+                isinstance(decision, str) and decision != '' and in_header == [decision])
+        c.check(f'{name}: one gateway line, on the Mode B route', len(reqs) == 1 and f.get('route') == 'default/mockcarrier-manifests-get-broker')
+        c.check(f'{name}: the line has that decision id as authz_decision_id', bool(decision) and f.get('authz_decision_id') == decision)
+        c.check(f'{name}: gateway-authz wrote exactly one line for the call, a DENY with that decision id',
+                len(decisions) == 1 and decisions[0].get('result') == 'DENY' and bool(decision) and decisions[0].get('decision_id') == decision)
+        if decisions:
+            c.note(f'{name}: the gateway-authz line', {'endpoint': decisions[0].get('endpoint'), 'caller': decisions[0].get('caller')})
+            c.check(f'{name}: that line is the broker\'s question on the decision endpoint, not the gateway\'s',
+                    decisions[0].get('endpoint') == '/v1/egress/authorizations/decision' and decisions[0].get('caller') == pki.ID['broker'])
+        reset_all()
+
+    refused('a tenant asking for another tenant\'s account',
+            lambda: gw('GET', MANIFESTS + '/MAN-CO9A', blue(), [('X-Provider-Account', 'account-green')]))
+    refused('a revoked account', lambda: gw('GET', MANIFESTS + '/MAN-CO9B', blue()), reason='ACCOUNT_REVOKED',
+            before=lambda: pdp_admin('/admin/revoke?account=account-blue'),
+            after=lambda: pdp_admin('/admin/restore?account=account-blue'))
+
+    # No decision, no id: the broker cannot reach gateway-authz and answers 503 itself.
+    stop('gateway-authz', PORTS['gatekeeper'])
+    try:
+        mark_gw = gateway_log_size()
+        r = gw('GET', MANIFESTS + '/MAN-CO9C', blue())
+        reqs = gateway_request_lines(mark_gw)
+        hits = provider_hits()
+    finally:
+        start_gatekeeper()
+    body = body_json(r)
+    f = line_fields(reqs[-1]) if reqs else {}
+    c.note('gateway-authz down: the answer', {'status': r['status'], 'body': body, 'x-idp-decision-id': header(r, 'x-idp-decision-id')})
+    c.note('gateway-authz down: the gateway line', {k: f.get(k) for k in ('http.status', 'reason', 'route', 'authz_decision_id', 'tenant_ref')})
+    c.check('gateway-authz down: 503 GATEKEEPER_UNAVAILABLE from the broker, nothing forwarded',
+            r['status'] == 503 and body.get('reason_code') == 'GATEKEEPER_UNAVAILABLE' and len(hits) == 0)
+    c.check('gateway-authz down: no decision id in the header or in the body', not header(r, 'x-idp-decision-id') and 'decision_id' not in body)
+    c.check('gateway-authz down: one gateway line, without authz_decision_id', len(reqs) == 1 and 'authz_decision_id' not in f)
+    reset_all()
+
+
 # ---- OAuth2 client credentials against a token endpoint (ADR-0011, step two) -------------------------------
 # gateway-authz holds a third credentials file: for each account a token endpoint, a client and its secret. It asks
 # the endpoint for an access token (client_credentials, client_secret_basic), keeps it per account until shortly
