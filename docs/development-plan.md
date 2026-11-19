@@ -210,7 +210,7 @@ flowchart TD
 内容是 [ADR-0010](adr/ADR-0010.md) 各版末尾的"还没有做的"。
 
 1. **真机验证。** 真的重启一台机器；把两个 systemd 单元装上去跑。要一台能装系统级单元的机器。
-2. **发布历史和发布状态。** 现在只记最后一条确认过的快照。要做的是保存快照、记录发布过什么，以及 [G03](G03_Routing_and_Configuration.md) 第 3 节的状态机和审批。持久化要先定：[ADR-0009](adr/ADR-0009.md) 第 4 条规定控制面的持久化用 Bento-Go，第一次引入时同时带上 `tests/bentocontract` 和显式的迁移命令，版本到时再确认。`GW-GAP-06`。
+2. **发布历史和发布状态。** 现在只记最后一条确认过的快照。要做的是保存快照、记录发布过什么，以及 [G03](G03_Routing_and_Configuration.md) 第 3 节的状态机和审批。持久化要先定：[ADR-0009](adr/ADR-0009.md) 第 4 条规定控制面的持久化用 Bento-Go，第一次引入时同时带上 `tests/bentocontract` 和显式的迁移命令，版本到时再确认。`GW-GAP-06`。提案见 [ADR-0013](adr/ADR-0013.md)（2026-11-19）；仓库所有者当天定了它列出的六项，都照推荐的做（先落在池旁边的文件里，Bento-Go 以后），那是开工的许可。
 3. **RouteIntent 编译器。** 把中立的意图编译成 agentgateway 配置，用锁定的二进制校验；`scripts/preflight_intents.py` 的预检移植成 Go；`gateway-authz` 的登记表改由控制面下发。`GW-GAP-06`；`GW-FR-039`、`GW-FR-048`。
 4. **换镜像、JWKS、发布器的证书。** 换镜像（升级）这个操作；JWKS 的同步；发布器证书的签发和轮换。`GW-GAP-13`、`GW-FR-045`。
 5. **别的平台和规模。** Kubernetes 上的下发；一台机器上放不止一个池；日志和资源上限。
