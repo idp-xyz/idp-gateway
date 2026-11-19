@@ -7,7 +7,7 @@ front proxy configuration, the variables an operator fills in, and the two syste
 keeper, which tests/integration/compose/units.py runs under a user-level systemd).
 OFFLINE contract tests; nothing here starts a container.
 """
-import json, re, unittest
+import ipaddress, json, re, unittest
 from pathlib import Path
 import yaml
 
@@ -599,10 +599,42 @@ class ComposeSuite(unittest.TestCase):
         self.assertIn("DEPLOY = ROOT / 'deploy/compose'", self.RUNNER)
         self.assertIn("'-f', str(DEPLOY / 'compose.yml'), '-f', str(HERE / 'echo.yml')", self.RUNNER)
 
-    def test_the_overlay_only_adds_the_backend(self):
+    def test_the_overlay_only_adds_the_backend_and_the_stand_in_resolver(self):
+        """The suite must not depend on the machine it runs on: SH-15 relies on how the resolver answers "no such name"
+        (the gateway follows the negative caching time the resolver gives, RFC 2308), and a machine's own upstream resolver
+        sometimes gives an hour and sometimes nothing. So the overlay adds a stand-in resolver, answers of its own, and points
+        netns at it. It is allowed exactly this: two services added (echo and the stand-in); of the services of the deployment
+        file only netns, and of its keys only dns; and, of the networks, only the subnet of the default one. Nothing else."""
         overlay = yaml.safe_load(text('tests/integration/compose/echo.yml'))
-        self.assertEqual(list(overlay), ['services'])
-        self.assertEqual(list(overlay['services']), ['echo'])
+        deployment = yaml.safe_load(text('deploy/compose/compose.yml'))
+        self.assertEqual(sorted(overlay), ['networks', 'services'])
+        added = sorted(set(overlay['services']) - set(deployment['services']))
+        self.assertEqual(added, ['echo', 'resolver'])
+        touched = {name: sorted(body) for name, body in overlay['services'].items() if name in deployment['services']}
+        self.assertEqual(touched, {'netns': ['dns']})
+        self.assertNotIn('dns', deployment['services']['netns'])
+        self.assertEqual(list(overlay['networks']), ['default'])
+        self.assertEqual(list(overlay['networks']['default']), ['ipam'])
+        self.assertEqual(list(overlay['networks']['default']['ipam']), ['config'])
+        subnets = overlay['networks']['default']['ipam']['config']
+        self.assertEqual([list(entry) for entry in subnets], [['subnet']])
+        # The stand-in has the fixed address netns points at, inside that subnet.
+        address = ipaddress.ip_address(overlay['services']['resolver']['networks']['default']['ipv4_address'])
+        self.assertEqual(overlay['services']['netns']['dns'], [str(address)])
+        self.assertIn(address, ipaddress.ip_network(subnets[0]['subnet']))
+
+    def test_the_stand_in_resolver_is_the_one_of_the_egress_suite(self):
+        """The overlay mounts egressnet's dns.py, not a second copy of it; and it does not overlap egressnet's network."""
+        overlay = yaml.safe_load(text('tests/integration/compose/echo.yml'))
+        self.assertIn('${RESOLVER_SCRIPT:?}:/opt/dns.py:ro', overlay['services']['resolver']['volumes'][0])
+        self.assertIn("RESOLVER_SCRIPT = ROOT / 'tests/integration/egressnet/dns.py'", self.RUNNER)
+        self.assertIn("'RESOLVER_SCRIPT': str(RESOLVER_SCRIPT)", self.RUNNER)
+        self.assertTrue((R / 'tests/integration/egressnet/dns.py').is_file())
+        self.assertEqual([p for p in (R / 'tests/integration/compose').iterdir() if p.name == 'dns.py'], [])
+        egress = yaml.safe_load(text('tests/integration/egressnet/compose.yml'))
+        theirs = ipaddress.ip_network(egress['networks']['n']['ipam']['config'][0]['subnet'])
+        ours = ipaddress.ip_network(overlay['networks']['default']['ipam']['config'][0]['subnet'])
+        self.assertFalse(theirs.overlaps(ours))
 
     def test_the_keeper_of_the_suite_starts_the_pool_from_the_same_files(self):
         """The keeper the suite runs is given the project, the env file and the two files of the suite's own docker compose calls."""

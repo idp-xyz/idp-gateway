@@ -79,12 +79,18 @@ RECORD = '.config.yaml.confirmed'         # 发布器留在配置目录里的记
 HOSTED = RUN / 'deployed'
 HOSTED_MARK = RUN / 'deployed.started'   # SH-19 起过那个池的记号：拆的时候凭它删那个项目的网络
 MONITOR = RUN / 'prometheus'   # SH-21 给 Prometheus 的配置
+# 替身解析器（echo.yml 里的 resolver，跑的是 egressnet 的 dns.py）：它挂着的目录，里面的 mode 文件写它怎么回答；
+# 它的地址是 echo.yml 给默认网络定的网段里的一个。
+RESOLVER = RUN / 'resolver'
+RESOLVER_SCRIPT = ROOT / 'tests/integration/egressnet/dns.py'
+RESOLVER_ADDRESS = '10.31.33.53'
+NEGATIVE_TTL = 600   # 秒。替身对每个名字答"不存在"，SOA 里的否定缓存时间
 # 发布历史（SH-23 到 SH-30，docs/adr/ADR-0013.md）：池的目录下的第三个子目录，与 config、tls 并列。网关、front 和 egress 的
 # 容器都不挂它（compose.yml 不改）。池的名字这里用本套用例的项目名 PROJECT；SH-19 里看守的单元写的是部署文件的项目名。
 HISTORY = POOL / 'history'
 HISTORY_LOG = HISTORY / 'releases.log'
 HISTORY_SNAPSHOTS = HISTORY / 'snapshots'
-STALE = (POOL, PKI, CONTROL, HOSTED, MONITOR, RUN / 'staging', RUN / 'single', RUN / 'expansion')   # 每次运行前后都清掉
+STALE = (POOL, PKI, CONTROL, HOSTED, MONITOR, RESOLVER, RUN / 'staging', RUN / 'single', RUN / 'expansion')   # 每次运行前后都清掉
 LOCK = pin.lock()
 # 两个镜像都不由本脚本交给 compose：部署文件自己按摘要写着。这里的两个值是拿来核对的（SH-01）。
 GATEWAY_IMAGE = pin.image_reference(LOCK)   # 上游镜像，按多平台索引的摘要引用
@@ -149,11 +155,12 @@ def example_variables() -> dict:
 
 def compose_environment() -> dict:
     """docker compose 进程的环境。部署文件的变量只从 pool.env 来：跑脚本的这个 shell 里碰巧有同名的变量，
-    或者设了 COMPOSE_ 开头的变量，都不带进去。另加 echo.yml 要的两个。"""
+    或者设了 COMPOSE_ 开头的变量，都不带进去。另加 echo.yml 要的四个。"""
     example = example_variables()
     hidden = set(example['required']) | set(example['optional'])
     inherited = {k: v for k, v in os.environ.items() if k not in hidden and not k.startswith('COMPOSE_')}
-    return {**inherited, 'TOOLS_IMAGE': TOOLS_IMAGE, 'PROBE': str(KUBERNETES / 'probe.py')}
+    return {**inherited, 'TOOLS_IMAGE': TOOLS_IMAGE, 'PROBE': str(KUBERNETES / 'probe.py'),
+            'RESOLVER_SCRIPT': str(RESOLVER_SCRIPT), 'RESOLVER_ANSWERS': str(RESOLVER)}
 
 
 def die(message: str):
@@ -748,6 +755,41 @@ try:
     seen["echo"] = socket.gethostbyname("echo")
 except OSError as failed:
     seen["echo"] = f"{type(failed).__name__}: {failed}"
+print(json.dumps(seen))
+'''
+# 在池的网络命名空间里问网关用的那个解析器（127.0.0.11，Docker 的；它不认识的名字转给 netns 的 dns）一个名字的 A 记录：
+# 回答的 rcode（3 是名字不存在），和权威段里的 SOA（有的话）的 TTL 与 minimum：RFC 2308 里这两个里较小的是否定缓存时间。
+ASK = r'''
+import json, socket, struct, sys
+name = sys.argv[1]
+query = struct.pack("!HHHHHH", 0x1234, 0x0100, 1, 0, 0, 0) + b"".join(bytes([len(p)]) + p.encode() for p in name.split(".")) + b"\x00" + struct.pack("!HH", 1, 1)
+with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+    s.settimeout(6)
+    try:
+        s.sendto(query, ("127.0.0.11", 53))
+        reply = s.recv(2048)
+    except OSError as failed:
+        print(json.dumps({"error": type(failed).__name__}))
+        raise SystemExit
+flags, questions, answers, authority = struct.unpack("!HHHH", reply[2:10])
+def skip(at):
+    while True:
+        length = reply[at]
+        if length == 0:
+            return at + 1
+        if length & 0xC0:
+            return at + 2
+        at += 1 + length
+at = skip(12) + 4
+seen = {"rcode": flags & 15, "answers": answers, "soa": []}
+for _ in range(answers + authority):
+    at = skip(at)
+    kind, _, ttl, size = struct.unpack("!HHIH", reply[at:at + 10])
+    at += 10
+    if kind == 6:
+        end = skip(skip(at))
+        seen["soa"].append({"ttl": ttl, "minimum": struct.unpack("!I", reply[end + 16:end + 20])[0]})
+    at += size
 print(json.dumps(seen))
 '''
 # 对着一个地址连上若干秒，每种结果各有多少次。
@@ -1375,6 +1417,11 @@ def prepare():
     if unfilled or unknown or not example['required']:
         die(f'deploy/compose/.env.example 与本脚本给的变量对不上：没有给的 {sorted(unfilled)}，它没有的 {sorted(unknown)}')
     POOL_ENV.write_text(''.join(f'{name}={value}\n' for name, value in settings.items()), encoding='utf-8')
+    # 替身解析器的回答方式，先于池写好：对每个名字答"不存在，否定缓存 NEGATIVE_TTL 秒"。目录拆的时候随 STALE 一起清掉。
+    RESOLVER.mkdir()
+    os.chmod(RESOLVER, 0o755)
+    (RESOLVER / 'mode').write_text(f'nxdomain-soa-{NEGATIVE_TTL}\n', encoding='utf-8')
+    os.chmod(RESOLVER / 'mode', 0o644)
 
 
 def teardown():
@@ -1454,8 +1501,9 @@ def cases(r: Results):
     one.expected = staged.get('digest')
     publish(one)   # 第一份文件由本脚本直接放进目录：这个池上还没有确认过任何发布，没有记录
     # 后端不属于部署文件，先单独起来：egress 这一步只放行它跑的时候解析得了的名字，真的池里后端早就在别处了。
+    # 替身解析器（echo.yml）一起起来：netns 的 dns 指着它，它在 Docker 自己不认识的名字上回答。
     # 池启动时后端的名字还解析不了会怎样，是 SH-15。
-    compose('up', '-d', 'echo')
+    compose('up', '-d', 'echo', 'resolver')
     first = compose('up', '-d')   # 部署文件的启动命令
     if wait_for(lambda: observe()['digest'] is not None, 30) is None:
         die('30 秒内回读口没有给出运行配置：' + first.stderr.strip()[-400:] + compose('logs', '--tail', '20', 'agentgateway').stdout[-600:])
@@ -2213,7 +2261,7 @@ def cases(r: Results):
     shutil.rmtree(POOL / 'config')
     (POOL / 'config').mkdir()
     gone = not any(container(service) for service in (*SERVICES, 'echo'))
-    compose('up', '-d', 'echo')   # 后端不属于部署文件，先单独起来
+    compose('up', '-d', 'echo', 'resolver')   # 后端和替身解析器不属于部署文件，先单独起来
     config_file.write_text(fresh.text, encoding='utf-8')   # 一、把第一份快照放进配置目录
     os.chmod(config_file, 0o644)
     first = compose('up', '-d', 'agentgateway')            # 二、只把网关起起来
@@ -2237,10 +2285,16 @@ def cases(r: Results):
     r.note('四条命令都用过之后', left)
     r.check('四条命令都用过之后没有留下别的东西', left == CLEAN)
 
-    r.case('SH-15', '后端的名字在网关第一次用到它时还解析不了：那条路由一直答 503，名字解析得了之后也不恢复，重启网关才好')
-    compose('stop', 'echo')              # 后端不在了：它的名字在这个 compose 网络里也就解析不了了
+    r.case('SH-15', f'后端的名字在网关第一次用到它时还解析不了：那条路由在解析器给的否定缓存时间之内（这里是 {NEGATIVE_TTL} 秒）一直答 503，名字解析得了之后也不恢复，重启网关才立刻好')
+    compose('stop', 'echo')              # 后端不在了：它的名字在这个 compose 网络里也就解析不了了，由 netns 的 dns（替身解析器）回答
     compose('restart', 'agentgateway')   # 一个刚启动的网关：它还没有解析过哪个后端的名字
     up = wait_for(lambda: observe()['digest'] is not None, 30)
+    asked = from_the_pool(ASK, 'echo')
+    r.note('从池的网络命名空间里问解析器 echo 这个名字（rcode，权威段里的 SOA）', asked)
+    r.check(f'后端的名字不存在时，解析器答的是"名字不存在"（NXDOMAIN），带一条 SOA，缓存时间是 {NEGATIVE_TTL} 秒（TTL 和 minimum 都是）：'
+            f'回答来自这套用例自带的替身解析器，不是本机的上游',
+            asked.get('rcode') == 3 and asked.get('answers') == 0
+            and asked.get('soa') == [{'ttl': NEGATIVE_TTL, 'minimum': NEGATIVE_TTL}])
     absent = get('a.test', '/quick')
     r.note('后端的名字解析不了时网关的应答', [absent.get('status'), absent.get('body')])
     r.check('后端的名字解析不了时，网关答 503，说名字解析失败',
@@ -2250,7 +2304,8 @@ def cases(r: Results):
     time.sleep(20)
     still = get('a.test', '/quick')
     r.note('后端起来 20 秒之后网关的应答', [still.get('status'), still.get('body')])
-    r.check('后端起来了：从网关所在的网络命名空间里按名字连得上它。20 秒之后，网关对这条路由仍然答 503，说名字解析失败',
+    r.check(f'后端起来了：从网关所在的网络命名空间里按名字连得上它。20 秒之后（解析器给的否定缓存时间是 {NEGATIVE_TTL} 秒，还没有过），'
+            '网关对这条路由仍然答 503，说名字解析失败',
             back is not None and backend_reachable() and still['status'] == 503 and 'dns' in str(still.get('body')).lower())
     compose('restart', 'agentgateway')
     healed = wait_for(lambda: get('a.test', '/quick')['status'] == 200, 20)
@@ -2780,7 +2835,7 @@ def keeper_cases(r: Results, confirmed: Snapshot):
     compose('down', '--timeout', '2')
     shutil.rmtree(POOL / 'config')
     (POOL / 'config').mkdir()
-    compose('up', '-d', 'echo')
+    compose('up', '-d', 'echo', 'resolver')
     config_file.write_text(opening.text, encoding='utf-8')
     os.chmod(config_file, 0o644)
     keeper = Keeper('--interval', '1s', '--reconcile-interval', '1s')
@@ -2833,7 +2888,7 @@ def unit_command_case(r: Results, confirmed: Snapshot):
     settings = pool_settings()
     # 两条命令的环境：不带部署文件的变量，也不带 COMPOSE_ 开头的。看守的那一条另加 .env 里的各个变量：
     # 它的单元由 systemd 读了 .env 交给它的就是这样。
-    plain = {name: value for name, value in compose_environment().items() if name not in ('TOOLS_IMAGE', 'PROBE')}
+    plain = {name: value for name, value in compose_environment().items() if name not in ('TOOLS_IMAGE', 'PROBE', 'RESOLVER_SCRIPT', 'RESOLVER_ANSWERS')}
 
     def nowhere() -> bool:
         return get('nowhere.test', '/quick')['status'] == 404

@@ -53,11 +53,11 @@ def hits(name: str) -> int:
     return int(done.stdout.strip() or 0)
 
 
-def call():
+def call(timeout: float = 8):
     """经网关发一个请求。-> 状态码；没有得到应答时是 None。"""
     request = urllib.request.Request("http://127.0.0.1:27630/probe", headers={"Host": "egress.idp.test"})
     try:
-        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=8) as response:
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=timeout) as response:
             return response.status
     except urllib.error.HTTPError as refused:
         return refused.code
@@ -72,6 +72,28 @@ def wait_for(predicate, seconds: float, every: float = 0.5):
             return round(time.monotonic() - started, 1)
         time.sleep(every)
     return None
+
+
+def mode(how=None):
+    """替身解析器从现在起对每个名字这样回答（dns.py 里写着有哪几种）；None 是照常：A 记录是 answer 写的那些。"""
+    path = RUN / "answers" / "mode"
+    if how is None:
+        path.unlink(missing_ok=True)
+    else:
+        path.write_text(how + "\n", encoding="utf-8")
+
+
+def cold_gateway(how):
+    """一个刚启动的网关，还没有用过后端的名字：替身解析器先改成 how 这样回答，网关换一个进程，等到它就绪（等它的监听口开了，
+    不发业务请求）。-> 网关这时的 StartedAt。"""
+    # 网关自己的就绪口在回环上，这里的规则不放行回环：看它的日志里"started bind"（监听口开了）的行数多了一行。
+    listening = lambda: docker("logs", GATEWAY).stdout.count("started bind") + docker("logs", GATEWAY).stderr.count("started bind")
+    mode(how)
+    before = listening()
+    docker("restart", "-t", "2", GATEWAY)
+    if wait_for(lambda: listening() > before, 30) is None:
+        raise RuntimeError("网关重启之后 30 秒内没有就绪")
+    return docker("inspect", "-f", "{{.State.StartedAt}}", GATEWAY).stdout.strip()
 
 
 def restart_gateway():
@@ -128,6 +150,25 @@ try:
 except OSError as failed:
     seen["resolved"] = f"{type(failed).__name__}: {failed}"
 print(json.dumps(seen))
+'''
+
+# 在网关所在的网络命名空间里问网关用的那个解析器（127.0.0.11，Docker 的）一个名字的 A 记录：rcode（3 是名字不存在，2 是出错），
+# 回答里有几条，权威段里的 SOA（有的话）的 TTL；问不到时是 {"error": …}，和等了多少秒。
+ASK = r'''
+import json, socket, struct, sys, time
+name = sys.argv[1]
+query = struct.pack("!HHHHHH", 0x1234, 0x0100, 1, 0, 0, 0) + b"".join(bytes([len(p)]) + p.encode() for p in name.split(".")) + b"\x00" + struct.pack("!HH", 1, 1)
+began = time.monotonic()
+with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+    s.settimeout(float(sys.argv[2]))
+    try:
+        s.sendto(query, ("127.0.0.11", 53))
+        reply = s.recv(2048)
+    except OSError as failed:
+        print(json.dumps({"error": type(failed).__name__, "seconds": round(time.monotonic() - began, 1)}))
+        raise SystemExit
+flags, questions, answers, authority = struct.unpack("!HHHH", reply[2:10])
+print(json.dumps({"rcode": flags & 15, "answers": answers, "authority": authority, "seconds": round(time.monotonic() - began, 1)}))
 '''
 
 HAMMER = r'''
@@ -385,6 +426,105 @@ def cases(r: Results):
     tidy = wait_for(lambda: fresh not in pins(), 10)
     r.check("再把这个后端去掉：几秒之内它不再放行，原来的三个还在；常驻的那个和占位容器都在（EG-06 要用）",
             tidy is not None and pins() == three and running(WATCHER) and running(HOLDER))
+
+    # 下面几个用例接着 EG-08 的状态（常驻的那个在跑，三个名字钉在登记的地址上；名字 upstream.idp.test 钉的就是登记的地址），
+    # 在 EG-06 之前：EG-06 要杀占位容器。每个都从一个刚启动的网关做起（cold_gateway）：第一个请求到来时它才去解析后端的名字，
+    # 这时替身解析器对每个名字都答"不存在"（或出错、不应答；EG-14、EG-15 是够不着）；之后把解析器改回照常，不重启网关，看它多久恢复。
+    # 时间都用 time.monotonic()；判断留余量，不卡在边界上。
+    resolves = lambda: inside(CONNECT, f"{REGISTERED}:{PORT}").get("resolved") == REGISTERED   # 从网关所在的命名空间里按名字去问
+
+    SHORT = 10   # 秒。否定缓存时间：等得起，又与"下一个请求"分得清
+    r.case("EG-09", f"名字第一次用到时不存在，回答带着短的否定缓存时间（{SHORT} 秒）：这段时间之内请求得到 503，过了之后得到 200，网关没有重启过")
+    started = cold_gateway(f"nxdomain-soa-{SHORT}")
+    began = time.monotonic()
+    first = call()
+    mode(None)
+    r.check("名字不存在（带着 SOA，缓存时间 %d 秒）：第一个请求得到 503" % SHORT, first == 503)
+    r.check("解析器改回照常之后，从网关所在的命名空间里名字解析得了，指的是登记的地址", resolves())
+    time.sleep(max(0, began + SHORT / 2 - time.monotonic()))
+    middle, at_middle = call(), round(time.monotonic() - began, 1)
+    r.note("名字解析得了之后，缓存时间的一半时的请求（距第一个请求多少秒，得到）", [at_middle, middle])
+    r.check("缓存时间过了一半、名字早已解析得了：请求仍然得到 503", middle == 503)
+    time.sleep(max(0, began + SHORT - 2 - time.monotonic()))
+    series = []
+    while time.monotonic() - began < SHORT + 15:   # 每秒一个请求，到得到 200 为止：记下是哪一秒起恢复的
+        series.append([round(time.monotonic() - began, 1), call()])
+        if series[-1][1] == 200:
+            break
+        time.sleep(1)
+    healed = series[-1][0] if series and series[-1][1] == 200 else None
+    r.note("缓存时间快到时每秒一个请求（距第一个请求多少秒，得到）", series)
+    r.note("第一次得到 200 是在第一个请求之后多少秒", healed)
+    r.check(f"缓存时间过了之后：请求得到 200（第一个请求之后 {SHORT // 2} 秒以上、{SHORT + 6} 秒以内）",
+            healed is not None and SHORT // 2 < healed <= SHORT + 6)
+    r.check("这期间网关没有重启过（同一个进程：StartedAt 不变）",
+            docker("inspect", "-f", "{{.State.StartedAt}}", GATEWAY).stdout.strip() == started)
+
+    LONG = 600
+    r.case("EG-10", f"名字第一次用到时不存在，回答带着长的否定缓存时间（{LONG} 秒）：名字解析得了之后等 20 秒仍是 503，重启网关之后立刻是 200")
+    cold_gateway(f"nxdomain-soa-{LONG}")
+    first = call()
+    mode(None)
+    r.check("名字不存在（带着 SOA，缓存时间 600 秒）：第一个请求得到 503", first == 503)
+    r.check("解析器改回照常之后，从网关所在的命名空间里名字解析得了，指的是登记的地址", resolves())
+    time.sleep(QUIET)
+    still = call()
+    r.note(f"名字解析得了之后等了 {QUIET} 秒再发的请求得到", still)
+    r.check(f"名字解析得了、又等了 {QUIET} 秒：请求仍然得到 503，网关没有重启", still == 503)
+    restart_gateway()
+    r.check("重启网关之后，它的第一个请求就得到 200", call() == 200)
+
+    def recovers_at_once(number: str, how: str, what: str):
+        r.case(number, f"名字第一次用到时{what}：名字解析得了之后，下一个请求就是 200，网关没有重启过")
+        started = cold_gateway(how)
+        # 不应答时，第一个请求要等网关自己的解析超时：留够时间
+        first = call(timeout=60)
+        mode(None)
+        r.note(f"第一个请求得到", first)
+        r.check(f"名字第一次用到时{what}：第一个请求没有得到 200", first != 200)
+        r.check("解析器改回照常之后，从网关所在的命名空间里名字解析得了，指的是登记的地址", resolves())
+        after = call()
+        r.check("名字解析得了之后的下一个请求就得到 200，网关没有重启过（同一个进程：StartedAt 不变）",
+                after == 200 and docker("inspect", "-f", "{{.State.StartedAt}}", GATEWAY).stdout.strip() == started)
+
+    recovers_at_once("EG-11", "nxdomain", "不存在，回答里没有 SOA（没有缓存时间）")
+    recovers_at_once("EG-12", "servfail", "解析器答出错（SERVFAIL）")
+    recovers_at_once("EG-13", "drop", "解析器不应答")
+
+    def unreachable(number: str, title: str, how, make, restore, what: str):
+        """网关第一次用到名字时上游解析器够不着（make 做成这样），之后够得着了（restore）：不重启网关，看它多久恢复。"""
+        r.case(number, title)
+        said = len(docker("logs", WATCHER).stderr.splitlines())
+        make()
+        started = cold_gateway(how)
+        began = time.monotonic()
+        first = call(timeout=90)
+        waited = round(time.monotonic() - began, 1)
+        asked = inside(ASK, NAME, "20")
+        r.note("第一个请求得到，等了多少秒", [first, waited])
+        r.note("这时从网关所在的命名空间里问 Docker 的解析器这个名字", asked)
+        r.check(f"{what}：第一个请求没有得到 200", first != 200)
+        restored = time.monotonic()
+        restore()
+        back = wait_for(resolves, 60)
+        r.note("解析器够得着了之后，过了多少秒名字从网关所在的命名空间里解析得了", back)
+        r.check("解析器够得着了之后，名字从网关所在的命名空间里解析得了，指的是登记的地址", back is not None)
+        series = []
+        for _ in range(3):
+            series.append([round(time.monotonic() - restored, 1), call()])
+            if series[-1][1] == 200:
+                break
+            time.sleep(1)
+        r.note("名字解析得了之后的请求（距解析器够得着多少秒，得到）", series)
+        r.check("名字解析得了之后的下一个请求就得到 200，网关没有重启过（同一个进程：StartedAt 不变）",
+                series[0][1] == 200 and docker("inspect", "-f", "{{.State.StartedAt}}", GATEWAY).stdout.strip() == started)
+        more = docker("logs", WATCHER).stderr.splitlines()[said:]
+        r.note("这个用例里常驻的那个在标准错误上多说的", more)
+        r.check("解析器够不着的这段时间里，常驻的那个一直在跑，也没有多说什么，钉着的还是原来的三个（它只解析还没钉住的名字）",
+                running(WATCHER) and not more and pins() == three)
+
+    unreachable("EG-14", "解析器够不着（端口不可达）：网关第一次用到名字时 53 端口上没有人听，之后解析器回来，下一个请求就是 200，网关没有重启过", "closed", lambda: None, lambda: mode(None), "解析器那台机器在，53 端口上没有人听（回 ICMP 端口不可达）")
+    unreachable("EG-15", "解析器够不着（主机不可达）：网关第一次用到名字时解析器的容器停着、那个地址上没有主机，之后它回来，下一个请求就是 200，网关没有重启过", None, lambda: compose("stop", "dns", "--timeout", "2"), lambda: compose("start", "dns"), "解析器的容器停了，那个地址上没有主机")
 
     r.case("EG-06", "占着网络命名空间的容器死了：常驻的那个跟着死，不会留在已经没用的命名空间里")
     state = lambda: docker("inspect", "-f", "{{.State.Running}} {{.State.ExitCode}}", WATCHER).stdout.split()
