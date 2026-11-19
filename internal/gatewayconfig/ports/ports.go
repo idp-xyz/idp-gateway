@@ -45,7 +45,8 @@ type Delivery interface {
 	// 记录读得到却不成样子时返回错误：这时既不能当它没有，也不能照着它做。
 	Confirmed(ctx context.Context) (confirmation domain.Confirmation, ok bool, err error)
 	// Confirm 记下这份快照已经在这个池上得到确认，盖掉上一条。记录和配置放在一起：
-	// 发布器中途死了，下一个占到这个池的从它知道该放回哪一份。
+	// 发布器中途死了，下一个占到这个池的从它知道该放回哪一份。它只记最后一条，是下发的依据；
+	// 发布过什么、什么结局，在 History 里（ADR-0013）。
 	Confirm(ctx context.Context, confirmation domain.Confirmation) error
 }
 

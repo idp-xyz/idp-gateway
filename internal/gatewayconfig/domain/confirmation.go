@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"sort"
+	"time"
 )
 
 // Confirmation 是一个池上最后一次得到确认的发布：哪一份快照，确认它时池里的网关报告的是什么。
@@ -24,6 +25,9 @@ type Confirmation struct {
 	// Adopted 为真表示这份快照不是发布器发布的，是它第一次动这个池时已经放在那里的。
 	// 网关当时报告加载成功是看到了的；这份文件给出的启动设置是不是网关启动时的那一套，没有核对过。
 	Adopted bool
+	// At 是记录下这条确认的时刻（秒的精度）。读记录时才有；不知道时为零值。Equal 不比较它。
+	// 发布历史拿它判断一条没有结局的发布是不是在这次确认之前就开始了（docs/adr/ADR-0013.md 第 4 条之后的收紧）。
+	At time.Time
 }
 
 // ConfirmedBy 由一次观察得出一条确认：observed 说明 snapshot 正在这个网关上生效。

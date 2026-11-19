@@ -72,6 +72,12 @@ type Result struct {
 	Reason string
 	// Restart 列出不同的启动设置：RESTART_REQUIRED、RESTART_PENDING，以及重启时要改的那几项。
 	Restart []string
+	// 下面三样只在给了发布历史时才有（docs/adr/ADR-0013.md）；没有历史时都是零值。
+	// Release 是这一次在历史里的编号；Settled 是对账（或再发布一次同一份快照）给哪几条没有结局的补了结局；
+	// Warnings 是历史写不进去、读不成、但没有改变结局的那些，给人看。
+	Release  uint64
+	Settled  []uint64
+	Warnings []string
 }
 
 // Timing 是换上文件之后等网关的几个时限。
@@ -188,6 +194,9 @@ type Publisher struct {
 	staging  ports.Staging
 	delivery ports.Delivery
 	process  ports.Process
+	// history 为 nil 表示没有历史（WithHistory）。
+	history ports.History
+	meta    ReleaseMeta
 }
 
 // New 构造一个池的发布器。
@@ -325,6 +334,10 @@ func (p *Publisher) adopt(ctx context.Context, seen survey) error {
 // 返回错误表示还没有动过池就做不下去了。动过之后不再返回错误：结局写在 Result 里，要么是
 // ACTIVE，要么说明上一份有没有放回去。ctx 在动过池之后被取消时，仍会把上一份放回去再返回。
 func (p *Publisher) Publish(ctx context.Context, snapshot domain.Snapshot) (Result, error) {
+	return p.publish(ctx, snapshot, releaseOptions{})
+}
+
+func (p *Publisher) publish(ctx context.Context, snapshot domain.Snapshot, opts releaseOptions) (Result, error) {
 	result := Result{Snapshot: snapshot.ID()}
 	if ok, err := admit(snapshot, &result); !ok {
 		return result, err
@@ -335,6 +348,15 @@ func (p *Publisher) Publish(ctx context.Context, snapshot domain.Snapshot) (Resu
 	}
 	defer release()
 
+	if opts.refuseInPlace {
+		// 回滚：目标就是现在放着的这一份，没有什么可回的。读不成文件的，让后面的检查去说。
+		if current, has, err := p.delivery.Current(ctx); err == nil && has && current.ID() == snapshot.ID() {
+			result.Outcome = OutcomeRefused
+			result.Previous = current.ID()
+			result.Reason = "this is the snapshot in place now: there is nothing to roll back to"
+			return result, nil
+		}
+	}
 	seen, ok, err := p.look(ctx, snapshot, &result)
 	if !ok {
 		return result, err
@@ -349,7 +371,7 @@ func (p *Publisher) Publish(ctx context.Context, snapshot domain.Snapshot) (Resu
 		result.Reason = "startup settings differ from the ones the gateway started with: " + strings.Join(seen.differing, ", ")
 		return result, nil
 	case seen.offRecord:
-		return p.complete(ctx, snapshot, seen, result)
+		return p.complete(ctx, snapshot, seen, result, opts)
 	case inPlace && seen.before.Confirms(seen.staged):
 		// 已经是这一份了，不用再写配置。记录里没有它，记的是接手时的样子，或者记的是网关另一个
 		// 构建上的样子时，补上。
@@ -358,12 +380,47 @@ func (p *Publisher) Publish(ctx context.Context, snapshot domain.Snapshot) (Resu
 			return result, err
 		}
 		if !seen.recorded || !seen.record.Equal(fresh) {
+			led, err := p.begin(ctx, snapshot, seen, &result, opts)
+			if err != nil {
+				return result, err
+			}
 			if err := p.delivery.Confirm(ctx, fresh); err != nil {
 				return result, fmt.Errorf("delivery: %w", err)
 			}
+			result.Outcome = OutcomeActive
+			led.finish(ctx, &result)
+			return result, nil
+		}
+		// 池的记录已经是这一份。上一次发布它时历史里的 ACTIVE 那一行没有写进去的话，现在补上，
+		// 不另开一条。
+		if p.history != nil {
+			settled, notes, err := settleOpen(ctx, p.history, p.now(), verdict{
+				record: seen.record, observed: seen.before, step: domain.StepRerun, onlyActive: true,
+			})
+			if err != nil {
+				return result, fmt.Errorf("the release history could not be brought up to date, so nothing was done to the pool: %w", err)
+			}
+			result.Warnings = append(result.Warnings, notes...)
+			if len(settled) > 0 {
+				result.Release, result.Settled = settled[0], settled
+				result.Outcome = OutcomeActive
+				return result, nil
+			}
+		}
+		led, err := p.begin(ctx, snapshot, seen, &result, opts)
+		if err != nil {
+			return result, err
 		}
 		result.Outcome = OutcomeActive
+		led.finish(ctx, &result)
 		return result, nil
+	}
+	led, err := p.begin(ctx, snapshot, seen, &result, opts)
+	if err != nil {
+		return result, err
+	}
+	if err := led.applying(ctx, domain.StepReplaceFile); err != nil {
+		return result, err
 	}
 	if err := p.adopt(ctx, seen); err != nil {
 		return result, err
@@ -375,6 +432,7 @@ func (p *Publisher) Publish(ctx context.Context, snapshot domain.Snapshot) (Resu
 	if err := p.delivery.Put(ctx, snapshot); err != nil {
 		why = "delivery: " + err.Error()
 	} else {
+		led.observing(ctx, &result)
 		observed, confirmed, reason := p.await(ctx, running(seen.staged), true)
 		if observed != nil {
 			result.Observed = *observed
@@ -383,18 +441,26 @@ func (p *Publisher) Publish(ctx context.Context, snapshot domain.Snapshot) (Resu
 		if confirmed {
 			if why = p.record(ctx, snapshot, *observed); why == "" {
 				result.Outcome = OutcomeActive
+				led.finish(ctx, &result)
 				return result, nil
 			}
 		}
 	}
 	// 五、没有生效：把上一份放回去。
-	return p.putBack(ctx, result, seen, why, false), nil
+	result = p.putBack(ctx, result, seen, why, false)
+	led.finish(ctx, &result)
+	return result, nil
 }
 
 // complete 补完一次没做完的发布：放在那里的不是记录的那一份，却正是要发布的这一份。上一次发布它时
 // 文件换上去了，没来得及记下来。网关确认它在生效就记下来，不必先收回去再发一遍。这里什么配置都不写；
 // 等网关的时限与刚换上去时相同，因为那个文件可能是刚刚才换上去的。
-func (p *Publisher) complete(ctx context.Context, snapshot domain.Snapshot, seen survey, result Result) (Result, error) {
+func (p *Publisher) complete(ctx context.Context, snapshot domain.Snapshot, seen survey, result Result, opts releaseOptions) (Result, error) {
+	led, err := p.begin(ctx, snapshot, seen, &result, opts)
+	if err != nil {
+		return result, err
+	}
+	led.observing(ctx, &result)
 	observed, confirmed, reason := p.await(ctx, running(seen.staged), true)
 	if observed != nil {
 		result.Observed = *observed
@@ -412,6 +478,7 @@ func (p *Publisher) complete(ctx context.Context, snapshot domain.Snapshot, seen
 		result.Reason = "this snapshot is in place without having been confirmed, and the gateway does not report it running: " +
 			reason + "; reconcile the pool first"
 	}
+	led.finish(ctx, &result)
 	return result, nil
 }
 

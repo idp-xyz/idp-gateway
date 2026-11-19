@@ -8,6 +8,7 @@ package workloadtls
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
@@ -77,4 +78,32 @@ func PeerIdentity(state *tls.ConnectionState) string {
 		return ""
 	}
 	return leaf.URIs[0].String()
+}
+
+// CertificateIdentity 返回证书文件（PEM）里第一张证书的 URI 身份，取法与 PeerIdentity 相同：
+// 证书里没有 URI、或有不止一个时返回空串，身份必须无歧义。文件读不了、不是证书时返回错误。
+// 它不验证证书：调用的人拿这个证书去握过手了，这里只是读出它自称的身份。
+func CertificateIdentity(certFile string) (string, error) {
+	raw, err := os.ReadFile(certFile)
+	if err != nil {
+		return "", fmt.Errorf("certificate: %w", err)
+	}
+	for {
+		var block *pem.Block
+		block, raw = pem.Decode(raw)
+		if block == nil {
+			return "", errors.New("certificate: no certificate found in " + certFile)
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		leaf, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return "", fmt.Errorf("certificate: %w", err)
+		}
+		if len(leaf.URIs) != 1 {
+			return "", nil
+		}
+		return leaf.URIs[0].String(), nil
+	}
 }

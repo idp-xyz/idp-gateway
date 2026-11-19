@@ -19,8 +19,9 @@ const recordFormat = 1
 // record 是记录文件的内容：这个池上最后一次得到确认的那份快照，和确认它时网关报告的。
 // 快照的内容整份带着，对不上时要把它放回去；它在文件里是 base64。
 //
-// 这是单机下发自己的东西，只说"这个目录里该放着哪一份"。它不是发布的记录：谁批准的、发布过哪些，
-// 不在这里（G03 的发布状态还没有做）。
+// 这是单机下发自己的东西，只说"这个目录里该放着哪一份"。它不是发布的历史：发布过哪些、谁发起的、
+// 每一步怎么样，在发布历史里（adapters/history，docs/adr/ADR-0013.md），那里没有它也照样能放到位。
+// 谁批准的哪里都没有：批准要等 Fabric 的发布意图。
 type record struct {
 	Format int `json:"format"`
 	// Snapshot 是内容的 SHA-256，读的时候拿它核对内容。
@@ -75,6 +76,10 @@ func (d *Directory) Confirmed(context.Context) (domain.Confirmation, bool, error
 	}
 	confirmation := domain.Confirmation{
 		Snapshot: snapshot, Digest: stored.Digest, Version: stored.Version, Revision: stored.Revision, Adopted: stored.Adopted,
+	}
+	// 时刻是给发布历史对账用的：读不懂就留零值，不算记录坏了。
+	if at, err := time.Parse(time.RFC3339, stored.ConfirmedAt); err == nil {
+		confirmation.At = at
 	}
 	if !stored.Adopted {
 		if stored.Startup == nil {

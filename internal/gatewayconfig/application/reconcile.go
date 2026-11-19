@@ -15,6 +15,8 @@ import (
 type Reconciler struct {
 	watch
 	delivery ports.Delivery
+	// history 为 nil 表示没有历史（WithHistory）。
+	history ports.History
 }
 
 // NewReconciler 构造一个池的对账器。它不做离线加载：依据是记录，不是重新算出来的期望值。
@@ -51,6 +53,17 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 	if err != nil {
 		return result, fmt.Errorf("delivery: %w", err)
 	}
+	result, err = r.reconcile(ctx, record, recorded)
+	if err == nil {
+		// 给历史里停在半路的发布补结局（ADR-0013 第 4 条）。它补不成不改变对账的结局。
+		r.settleAfter(ctx, &result, record, recorded)
+	}
+	return result, err
+}
+
+// reconcile 是 Reconcile 占着池、读过记录之后的那一部分。
+func (r *Reconciler) reconcile(ctx context.Context, record domain.Confirmation, recorded bool) (Result, error) {
+	var result Result
 	current, hasCurrent, err := r.delivery.Current(ctx)
 	if err != nil {
 		return result, fmt.Errorf("delivery: %w", err)

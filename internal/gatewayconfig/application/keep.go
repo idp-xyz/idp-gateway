@@ -54,6 +54,12 @@ type Keeper struct {
 // 它一直不出声，从它那里看不出看守还在不在看。要在 Run 之前设。
 func (k *Keeper) Watch(f func(Tending)) { k.watch = f }
 
+// WithHistory 让看守每一次对账都给发布历史里停在半路的发布补结局（ADR-0013 第 4 条）。要在 Run 之前设。
+func (k *Keeper) WithHistory(history ports.History) *Keeper {
+	k.reconciler.WithHistory(history)
+	return k
+}
+
 // NewKeeper 构造一个池的看守。对账用的是 Reconciler 的那一套，时限由 timing 给。
 func NewKeeper(pool ports.Pool, delivery ports.Delivery, readBack ports.ReadBack, timing Timing, pace Pace) (*Keeper, error) {
 	if pool == nil {

@@ -22,18 +22,18 @@ var ErrNothingConfirmed = errors.New("gatewayconfig: no publication has been con
 // 返回错误表示还没有动过池。还没重启就做不下去的（包括被叫停），把上一份放回去，不重启；
 // 重启之后没有到位的，把上一份放回去再重启一次。重启一旦开始，后面的步骤不随 ctx 取消。
 func (p *Publisher) Restart(ctx context.Context, snapshot domain.Snapshot) (Result, error) {
-	return p.restart(ctx, &snapshot)
+	return p.restart(ctx, &snapshot, releaseOptions{})
 }
 
 // RestartConfirmed 重启网关，让它带着这个池上最后一次得到确认的那份快照的启动设置起来。
 // 对账报告 RESTART_PENDING 之后要做的就是这个：文件已经是那一份，只差重启。
 // 还没有确认过任何发布时返回 ErrNothingConfirmed。其余与 Restart 相同。
 func (p *Publisher) RestartConfirmed(ctx context.Context) (Result, error) {
-	return p.restart(ctx, nil)
+	return p.restart(ctx, nil, releaseOptions{})
 }
 
 // restart 是 Restart 和 RestartConfirmed 共用的。given 为 nil 表示用记录里的那一份。
-func (p *Publisher) restart(ctx context.Context, given *domain.Snapshot) (Result, error) {
+func (p *Publisher) restart(ctx context.Context, given *domain.Snapshot, opts releaseOptions) (Result, error) {
 	var result Result
 	if p.process == nil {
 		return result, errors.New("gatewayconfig: no way to restart the gateway of this pool was given")
@@ -97,12 +97,26 @@ func (p *Publisher) restart(ctx context.Context, given *domain.Snapshot) (Result
 	if err := p.process.Verify(ctx); err != nil {
 		return result, fmt.Errorf("process: %w", err)
 	}
+	// 历史：每一步动手之前先写。第一步是换文件；目录里已经是这一份、网关也在跑它时没有这一步，
+	// 第一步就是重启网关。
+	replacing := seen.previous.ID() != snapshot.ID() || !seen.before.Confirms(seen.staged)
+	led, err := p.begin(ctx, snapshot, seen, &result, opts)
+	if err != nil {
+		return result, err
+	}
+	first := domain.StepRestartGateway
+	if replacing {
+		first = domain.StepReplaceFile
+	}
+	if err := led.applying(ctx, first); err != nil {
+		return result, err
+	}
 	if err := p.adopt(ctx, seen); err != nil {
 		return result, err
 	}
 
 	// 换上去，等网关报告它加载得了。目录里已经是这一份、网关也在跑它时不用换：只差重启。
-	if seen.previous.ID() != snapshot.ID() || !seen.before.Confirms(seen.staged) {
+	if replacing {
 		result.Replaced = true
 		why := ""
 		if err := p.delivery.Put(ctx, snapshot); err != nil {
@@ -117,7 +131,9 @@ func (p *Publisher) restart(ctx context.Context, given *domain.Snapshot) (Result
 			}
 		}
 		if why != "" {
-			return p.putBack(ctx, result, seen, why, false), nil
+			result = p.putBack(ctx, result, seen, why, false)
+			led.finish(ctx, &result)
+			return result, nil
 		}
 	}
 
@@ -126,7 +142,18 @@ func (p *Publisher) restart(ctx context.Context, given *domain.Snapshot) (Result
 		if !result.Replaced {
 			return result, fmt.Errorf("gatewayconfig: interrupted before the gateway was restarted: %w", err)
 		}
-		return p.putBack(ctx, result, seen, "interrupted before the gateway was restarted: "+err.Error(), false), nil
+		result = p.putBack(ctx, result, seen, "interrupted before the gateway was restarted: "+err.Error(), false)
+		led.finish(ctx, &result)
+		return result, nil
+	}
+	if result.Replaced {
+		// 重启也是动手，也先写后做。写不进去就不重启：文件已经换上去了，照"重启之前被叫停"的那条路
+		// 把上一份放回去，原因里写历史写不进去。
+		if err := led.applying(ctx, domain.StepRestartGateway); err != nil {
+			result = p.putBack(ctx, result, seen, err.Error(), false)
+			led.finish(ctx, &result)
+			return result, nil
+		}
 	}
 
 	// 重启。从这里起不随 ctx 取消：网关停到一半没人管，或者带着新设置起来了却没人确认，
@@ -137,6 +164,7 @@ func (p *Publisher) restart(ctx context.Context, given *domain.Snapshot) (Result
 	if err := p.process.Restart(steady); err != nil {
 		why = "restarting the gateway: " + err.Error()
 	} else {
+		led.observing(steady, &result)
 		observed, confirmed, reason := p.await(steady, started(seen.staged), false)
 		if observed != nil {
 			result.Observed = *observed
@@ -145,6 +173,7 @@ func (p *Publisher) restart(ctx context.Context, given *domain.Snapshot) (Result
 		if confirmed {
 			if why = p.record(steady, snapshot, *observed); why == "" {
 				result.Outcome = OutcomeActive
+				led.finish(steady, &result)
 				return result, nil
 			}
 		}
@@ -153,7 +182,10 @@ func (p *Publisher) restart(ctx context.Context, given *domain.Snapshot) (Result
 		// 文件没有换过，没有"上一份"可放：再重启一次也还是这份文件。
 		result.Outcome = OutcomeUnknown
 		result.Reason = why + "; the snapshot was already in place, so there is nothing to put back"
+		led.finish(steady, &result)
 		return result, nil
 	}
-	return p.putBack(steady, result, seen, why, true), nil
+	result = p.putBack(steady, result, seen, why, true)
+	led.finish(steady, &result)
+	return result, nil
 }

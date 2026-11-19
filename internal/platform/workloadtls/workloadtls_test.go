@@ -193,3 +193,25 @@ func TestServerConfigRejectsUnusableFiles(t *testing.T) {
 		t.Fatalf("%+v", config)
 	}
 }
+
+func TestCertificateIdentityIsTheOnlyURIInTheCertificate(t *testing.T) {
+	ca := tlstest.NewCA(t, "workload CA")
+	publisher := ca.Issue("publisher", []string{gatewayID})
+	if id, err := workloadtls.CertificateIdentity(publisher.CertFile); err != nil || id != gatewayID {
+		t.Fatalf("一个 URI 的证书：%q, %v", id, err)
+	}
+	// 没有或不止一个 URI 的证书：读得出证书，但身份是空的，不是错误。
+	for name, uris := range map[string][]string{"none": nil, "two": {gatewayID, "spiffe://idp.test/apps/parcel-service"}} {
+		leaf := ca.Issue(name, uris)
+		if id, err := workloadtls.CertificateIdentity(leaf.CertFile); err != nil || id != "" {
+			t.Fatalf("%s：%q, %v", name, id, err)
+		}
+	}
+	// 读不了、不是证书：错误。
+	if _, err := workloadtls.CertificateIdentity(ca.File() + ".missing"); err == nil {
+		t.Fatal("不存在的文件没有报错")
+	}
+	if _, err := workloadtls.CertificateIdentity(publisher.KeyFile); err == nil {
+		t.Fatal("私钥文件被当成了证书")
+	}
+}

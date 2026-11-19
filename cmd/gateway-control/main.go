@@ -12,7 +12,13 @@
 //	gateway-control restore     --account <账户> --authz … （其余同上）
 //	gateway-control revocations --authz … （其余同上）
 //
-// 它们的结局和退出码在 revoke.go 的开头写着；下面说的退出码是前五条命令的。
+// 另有三条对着池的发布历史（history.go，docs/adr/ADR-0013.md）：
+//
+//	gateway-control releases --history-dir <目录> --pool <名字> --config-dir <池的配置目录>
+//	gateway-control release  --history-dir <目录> --pool <名字> --id <编号>
+//	gateway-control rollback --history-dir <目录> --pool <名字> --to <编号> [--with-restart] …   （其余同 publish、restart）
+//
+// 它们的结局和退出码在 revoke.go、history.go 的开头写着；下面说的退出码是前五条命令的，加上 rollback。
 //
 // publish 把一份网关配置发布到池里，网关不重启。restart 发布一份要重启网关才能全部生效的配置
 // （启动设置变了的那种），会让这个池中断一下；不给 --snapshot 时，用的是这个池上最后一次得到确认的那一份。
@@ -20,7 +26,9 @@
 // place 是网关启动之前做的：放在目录里的不是最后一次得到确认的那一份，就把那一份放回去。它不读网关。
 //
 // 记录是配置目录里的一个文件（.config.yaml.confirmed），由这个命令自己写：每次发布得到网关确认之后，
-// 记下是哪一份。放在那里的不是记录的那一份时，publish 和 restart 不动手（POOL_NOT_READY），先要 reconcile；
+// 记下是哪一份（只记最后一条，是下发的依据）。发布过什么、谁发起的、每一步和结局，在发布历史里：
+// publish、restart、reconcile、keep 给了 --history-dir 才记，不给就与没有历史时一字不差（ADR-0013）。
+// 历史是先写后做：每一步动手之前先把它写进历史并落盘，写不进去就不做，退出码 1，池没有被碰过。放在那里的不是记录的那一份时，publish 和 restart 不动手（POOL_NOT_READY），先要 reconcile；
 // 只有一种情况 publish 自己补得上：放在那里的正是要发布的这一份，网关也报告它在生效。
 //
 // 前四条命令做完就退出，要有人来叫。deploy/compose 在启动一个池时叫其中两条：网关启动之前 place，
@@ -45,6 +53,9 @@
 //	5  UNKNOWN：换上去了，没有生效，也没能确认放回去了；要对账。对账时：没能确认网关在跑记录的那一份。
 //	   place 时：记录的那一份没能放回去，不该启动网关
 //	6  RESTART_PENDING：文件和运行配置都对得上，但网关的启动设置不是确认那份配置时的那一套；要重启
+//	8  ACTIVE_NOT_RECORDED（只在给了 --history-dir 时）：这份配置正在网关上生效，池的记录也记下了，
+//	   只是历史里的 ACTIVE 那一行没有写进去；池没有问题。标准错误里说历史停在哪一步；再跑一次同样的 publish
+//	   是安全的（它补全历史），reconcile 也会补。7 是撤销命令的
 //
 // 途中收到 SIGINT、SIGTERM 或 SIGHUP 时它不立刻退出：还没碰过池的，以退出码 1 结束；
 // 已经换上文件的，先把上一份放回去，结局是 RESTORED 或 UNKNOWN。重启一旦开始就做完。
@@ -61,7 +72,8 @@
 // （Prometheus 的文本格式），每看完一眼更新一次：池现在的样子、对账的结局、上一眼是什么时候看完的。
 // 告警靠的是这些数（deploy/compose 里有一份规则）。那个地址占不了时它不启动，退出码 1。
 //
-// 它不在请求路径上。RouteIntent 到网关配置的编译、发布的状态和审批都还没有。
+// 它不在请求路径上。RouteIntent 到网关配置的编译、批准（要等 Fabric 的发布意图）还没有；发布的状态只记
+// G03 状态机里发布器自己经手的那一段（STAGED 到 ACTIVE、FAILED、UNKNOWN），见 ADR-0013 第 2 条。
 package main
 
 import (
@@ -99,6 +111,8 @@ const (
 	exitRestored       = 4
 	exitUnknown        = 5
 	exitRestartPending = 6
+	// exitActiveNotRecorded：池确实是 ACTIVE，历史里的 ACTIVE 那一行没有写进去（ADR-0013）。7 是撤销命令的。
+	exitActiveNotRecorded = 8
 )
 
 const (
@@ -107,6 +121,8 @@ const (
 	commandReconcile = "reconcile"
 	commandPlace     = "place"
 	commandKeep      = "keep"
+	// rollback 回到历史里的一份快照（history.go）：flag 与 publish、restart 同一套。
+	commandRollback = "rollback"
 )
 
 // dockerRunner 是 scratch.Config.Docker 的类型；nil 表示用本机的 docker 命令行。
@@ -121,13 +137,17 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer, docker dockerRunner) int {
-	known := map[string]bool{commandPublish: true, commandRestart: true, commandReconcile: true, commandPlace: true, commandKeep: true}
+	known := map[string]bool{commandPublish: true, commandRestart: true, commandReconcile: true, commandPlace: true, commandKeep: true, commandRollback: true}
 	if len(args) > 0 && isRevocationCommand(args[0]) {
 		return runRevocation(ctx, args[0], args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && isHistoryReadCommand(args[0]) {
+		return runHistoryRead(ctx, args[0], args[1:], stdout, stderr)
 	}
 	if len(args) == 0 || !known[args[0]] {
 		fmt.Fprintln(stderr, "usage: gateway-control publish|restart|reconcile|place|keep [flags]   (gateway-control <command> --help lists them)")
 		fmt.Fprintln(stderr, "       gateway-control revoke|restore|revocations [flags]   (revoke or lift the revocation of a Provider account in gateway-authz, or read its table)")
+		fmt.Fprintln(stderr, "       gateway-control releases|release|rollback [flags]   (the release history of a pool: list it, show one release, roll back to one)")
 		return exitUsage
 	}
 	o, err := parse(args[0], args[1:], stderr)
@@ -158,6 +178,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, docker do
 	if err := encoder.Encode(report(result)); err != nil {
 		fmt.Fprintln(stderr, "gateway-control:", err)
 	}
+	// 只有给了发布历史时才会有这两样；没有历史时标准错误上多不出一个字。
+	if result.Outcome == application.OutcomeActiveNotRecorded {
+		fmt.Fprintln(stderr, "gateway-control: ACTIVE_NOT_RECORDED:", result.Reason)
+	}
+	for _, warning := range result.Warnings {
+		fmt.Fprintln(stderr, "gateway-control: history:", warning)
+	}
 	return exitCode(result.Outcome)
 }
 
@@ -171,6 +198,8 @@ func exitCode(outcome application.Outcome) int {
 		return exitRestored
 	case application.OutcomeRestartPending:
 		return exitRestartPending
+	case application.OutcomeActiveNotRecorded:
+		return exitActiveNotRecorded
 	default: // UNKNOWN，以及任何这里不认识的结局：不认识的不当成成功
 		return exitUnknown
 	}
@@ -201,6 +230,13 @@ type options struct {
 	composeTimeout  time.Duration
 	// 看守在哪个地址上给出指标；空表示不给
 	metricsListen string
+	// 发布历史（ADR-0013）：历史目录；池的标识；操作员的备注（未经核实）。historyDir 为空表示没有历史。
+	historyDir string
+	poolName   string
+	note       string
+	// rollback：回到历史里的哪一条，要不要在需要时重启网关
+	rollbackTo  uint64
+	withRestart bool
 }
 
 // endpoint 是一个回读口和读它用的证书。
@@ -252,14 +288,29 @@ func parse(command string, args []string, output io.Writer) (options, error) {
 		flags.DurationVar(&o.composeTimeout, "compose-timeout", 3*time.Minute, "启动命令、停止命令各自最多跑多久")
 		flags.StringVar(&o.metricsListen, "metrics-listen", "", "在这个地址的 "+telemetry.Path+" 上给出指标（Prometheus 的文本格式），host:port；不给就不开")
 	}
-	staged := command == commandPublish || command == commandRestart
+	staged := command == commandPublish || command == commandRestart || command == commandRollback
+	if command != commandPlace {
+		// 发布历史（ADR-0013）：不给 --history-dir 时命令与没有历史时完全相同。
+		flags.StringVar(&o.historyDir, "history-dir", "", historyDirUsage(command))
+		flags.StringVar(&o.poolName, "pool", "", "池的标识，写进历史里每一条；给了 --history-dir 就要给（字母、数字、点、下划线、连字符，最长 64 个字符）")
+	}
+	if staged {
+		flags.StringVar(&o.note, "note", "", "操作员的备注，写进历史，不必填，最长 512 字节，不许有控制字符；没有人核实它，不要往里放秘密")
+	}
 	if staged {
 		// 发布和重启要的：要发布的快照，和离线加载它用的东西。
-		if command == commandPublish {
+		switch command {
+		case commandPublish:
 			text(&o.snapshot, "snapshot", "要发布的网关配置文件", true)
-		} else {
+		case commandRestart:
 			text(&o.snapshot, "snapshot", "要发布的网关配置文件；不给时用这个池上最后一次得到确认的那一份", false)
 			text(&o.container, "container", "池里的网关容器的名字或 ID：要重启的就是它", true)
+			flags.DurationVar(&o.stopTimeout, "stop-timeout", 0, "让 docker 等网关多久才杀掉它（整秒）；不设则用容器自己设的")
+		default:
+			// rollback：快照来自历史。要重启时才要网关容器。
+			flags.Uint64Var(&o.rollbackTo, "to", 0, "回到历史里的这一条（编号）：它放上去的那份快照，必须到过 ACTIVE；走的是 publish 的全套检查，记成新的一条")
+			flags.BoolVar(&o.withRestart, "with-restart", false, "快照的启动设置与网关启动时不同时重启网关（像 restart）；不给就是 RESTART_REQUIRED，什么都不做")
+			text(&o.container, "container", "池里的网关容器的名字或 ID：--with-restart 时要重启的就是它", false)
 			flags.DurationVar(&o.stopTimeout, "stop-timeout", 0, "让 docker 等网关多久才杀掉它（整秒）；不设则用容器自己设的")
 		}
 		text(&o.image, "image", "池里跑的网关镜像，按摘要引用（仓库@sha256:…）；离线加载用同一个", true)
@@ -289,8 +340,24 @@ func parse(command string, args []string, output io.Writer) (options, error) {
 	if staged && o.stagingPort == 0 {
 		missing = append(missing, "--staging-container-port")
 	}
+	if command == commandRollback {
+		if o.rollbackTo == 0 {
+			missing = append(missing, "--to")
+		}
+		if o.historyDir == "" {
+			missing = append(missing, "--history-dir")
+		}
+		if o.withRestart && o.container == "" {
+			missing = append(missing, "--container")
+		}
+	}
 	if len(missing) > 0 {
 		return o, errors.New("missing required flags: " + strings.Join(missing, ", "))
+	}
+	if command != commandPlace {
+		if err := checkHistoryFlags(flags, &o); err != nil {
+			return o, err
+		}
 	}
 	if command == commandKeep {
 		switch {
@@ -355,6 +422,11 @@ func publish(ctx context.Context, o options, docker dockerRunner) (application.R
 	if err != nil {
 		return none, err
 	}
+	// 发布历史：打不开就到此为止，池没有被碰过。
+	history, err := openHistoryFor(o)
+	if err != nil {
+		return none, err
+	}
 	// 只有 restart 可以不给快照：那时用的是记录里的那一份，由发布器占着池之后去读。
 	var snapshot domain.Snapshot
 	if o.snapshot != "" {
@@ -386,14 +458,23 @@ func publish(ctx context.Context, o options, docker dockerRunner) (application.R
 	if err != nil {
 		return none, err
 	}
-	if o.command != commandRestart {
+	if history != nil {
+		publisher.WithHistory(history, application.ReleaseMeta{Command: o.command, By: initiator(o), Note: o.note})
+	}
+	if o.command == commandPublish {
 		return publisher.Publish(ctx, snapshot)
+	}
+	if o.command == commandRollback && !o.withRestart {
+		return publisher.Rollback(ctx, o.rollbackTo, false)
 	}
 	gateway, err := container.New(container.Config{
 		Name: o.container, ConfigDirectory: o.configDir, Mount: scratch.ConfigMount, StopTimeout: o.stopTimeout, Docker: docker,
 	})
 	if err != nil {
 		return none, err
+	}
+	if o.command == commandRollback {
+		return publisher.WithProcess(gateway).Rollback(ctx, o.rollbackTo, true)
 	}
 	if o.snapshot != "" {
 		return publisher.WithProcess(gateway).Restart(ctx, snapshot)
@@ -419,6 +500,13 @@ func reconcile(ctx context.Context, o options) (application.Result, error) {
 	reconciler, err := application.NewReconciler(delivery, pool, o.timing)
 	if err != nil {
 		return none, err
+	}
+	history, err := openHistoryFor(o)
+	if err != nil {
+		return none, err
+	}
+	if history != nil {
+		reconciler.WithHistory(history)
 	}
 	return reconciler.Reconcile(ctx)
 }
@@ -463,6 +551,13 @@ func keep(ctx context.Context, o options, stdout, stderr io.Writer, docker docke
 	keeper, err := application.NewKeeper(project, delivery, pool, o.timing, o.pace)
 	if err != nil {
 		return fail(err)
+	}
+	history, err := openHistoryFor(o)
+	if err != nil {
+		return fail(err)
+	}
+	if history != nil {
+		keeper.WithHistory(history)
 	}
 	// 先试一下占不占得了这个池：账号不对、目录写不了，现在就说，不等到池出了事要动手的时候。
 	// 正好有一次发布占着它不算。
@@ -523,6 +618,8 @@ type tended struct {
 	Reconcile *outcome `json:"reconcile"`
 	// Error：这一眼没看成，或者有一步没做成。
 	Error string `json:"error"`
+	// HistoryNotes 是对账时发布历史那一边要说的：补不成、读不成，或者没有补。没有给历史时没有这一项。
+	HistoryNotes []string `json:"history_notes,omitempty"`
 }
 
 // members 的三个名字是 deploy/compose/compose.yml 里的服务名。
@@ -562,6 +659,7 @@ func describe(tending application.Tending, now time.Time) tended {
 	if tending.Reconciled != nil {
 		reconciled := report(*tending.Reconciled)
 		line.Reconcile = &reconciled
+		line.HistoryNotes = tending.Reconciled.Warnings
 	}
 	if tending.Err != nil {
 		line.Error = tending.Err.Error()
@@ -599,6 +697,10 @@ type outcome struct {
 	Restart []string `json:"restart"`
 	// Observed 是最后一次从池里的网关读到的；一次都没读到时为 null。place 不读网关，总是 null。
 	Observed *observed `json:"observed"`
+	// Release 是这一次在发布历史里的编号；HistorySettled 是对账给哪几条没有结局的补了结局。
+	// 没有给历史时两样都没有（不写出来，输出与没有历史时一字不差）。
+	Release        uint64   `json:"release,omitempty"`
+	HistorySettled []uint64 `json:"history_settled,omitempty"`
 }
 
 type observed struct {
@@ -614,7 +716,7 @@ func report(result application.Result) outcome {
 	o := outcome{
 		Outcome: string(result.Outcome), Reason: result.Reason,
 		Snapshot: result.Snapshot, Previous: result.Previous, Replaced: result.Replaced, Restarted: result.Restarted,
-		ExpectedDigest: result.Expected, Restart: result.Restart,
+		ExpectedDigest: result.Expected, Restart: result.Restart, Release: result.Release, HistorySettled: result.Settled,
 	}
 	if o.Restart == nil {
 		o.Restart = []string{}
