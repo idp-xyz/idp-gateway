@@ -1,12 +1,12 @@
 {
   "title": "IDP Gateway black-box suite: real agentgateway, gateway-authz (acceptance build), mock provider",
-  "started_at_utc": "2026-11-19T06:06:19.918772+00:00",
-  "finished_at_utc": "2026-11-19T06:07:36.533249+00:00",
+  "started_at_utc": "2026-11-19T07:16:41.049919+00:00",
+  "finished_at_utc": "2026-11-19T07:17:53.391337+00:00",
   "operator": "tops",
   "host": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "python": "3.12.3",
   "command": ".venv/bin/python tests/acceptance/blackbox/run.py",
-  "repository_commit": "c39972914b4d9ba13d7c1128d58436b827ccda3b",
+  "repository_commit": "cb7c1795b54742120641eabe26dfd1cd3927aab1",
   "repository_dirty_files": 0,
   "repository_dirty_files_ignores": "tests/acceptance/blackbox/evidence/",
   "agentgateway": {
@@ -106,20 +106,25 @@
     }
   },
   "policy_sha256": "9a3b0317caadad03aebbdbebbf1ef624b2c5fe122e52e1796dd80c70d0739ef4",
-  "runner_sha256": "1ca92d15ddcad2919271114135e80a3bb3d2295cd6c88d983a916ee5595be09d",
+  "runner_sha256": "26af935bc8f4a9d0b643a51deb6778d2644fa9cbf8c48cefb18eb87dc8c919de",
   "gateway_authz": {
     "what_ran": "cmd/gateway-authz built with the acceptance tag; not the product build",
     "build_command": "go build -trimpath -tags acceptance -o tests/acceptance/blackbox/.run/gateway-authz ./cmd/gateway-authz",
     "go": "go version go1.26.8 linux/amd64",
-    "source_sha256": "4142000d848c7c07ce0a895648d40593e4dbdcc03956a543d8d24a95c37eb29d",
+    "source_sha256": "5088db5bbe5ed5d1ef25faa04c6871635d707e7d5b66f6388b56f245e2b33432",
     "source_sha256_covers": "go.mod and every non-test .go file under cmd/ and internal/",
-    "binary_sha256": "ad71f87a1852e66d4813a872cf0550531f0c02cb6c9e2109acb571dd718f09c0",
+    "binary_sha256": "b30cd83f4ee725e3df46974398aad930b0841820038f753dbf22e77355b7fbfa",
     "policy_from": "tests/acceptance/blackbox/policy.poc.json",
     "credentials_from": "three files written for the run, not recorded: Bearer tokens (--credentials), account numbers with developer tokens (--developer-tokens), and OAuth2 clients (--oauth-clients)",
-    "revocations": "a file written for the run (--revocations), empty at the start; changed through the acceptance controls and, in P1-RV-02 to 05, through the product interface",
+    "revocations": "a file written for the run (--revocations), empty at the start; changed through the acceptance controls and, in P1-RV-02 to 05, through the product interface and, in P1-RV-06 to 11, through gateway-control",
     "http_versions_seen_from_the_gateway": [
       "HTTP/2.0"
     ]
+  },
+  "gateway_control": {
+    "what_ran": "cmd/gateway-control, the product build (no tag); P1-RV-06 to 11 run its revoke, restore and revocations commands against the gateway-authz above, under the revoker certificate made for the run",
+    "build_command": "go build -trimpath -o tests/acceptance/blackbox/.run/gateway-control ./cmd/gateway-control",
+    "binary_sha256": "6b0f0814adabda254e25a11dd7eb2bd6cc3d650edcb96c554b3a3fe4aeda337f"
   },
   "mocks_sha256": {
     "mock_broker.py": "2eed2fca25e57907ccfb7a45acb0c77974cf3597a80fa9600a90699fe3cfff02",
@@ -173,8 +178,8 @@
   ],
   "ports_left_open_after_run": [],
   "summary": {
-    "cases": 91,
-    "pass": 90,
+    "cases": 97,
+    "pass": 96,
     "fail": 1
   },
   "scope_limits": [
@@ -1116,7 +1121,7 @@
           "x-client-trace"
         ],
         "traceparent_the_provider_received": [
-          "00-0af7651916cd43dd8537bf50925c1ba0-5ccc4cd89a9b32b1-01"
+          "00-0af7651916cd43dd8537bf50925c1ba0-93eb3460a97f6b1e-01"
         ]
       },
       "indicative_for": [
@@ -1593,7 +1598,7 @@
       ],
       "observed": {
         "status": 503,
-        "seconds": 1.003
+        "seconds": 1.002
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1758,7 +1763,7 @@
         },
         "pdp_slower_than_the_timeout": {
           "status": 503,
-          "seconds": 1.025
+          "seconds": 1.002
         },
         "gateway_log_line_when_the_pdp_cannot_be_asked": {
           "level": "info",
@@ -1836,7 +1841,7 @@
       ],
       "observed": {
         "status": 504,
-        "seconds": 2.003,
+        "seconds": 2.002,
         "provider_hits": 1
       },
       "indicative_for": [
@@ -2682,7 +2687,7 @@
         },
         "Gatekeeper slower than the broker waits": {
           "status": 503,
-          "seconds": 0.704
+          "seconds": 0.75
         },
         "Gatekeeper down": {
           "status": 503,
@@ -3328,7 +3333,7 @@
           "revoked_accounts": [
             {
               "account_id": "account-blue",
-              "revoked_at": "2026-11-19T06:07:00Z",
+              "revoked_at": "2026-11-19T07:17:17Z",
               "revoked_by": "spiffe://idp.test/egress/revoker",
               "reason": "black-box: credential reported leaked"
             }
@@ -3591,6 +3596,439 @@
       ]
     },
     {
+      "id": "P1-RV-06",
+      "title": "the operator's command revokes an account",
+      "expectation": "gateway-control revoke exits 0 and says REVOKED; the next request for that account is refused on the gateway and not forwarded; gateway-control revocations reads the table with the reason and the revoker's identity; revoking again changes nothing; gateway-authz logged who revoked it and why",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "before: nothing is revoked and blue is allowed",
+          "ok": true
+        },
+        {
+          "check": "revoke: exit 0, REVOKED, the account is revoked, changed, the epoch is one higher",
+          "ok": true
+        },
+        {
+          "check": "...and standard error is one sentence that names the account",
+          "ok": true
+        },
+        {
+          "check": "the very next blue request on the Bearer route: 403 ACCOUNT_REVOKED",
+          "ok": true
+        },
+        {
+          "check": "the very next blue request on the Mode B route: 403 ACCOUNT_REVOKED",
+          "ok": true
+        },
+        {
+          "check": "...and the provider received none of them",
+          "ok": true
+        },
+        {
+          "check": "green is still allowed",
+          "ok": true
+        },
+        {
+          "check": "revocations: exit 0, LISTED, the epoch, and that one account with the revoker's identity and the reason given",
+          "ok": true
+        },
+        {
+          "check": "...and it is the table gateway-authz keeps: the interface reads the same",
+          "ok": true
+        },
+        {
+          "check": "revoking again: exit 0, REVOKED, changed is false, the epoch has not moved",
+          "ok": true
+        },
+        {
+          "check": "gateway-authz logged the revocation with who made it and why",
+          "ok": true
+        },
+        {
+          "check": "with the revocation lifted again, blue is allowed",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "revoke": {
+          "exit": 0,
+          "stdout": "{\"command\":\"revoke\",\"outcome\":\"REVOKED\",\"account\":\"account-blue\",\"http_status\":200,\"revoked\":true,\"changed\":true,\"revocation_epoch\":17}\n",
+          "stderr": "gateway-control: REVOKED: account-blue is revoked (revocation epoch 17)\n"
+        },
+        "revocations": {
+          "exit": 0,
+          "stdout": "{\"command\":\"revocations\",\"outcome\":\"LISTED\",\"http_status\":200,\"revocation_epoch\":17,\"revoked_accounts\":[{\"account_id\":\"account-blue\",\"revoked_at\":\"2026-11-19T07:17:18Z\",\"revoked_by\":\"spiffe://idp.test/egress/revoker\",\"reason\":\"black-box: revoked with gateway-control\"}]}\n",
+          "stderr": "gateway-control: LISTED: 1 revoked account(s), revocation epoch 17\n"
+        },
+        "revoke_again": {
+          "exit": 0,
+          "stdout": "{\"command\":\"revoke\",\"outcome\":\"REVOKED\",\"account\":\"account-blue\",\"http_status\":200,\"revoked\":true,\"changed\":false,\"revocation_epoch\":17}\n",
+          "stderr": "gateway-control: REVOKED: account-blue was revoked already; nothing changed (revocation epoch 17)\n"
+        }
+      },
+      "indicative_for": [
+        "GW-AT-026",
+        "GW-AT-047",
+        "GW-FR-026",
+        "GW-FR-047"
+      ]
+    },
+    {
+      "id": "P1-RV-07",
+      "title": "the operator's command lifts a revocation",
+      "expectation": "gateway-control restore exits 0 and says LIFTED; the account is served again and is gone from the table; lifting it again changes nothing",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "revoke through the command: REVOKED",
+          "ok": true
+        },
+        {
+          "check": "blue is refused",
+          "ok": true
+        },
+        {
+          "check": "restore: exit 0, LIFTED, the account is not revoked, changed, the epoch is one higher again",
+          "ok": true
+        },
+        {
+          "check": "the next blue request is served and reaches the provider",
+          "ok": true
+        },
+        {
+          "check": "revocations: LISTED, the account is not in the table, the epoch is the one restore gave",
+          "ok": true
+        },
+        {
+          "check": "restoring again: exit 0, LIFTED, changed is false, the epoch has not moved",
+          "ok": true
+        },
+        {
+          "check": "gateway-authz logged the restoration with the revoker's identity",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "restore": {
+          "exit": 0,
+          "stdout": "{\"command\":\"restore\",\"outcome\":\"LIFTED\",\"account\":\"account-blue\",\"http_status\":200,\"revoked\":false,\"changed\":true,\"revocation_epoch\":20}\n",
+          "stderr": "gateway-control: LIFTED: the revocation of account-blue is lifted (revocation epoch 20)\n"
+        },
+        "restore_again": {
+          "exit": 0,
+          "stdout": "{\"command\":\"restore\",\"outcome\":\"LIFTED\",\"account\":\"account-blue\",\"http_status\":200,\"revoked\":false,\"changed\":false,\"revocation_epoch\":20}\n",
+          "stderr": "gateway-control: LIFTED: account-blue was not revoked; nothing changed (revocation epoch 20)\n"
+        }
+      },
+      "indicative_for": [
+        "GW-AT-026",
+        "GW-AT-047",
+        "GW-FR-026",
+        "GW-FR-047"
+      ]
+    },
+    {
+      "id": "P1-RV-08",
+      "title": "the operator's command with a certificate that is not the revoker's, and with an account that does not exist",
+      "expectation": "a certificate of another workload: NOT_REVOKER, exit 3, and neither the table nor the epoch has moved; an account the policy does not name: UNKNOWN_ACCOUNT, exit 3, nothing changed; neither is mistaken for success",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "the revoker revokes account-blue through the command",
+          "ok": true
+        },
+        {
+          "check": "the publisher: revoke, restore and revocations are each NOT_REVOKER, exit 3, HTTP 401",
+          "ok": true
+        },
+        {
+          "check": "the publisher: told nothing of the table, and no state of any account in the answer",
+          "ok": true
+        },
+        {
+          "check": "the gateway: revoke, restore and revocations are each NOT_REVOKER, exit 3, HTTP 401",
+          "ok": true
+        },
+        {
+          "check": "the gateway: told nothing of the table, and no state of any account in the answer",
+          "ok": true
+        },
+        {
+          "check": "a business app: revoke, restore and revocations are each NOT_REVOKER, exit 3, HTTP 401",
+          "ok": true
+        },
+        {
+          "check": "a business app: told nothing of the table, and no state of any account in the answer",
+          "ok": true
+        },
+        {
+          "check": "the local broker: revoke, restore and revocations are each NOT_REVOKER, exit 3, HTTP 401",
+          "ok": true
+        },
+        {
+          "check": "the local broker: told nothing of the table, and no state of any account in the answer",
+          "ok": true
+        },
+        {
+          "check": "after all of that the table and the epoch are as they were",
+          "ok": true
+        },
+        {
+          "check": "...blue is still refused, green is not revoked and is served",
+          "ok": true
+        },
+        {
+          "check": "an account the policy does not name: UNKNOWN_ACCOUNT, exit 3, HTTP 422, and the sentence says the name is probably mistyped",
+          "ok": true
+        },
+        {
+          "check": "restoring it: UNKNOWN_ACCOUNT, exit 3",
+          "ok": true
+        },
+        {
+          "check": "nothing changed: the table and the epoch are as they were",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "the publisher": [
+          {
+            "exit": 3,
+            "outcome": "NOT_REVOKER"
+          },
+          {
+            "exit": 3,
+            "outcome": "NOT_REVOKER"
+          },
+          {
+            "exit": 3,
+            "outcome": "NOT_REVOKER"
+          }
+        ],
+        "the gateway": [
+          {
+            "exit": 3,
+            "outcome": "NOT_REVOKER"
+          },
+          {
+            "exit": 3,
+            "outcome": "NOT_REVOKER"
+          },
+          {
+            "exit": 3,
+            "outcome": "NOT_REVOKER"
+          }
+        ],
+        "a business app": [
+          {
+            "exit": 3,
+            "outcome": "NOT_REVOKER"
+          },
+          {
+            "exit": 3,
+            "outcome": "NOT_REVOKER"
+          },
+          {
+            "exit": 3,
+            "outcome": "NOT_REVOKER"
+          }
+        ],
+        "the local broker": [
+          {
+            "exit": 3,
+            "outcome": "NOT_REVOKER"
+          },
+          {
+            "exit": 3,
+            "outcome": "NOT_REVOKER"
+          },
+          {
+            "exit": 3,
+            "outcome": "NOT_REVOKER"
+          }
+        ],
+        "mistyped_revoke": {
+          "exit": 3,
+          "stdout": "{\"command\":\"revoke\",\"outcome\":\"UNKNOWN_ACCOUNT\",\"account\":\"account-bleu\",\"http_status\":422}\n",
+          "stderr": "gateway-control: UNKNOWN_ACCOUNT: gateway-authz knows no account \"account-bleu\" (422); the name is probably mistyped. Nothing changed\n"
+        }
+      },
+      "indicative_for": [
+        "GW-ST-018",
+        "GW-AT-021",
+        "GW-FR-021",
+        "GW-FR-047"
+      ]
+    },
+    {
+      "id": "P1-RV-09",
+      "title": "the operator's command when it gets no answer",
+      "expectation": "with gateway-authz stopped, revoke ends UNKNOWN with exit 5 and says that running it again is safe and that the account is not to be taken as revoked before the table has been read; a TLS session that cannot be built is the same; it does not retry; once gateway-authz is back the table does not have the account, which this time never arrived",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "revoke: UNKNOWN, exit 5, no HTTP status and no state in the output",
+          "ok": true
+        },
+        {
+          "check": "...and the sentence says it may or may not have taken effect, that running it again is safe, and not to take the account as revoked before the table has been read",
+          "ok": true
+        },
+        {
+          "check": "...and that nothing was retried automatically",
+          "ok": true
+        },
+        {
+          "check": "revocations while stopped: UNKNOWN, exit 5, the table was not read",
+          "ok": true
+        },
+        {
+          "check": "gateway-authz is back: the table does not have the account, and the epoch is as before (this one did not arrive)",
+          "ok": true
+        },
+        {
+          "check": "...and blue is allowed",
+          "ok": true
+        },
+        {
+          "check": "a revoker certificate from another CA: no TLS session, so UNKNOWN, exit 5; and nothing changed",
+          "ok": true
+        },
+        {
+          "check": "the name of another server: no TLS session, so UNKNOWN, exit 5; and nothing changed",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "revoke_while_stopped": {
+          "exit": 5,
+          "stdout": "{\"command\":\"revoke\",\"outcome\":\"UNKNOWN\",\"account\":\"account-blue\",\"detail\":\"no answer from 127.0.0.1:27613: dial tcp 127.0.0.1:27613: connect: connection refused\"}\n",
+          "stderr": "gateway-control: UNKNOWN: no answer from 127.0.0.1:27613: dial tcp 127.0.0.1:27613: connect: connection refused. The request may or may not have reached gateway-authz, so account-blue may or may not be revoked. Running the same command again is safe (the interface is idempotent); until `gateway-control revocations` has shown the account in the table, do not take it as revoked. Nothing was retried automatically\n"
+        },
+        "a revoker certificate from another CA": {
+          "exit": 5,
+          "stderr": "gateway-control: UNKNOWN: no answer from 127.0.0.1:27613: remote error: tls: certificate required. The request may or may not have reached gateway-authz, so account-blue may or may not be revoked. Running the same command again is safe (the interface is idempotent); until `gateway-control revocations` has shown the account in the table, do not take it as revoked. Nothing was retried automatically\n"
+        },
+        "the name of another server": {
+          "exit": 5,
+          "stderr": "gateway-control: UNKNOWN: no answer from 127.0.0.1:27613: tls: failed to verify certificate: x509: certificate is valid for gatekeeper.idp.test, not someone-else.idp.test. The request may or may not have reached gateway-authz, so account-blue may or may not be revoked. Running the same command again is safe (the interface is idempotent); until `gateway-control revocations` has shown the account in the table, do not take it as revoked. Nothing was retried automatically\n"
+        }
+      },
+      "indicative_for": [
+        "GW-ST-018",
+        "GW-AT-047",
+        "GW-FR-047"
+      ]
+    },
+    {
+      "id": "P1-RV-10",
+      "title": "the operator's command when gateway-authz cannot write its revocations file",
+      "expectation": "the revocation is in effect but not written: REVOKED_NOT_WRITTEN, a non-zero exit of its own, the account is refused now; the sentence says what to do; running the same command again once the file can be written writes it and is a success; a restoration that cannot be written is LIFT_NOT_WRITTEN and the account stays revoked",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "revoke: REVOKED_NOT_WRITTEN, exit 7, HTTP 500, and the state that is in effect: revoked, changed, the epoch one higher",
+          "ok": true
+        },
+        {
+          "check": "...and the sentence says the account is refused now, will not be after a restart, and what to do",
+          "ok": true
+        },
+        {
+          "check": "the account is refused now: 403 ACCOUNT_REVOKED",
+          "ok": true
+        },
+        {
+          "check": "...but the file does not have it",
+          "ok": true
+        },
+        {
+          "check": "with the file writable again, the same command: REVOKED, exit 0, the epoch of the first call",
+          "ok": true
+        },
+        {
+          "check": "...and now the file has the account, who revoked it and why",
+          "ok": true
+        },
+        {
+          "check": "restore that cannot be written: LIFT_NOT_WRITTEN, exit 3, HTTP 500, the account is still revoked",
+          "ok": true
+        },
+        {
+          "check": "...and blue is still refused",
+          "ok": true
+        },
+        {
+          "check": "with the file writable again, the same command: LIFTED, exit 0",
+          "ok": true
+        },
+        {
+          "check": "blue is allowed again",
+          "ok": true
+        }
+      ],
+      "observed": {
+        "revoke_not_written": {
+          "exit": 7,
+          "stdout": "{\"command\":\"revoke\",\"outcome\":\"REVOKED_NOT_WRITTEN\",\"account\":\"account-blue\",\"http_status\":500,\"revoked\":true,\"changed\":true,\"revocation_epoch\":23}\n",
+          "stderr": "gateway-control: REVOKED_NOT_WRITTEN: account-blue is refused now, but gateway-authz could not write the revocation to its revocations file, so it will not be refused after gateway-authz restarts. Find out why that file cannot be written (disk, permissions, the directory), fix it, then run the same command again to have it written\n"
+        },
+        "revoke_again_after_the_fix": {
+          "exit": 0,
+          "stdout": "{\"command\":\"revoke\",\"outcome\":\"REVOKED\",\"account\":\"account-blue\",\"http_status\":200,\"revoked\":true,\"changed\":false,\"revocation_epoch\":23}\n"
+        },
+        "restore_not_written": {
+          "exit": 3,
+          "stdout": "{\"command\":\"restore\",\"outcome\":\"LIFT_NOT_WRITTEN\",\"account\":\"account-blue\",\"http_status\":500,\"revoked\":true,\"changed\":false,\"revocation_epoch\":23}\n",
+          "stderr": "gateway-control: LIFT_NOT_WRITTEN: gateway-authz could not write the change to its revocations file, so the revocation of account-blue was NOT lifted: the account is still revoked. Find out why that file cannot be written, fix it, then run the same command again\n"
+        }
+      },
+      "indicative_for": [
+        "GW-AT-026",
+        "GW-AT-047",
+        "GW-FR-026",
+        "GW-FR-047"
+      ]
+    },
+    {
+      "id": "P1-RV-11",
+      "title": "what the operator's command prints, and what gateway-authz logs of it",
+      "expectation": "no private key and no certificate text in anything gateway-control printed in P1-RV-06 to 10, in the log of gateway-authz or in the log of the gateway; the output is one line of JSON and one sentence",
+      "result": "PASS",
+      "checks": [
+        {
+          "check": "gateway-control was run in the earlier cases and printed something",
+          "ok": true
+        },
+        {
+          "check": "the certificates and keys made for the run were found",
+          "ok": true
+        },
+        {
+          "check": "what gateway-control printed: no PEM header and no line of any key or certificate of the run",
+          "ok": true
+        },
+        {
+          "check": "gateway-authz.log: no PEM header and no line of any key or certificate of the run",
+          "ok": true
+        },
+        {
+          "check": "agentgateway.log: no PEM header and no line of any key or certificate of the run",
+          "ok": true
+        },
+        {
+          "check": "every run of the command printed one line of JSON at most, and one sentence on standard error",
+          "ok": true
+        }
+      ],
+      "observed": {},
+      "indicative_for": [
+        "GW-ST-018",
+        "GW-FR-021"
+      ]
+    },
+    {
       "id": "P1-RB-01",
       "title": "the published file is replaced by one with one more route",
       "expectation": "the new route is served without a restart; the gateway reports the reload as applied, and what it reports running changes with the file and returns when the file does",
@@ -3634,7 +4072,7 @@
         }
       ],
       "observed": {
-        "seconds_until_the_new_route_was_served": 0.31,
+        "seconds_until_the_new_route_was_served": 0.3,
         "seconds_until_the_route_was_gone_again": 0.33
       },
       "indicative_for": [
@@ -3686,7 +4124,7 @@
         }
       ],
       "observed": {
-        "seconds_until_the_failure_was_reported": 0.4,
+        "seconds_until_the_failure_was_reported": 0.3,
         "configReload": {
           "synchronized": false,
           "lastError": "routes[8]: unknown field `notAFieldOfARoute` at line 529 column 3"
@@ -3889,7 +4327,7 @@
         }
       ],
       "observed": {
-        "log_lines": 264,
+        "log_lines": 277,
         "routes_exercised": 4
       },
       "indicative_for": [
@@ -4028,10 +4466,10 @@
         "gateway_line_fields": {
           "route": "default/mockcarrier-labels-create",
           "http.status": "201",
-          "authz_decision_id": "dec-4d3d41e5bc7c",
+          "authz_decision_id": "dec-944b0321750f",
           "tenant_ref": "tenant-blue",
-          "provider_reference_id": "CO-3d8a3dee28",
-          "provider_request_id": "PC-3b467118e070"
+          "provider_reference_id": "CO-ec5885096c",
+          "provider_request_id": "PC-832b568a702b"
         },
         "gateway_authz_lines_with_the_decision": 1
       },
@@ -4398,36 +4836,36 @@
         "a tenant with no grant: the gateway line": {
           "http.status": "403",
           "reason": "DirectResponse",
-          "authz_decision_id": "dec-f930e4d6bcaa",
+          "authz_decision_id": "dec-90b2a70fb10c",
           "tenant_ref": "tenant-red",
           "provider_reference_id": null
         },
         "a tenant with no grant: the 403 body": {
-          "decision_id": "dec-f930e4d6bcaa",
+          "decision_id": "dec-90b2a70fb10c",
           "result": "DENY",
           "reason_code": "TENANT_NOT_GRANTED",
           "policy_version": "poc-p1",
-          "revocation_epoch": 16
+          "revocation_epoch": 24
         },
         "a tenant with no grant: the X-Idp-Decision-Id header of the 403": [
-          "dec-f930e4d6bcaa"
+          "dec-90b2a70fb10c"
         ],
         "a revoked account: the gateway line": {
           "http.status": "403",
           "reason": "DirectResponse",
-          "authz_decision_id": "dec-3a0b2c1d211f",
+          "authz_decision_id": "dec-81a74a2c33f6",
           "tenant_ref": "tenant-blue",
           "provider_reference_id": null
         },
         "a revoked account: the 403 body": {
-          "decision_id": "dec-3a0b2c1d211f",
+          "decision_id": "dec-81a74a2c33f6",
           "result": "DENY",
           "reason_code": "ACCOUNT_REVOKED",
           "policy_version": "poc-p1",
-          "revocation_epoch": 17
+          "revocation_epoch": 25
         },
         "a revoked account: the X-Idp-Decision-Id header of the 403": [
-          "dec-3a0b2c1d211f"
+          "dec-81a74a2c33f6"
         ],
         "the PDP cannot be asked: the gateway line": {
           "http.status": "503",
@@ -4576,7 +5014,7 @@
         },
         "header_forged_after_allow_gateway_line_fields": {
           "route": "default/mockcarrier-tracking-get",
-          "authz_decision_id": "dec-6d6a8c34391e",
+          "authz_decision_id": "dec-609a5f0db18b",
           "tenant_ref": "tenant-blue"
         }
       },
@@ -4656,18 +5094,18 @@
           "http.status": "403",
           "reason": "DirectResponse",
           "route": "default/mockcarrier-manifests-get-broker",
-          "authz_decision_id": "dec-fbe97c8e02f3",
+          "authz_decision_id": "dec-e41c940fc0c8",
           "tenant_ref": "tenant-blue"
         },
         "a tenant asking for another tenant's account: the 403 body": {
-          "decision_id": "dec-fbe97c8e02f3",
+          "decision_id": "dec-e41c940fc0c8",
           "result": "DENY",
           "reason_code": "ACCOUNT_NOT_GRANTED",
           "policy_version": "poc-p1",
-          "revocation_epoch": 18
+          "revocation_epoch": 26
         },
         "a tenant asking for another tenant's account: the X-Idp-Decision-Id header of the 403": [
-          "dec-fbe97c8e02f3"
+          "dec-e41c940fc0c8"
         ],
         "a tenant asking for another tenant's account: the gateway-authz line": {
           "endpoint": "/v1/egress/authorizations/decision",
@@ -4677,18 +5115,18 @@
           "http.status": "403",
           "reason": "DirectResponse",
           "route": "default/mockcarrier-manifests-get-broker",
-          "authz_decision_id": "dec-7fe3b532d269",
+          "authz_decision_id": "dec-942a4b626c60",
           "tenant_ref": "tenant-blue"
         },
         "a revoked account: the 403 body": {
-          "decision_id": "dec-7fe3b532d269",
+          "decision_id": "dec-942a4b626c60",
           "result": "DENY",
           "reason_code": "ACCOUNT_REVOKED",
           "policy_version": "poc-p1",
-          "revocation_epoch": 19
+          "revocation_epoch": 27
         },
         "a revoked account: the X-Idp-Decision-Id header of the 403": [
-          "dec-7fe3b532d269"
+          "dec-942a4b626c60"
         ],
         "a revoked account: the gateway-authz line": {
           "endpoint": "/v1/egress/authorizations/decision",
@@ -4865,7 +5303,7 @@
           200,
           200
         ],
-        "seconds_slowest": 0.478
+        "seconds_slowest": 0.404
       },
       "indicative_for": [
         "GW-FR-018",
@@ -5075,7 +5513,7 @@
         "the endpoint answers 500": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.003,
+          "seconds": 0.002,
           "endpoint_asked": 1
         },
         "the endpoint answers 401": {
@@ -5093,49 +5531,49 @@
         "token_type is not Bearer": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.043,
+          "seconds": 0.045,
           "endpoint_asked": 1
         },
         "there is no token_type": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.003,
+          "seconds": 0.047,
           "endpoint_asked": 1
         },
         "there is no expires_in": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.003,
+          "seconds": 0.049,
           "endpoint_asked": 1
         },
         "expires_in is 0": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.003,
+          "seconds": 0.05,
           "endpoint_asked": 1
         },
         "expires_in is a string": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.045,
+          "seconds": 0.043,
           "endpoint_asked": 1
         },
         "the access token is empty": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.003,
+          "seconds": 0.045,
           "endpoint_asked": 1
         },
         "the answer is not JSON": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.003,
+          "seconds": 0.043,
           "endpoint_asked": 1
         },
         "the answer is a JSON array": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.003,
+          "seconds": 0.046,
           "endpoint_asked": 1
         },
         "the endpoint closes the connection without answering": {
@@ -5153,7 +5591,7 @@
         "nobody listens at the token endpoint": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.003
+          "seconds": 0.002
         },
         "cached token due for renewal, endpoint broken": {
           "statuses": [
@@ -5161,7 +5599,7 @@
             503
           ],
           "endpoint_asked": 3,
-          "seconds_into_its_life_when_asked": 5.78
+          "seconds_into_its_life_when_asked": 5.76
         }
       },
       "indicative_for": [
@@ -5327,8 +5765,8 @@
       ],
       "observed": {
         "log_lines": {
-          "agentgateway": 354,
-          "gateway-authz": 375
+          "agentgateway": 367,
+          "gateway-authz": 422
         },
         "answers_looked_at": {
           "count": 64,
