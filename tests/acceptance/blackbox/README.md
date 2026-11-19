@@ -303,6 +303,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
 28. 2026-11-19，`gateway-control` 多了三条操作员撤销用的命令（`revoke`、`restore`、`revocations`，[ADR-0012](../../../docs/adr/ADR-0012.md) V1.2）。套件现场构建 `gateway-control`，用本次运行签发的撤销者证书对着真的 `gateway-authz` 跑真的命令。新增 `P1-RV-06` 至 `11`，57 项检查，第一次从干净工作区运行就通过。`gateway-authz` 的行为、网关配置、登记表和 Mock 都没有改。原有用例的期望没有改。重跑后是 96/97；除新增的六个用例外，694 项检查的结果与上一份证据逐项相同。原有用例记下的值里不同的只有每次运行都不同的那些，和三处日志行数（`P1-CR-04` 从 264 到 277，`P1-OA-08` 里网关从 354 到 367、`gateway-authz` 从 375 到 422：新用例排在它们前面，多写了这些行）。证据里多了 `gateway_control` 一块。
 29. 2026-11-19，`gateway-control` 有了发布历史的 Go 代码（[ADR-0013](../../../docs/adr/ADR-0013.md)，第一阶段）：`publish`、`restart`、`reconcile` 在给了 `--history-dir` 时记历史，另有 `releases`、`release`、`rollback` 三条命令。这个套件不给那个参数，用例一个没有改，也没有新增；重跑是因为证据记着 Go 源码的哈希。仍是 96/97；751 项检查的结果与上一份证据逐项相同。记下的值里不同的只有每次运行都不同的那些。`gateway-authz` 的源码没有变（证据里它的源码哈希覆盖 `cmd/` 和 `internal/` 下全部非测试的 Go 文件，所以跟着变了）。
 30. 2026-11-19，发布历史的第二阶段（[ADR-0013](../../../docs/adr/ADR-0013.md) V1.1）改了 `gateway-control` 一处：`reconcile` 和看守在历史打不开时照常工作。这个套件不用发布历史，用例一个没有改，也没有新增；重跑是因为证据记着 Go 源码的哈希。仍是 96/97；751 项检查的结果与上一份证据逐项相同。
+31. 2026-11-19，`gateway-authz` 到 Gatekeeper 的 PDP 那一跳可以出示客户端证书（开发计划 2.3）。这个套件不问 Gatekeeper，用例一个没有改，也没有新增；重跑是因为证据记着 Go 源码的哈希。仍是 96/97；751 项检查的结果与上一份证据逐项相同。
 
 没有任何期望被放宽过。
 
