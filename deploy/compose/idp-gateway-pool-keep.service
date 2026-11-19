@@ -23,6 +23,10 @@
 # 它在 .env 里 KEEPER_METRICS_LISTEN 的那个地址上给出指标，由 Prometheus 来读，规则在同目录的
 # idp-gateway-pool.rules.yml 里。.env 里没有这一项时它不启动（退出码 2）：不然告警就悄悄没有了。
 #
+# 最后两个参数是发布历史（docs/adr/ADR-0013.md）：看守每分钟的对账给停在半路的发布补上结局。历史目录
+# ${POOL_DIR}/history 要先建好（README.md 的"头一次安装"）；它不在、读不成时看守照常工作，只是不补历史，
+# 并在它的输出里说出来。--pool 是 compose.yml 的项目名（name:）。
+#
 # 这个单元没有在真机上跑过，见 README.md 的"没有验证的"。
 
 [Unit]
@@ -43,7 +47,8 @@ ExecStart=/usr/bin/env ${GATEWAY_CONTROL} keep \
     --config-dir ${POOL_DIR}/config \
     --read-back 127.0.0.1:${READBACK_PORT} --read-back-name ${READBACK_NAME} \
     --tls-cert ${PUBLISHER_CERT} --tls-key ${PUBLISHER_KEY} --tls-ca ${READBACK_CA} \
-    --metrics-listen ${KEEPER_METRICS_LISTEN}
+    --metrics-listen ${KEEPER_METRICS_LISTEN} \
+    --history-dir ${POOL_DIR}/history --pool idp-gateway-pool
 Restart=always
 RestartSec=5
 # 命令行或者 .env 写得不对（退出码 2）时再起一次也一样：不重新起，单元的状态是 failed。

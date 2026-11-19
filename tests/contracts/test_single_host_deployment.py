@@ -402,11 +402,33 @@ class KeeperUnit(unittest.TestCase):
             '/usr/bin/env', '${GATEWAY_CONTROL}', 'keep', '--config-dir', '${POOL_DIR}/config',
             '--read-back', '127.0.0.1:${READBACK_PORT}', '--read-back-name', '${READBACK_NAME}',
             '--tls-cert', '${PUBLISHER_CERT}', '--tls-key', '${PUBLISHER_KEY}', '--tls-ca', '${READBACK_CA}',
-            '--metrics-listen', '${KEEPER_METRICS_LISTEN}'])
+            '--metrics-listen', '${KEEPER_METRICS_LISTEN}',
+            '--history-dir', '${POOL_DIR}/history', '--pool', 'idp-gateway-pool'])
         self.assertRegex(CONTROL, r'commandKeep\s*=\s*"keep"')
         for flag in flags(self.COMMAND):
             with self.subTest(flag=flag):
                 self.assertIn(f'"{flag}"', CONTROL)
+
+    def test_the_keeper_records_the_release_history_in_the_third_directory_of_the_pool(self):
+        """ADR-0013 (V1.1): the keeper completes releases that stopped half way, in POOL_DIR/history, for the pool the compose file names.
+        Nothing at boot touches the history: no container mounts it, place and confirm are not given it."""
+        command = self.COMMAND
+        self.assertEqual(command[command.index('--history-dir') + 1], '${POOL_DIR}/history')
+        self.assertEqual(command[command.index('--pool') + 1], yaml.safe_load(COMPOSE_TEXT)['name'])
+        self.assertIn('flags.StringVar(&o.historyDir, "history-dir", "",', CONTROL)
+        self.assertIn('flags.StringVar(&o.poolName, "pool", "",', CONTROL)
+        for name, service in SERVICES.items():
+            with self.subTest(service=name):
+                self.assertFalse([v for v in service.get('volumes', []) if 'history' in str(v)], 'the history is not mounted into any container')
+                self.assertNotIn('history', json.dumps({k: v for k, v in service.items() if k != 'volumes'}))
+        self.assertNotIn('history', COMPOSE_TEXT.replace('POOL_DIR', ''))
+        for name in STEPS:
+            self.assertNotIn('--history-dir', SERVICES[name]['command'])
+
+    def test_the_suite_keeps_its_history_where_the_deployment_does(self):
+        runner = text('tests/integration/compose/run.py')
+        self.assertIn("HISTORY = POOL / 'history'", runner)
+        self.assertIn("    HISTORY.mkdir(mode=0o700)   # 看守的单元", runner)   # SH-19 builds it before it runs the keeper unit
 
     def test_every_variable_of_the_command_is_one_the_operator_must_fill_in(self):
         used = re.findall(r'\$\{([^}]*)\}', ' '.join(self.COMMAND))

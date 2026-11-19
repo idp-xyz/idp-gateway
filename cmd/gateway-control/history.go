@@ -83,6 +83,33 @@ func openHistoryFor(o options) (ports.History, error) {
 	return openHistory(o.historyDir, o.poolName)
 }
 
+// unavailableHistory 是打不开的历史：每一次碰它都得到同一个错误。reconcile 和 keep 在 --history-dir
+// 打不开时用它，而不是退出：对账的结局、退出码，看守的看容器和起容器都不能因为历史读不成而变
+// （ADR-0013 第 5 条，V1.1）。补结局的那一步碰到它，只是在警告里说一句。
+type unavailableHistory struct{ err error }
+
+func (u unavailableHistory) Begin(context.Context, domain.ReleaseStart) (uint64, error) {
+	return 0, u.err
+}
+func (u unavailableHistory) Advance(context.Context, uint64, domain.ReleaseStep) error { return u.err }
+func (u unavailableHistory) Snapshot(context.Context, string) (domain.Snapshot, error) {
+	return domain.Snapshot{}, u.err
+}
+func (u unavailableHistory) List(context.Context) ([]domain.Release, error) { return nil, u.err }
+func (u unavailableHistory) Get(context.Context, uint64) (domain.Release, error) {
+	return domain.Release{}, u.err
+}
+
+// openHistoryForTending 打开 reconcile 和 keep 用的历史。打不开（目录不在、不是目录）不是这两条命令的
+// 错：返回一个每次都失败的历史，和一句要说的话（没有给历史时两样都是空）。
+func openHistoryForTending(o options) (ports.History, string) {
+	history, err := openHistoryFor(o)
+	if err != nil {
+		return unavailableHistory{err: err}, "the release history could not be opened, so nothing in it will be completed: " + err.Error()
+	}
+	return history, ""
+}
+
 func historyDirUsage(command string) string {
 	usage := "发布历史的目录（ADR-0013）：必须已经存在，不自动创建；里面的 snapshots/ 和 releases.log 第一次写时建（0700、0600）。"
 	if command == commandRollback {

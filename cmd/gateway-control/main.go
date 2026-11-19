@@ -501,14 +501,16 @@ func reconcile(ctx context.Context, o options) (application.Result, error) {
 	if err != nil {
 		return none, err
 	}
-	history, err := openHistoryFor(o)
-	if err != nil {
-		return none, err
-	}
-	if history != nil {
+	// 历史打不开不改变对账：照常对，在警告里说一句。
+	history, note := openHistoryForTending(o)
+	if history != nil && note == "" {
 		reconciler.WithHistory(history)
 	}
-	return reconciler.Reconcile(ctx)
+	result, err := reconciler.Reconcile(ctx)
+	if note != "" && err == nil {
+		result.Warnings = append([]string{note}, result.Warnings...)
+	}
+	return result, err
 }
 
 // place 在网关启动之前把记录的那一份放到位。它只碰配置目录。返回错误时什么都没做。
@@ -552,12 +554,14 @@ func keep(ctx context.Context, o options, stdout, stderr io.Writer, docker docke
 	if err != nil {
 		return fail(err)
 	}
-	history, err := openHistoryFor(o)
-	if err != nil {
-		return fail(err)
-	}
+	// 历史打不开不让看守停：照常看、照常对账、照常起容器，只是不补历史。开头说一次，之后补不成的话
+	// 每一次对账的那一行里有 history_notes。
+	history, note := openHistoryForTending(o)
 	if history != nil {
 		keeper.WithHistory(history)
+	}
+	if note != "" {
+		fmt.Fprintln(stderr, "gateway-control: history:", note)
 	}
 	// 先试一下占不占得了这个池：账号不对、目录写不了，现在就说，不等到池出了事要动手的时候。
 	// 正好有一次发布占着它不算。

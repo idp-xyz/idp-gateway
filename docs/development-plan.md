@@ -211,6 +211,7 @@ flowchart TD
 
 1. **真机验证。** 真的重启一台机器；把两个 systemd 单元装上去跑。要一台能装系统级单元的机器。
 2. **发布历史和发布状态。** 现在只记最后一条确认过的快照。要做的是保存快照、记录发布过什么，以及 [G03](G03_Routing_and_Configuration.md) 第 3 节的状态机和审批。持久化要先定：[ADR-0009](adr/ADR-0009.md) 第 4 条规定控制面的持久化用 Bento-Go，第一次引入时同时带上 `tests/bentocontract` 和显式的迁移命令，版本到时再确认。`GW-GAP-06`。提案见 [ADR-0013](adr/ADR-0013.md)（2026-11-19）；仓库所有者当天定了它列出的六项，都照推荐的做（先落在池旁边的文件里，Bento-Go 以后），那是开工的许可。
+   - **到哪了（2026-11-19）**：两个阶段都做了，记在 [ADR-0013](adr/ADR-0013.md) 的 V1.1 一节。第一阶段（`7c3612a`）是 Go：历史的端口和文件适配器（`snapshots/<SHA-256>.yaml`、只追加的 `releases.log`），`publish`、`restart` 先写后做，三条新命令 `releases`、`release`、`rollback`，`--history-dir`、`--pool`、`--note`，收尾写不进去时的 `ACTIVE_NOT_RECORDED`（退出码 8）。第二阶段是部署和验证：看守的单元带 `--history-dir ${POOL_DIR}/history --pool idp-gateway-pool`，历史目录是池的目录下的第三个子目录，`compose.yml` 没有改，开机的路上（`place`、`confirm`）不碰历史，只有看守和操作员的命令碰它；Go 只改了一处：历史打不开时 `reconcile` 和看守不再退出。compose 套件多了 `SH-23` 到 `SH-30`，在真的池上看了带历史发布、先写后做、发布器被杀之后看守补结局（`FAILED`、`OVERTAKEN`）、收尾那一行没写上、回滚、漏给参数、开机不靠历史。没有做的：Bento-Go 仍没有引入（条件见 ADR-0013 第 9 条）；批准、Fabric、撤回的状态、多个池的汇总；备份、防篡改、保留策略；`ACTIVE_NOT_RECORDED` 本身没有在真的池上造出来；历史目录的属主由谁定仍没有定。第 3 项（RouteIntent 编译器）的提案还没有起草。
 3. **RouteIntent 编译器。** 把中立的意图编译成 agentgateway 配置，用锁定的二进制校验；`scripts/preflight_intents.py` 的预检移植成 Go；`gateway-authz` 的登记表改由控制面下发。`GW-GAP-06`；`GW-FR-039`、`GW-FR-048`。
 4. **换镜像、JWKS、发布器的证书。** 换镜像（升级）这个操作；JWKS 的同步；发布器证书的签发和轮换。`GW-GAP-13`、`GW-FR-045`。
 5. **别的平台和规模。** Kubernetes 上的下发；一台机器上放不止一个池；日志和资源上限。

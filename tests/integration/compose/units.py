@@ -51,11 +51,12 @@ SETTINGS = {
     'PUBLISHER_CERT': str(WORK / 'publisher.crt'), 'PUBLISHER_KEY': str(WORK / 'publisher.key'), 'READBACK_CA': str(WORK / 'ca.crt'),
     'KEEPER_METRICS_LISTEN': '127.0.0.1:27621',
 }
-# 看守该拿到的参数：deploy/compose/README.md 里要读回读口的命令都带的那一组，加上它在哪个地址上给出指标。
+# 看守该拿到的参数：deploy/compose/README.md 里要读回读口的命令都带的那一组，加上它在哪个地址上给出指标，和发布历史的目录与池的名字。
 EXPECTED = ['keep', '--config-dir', SETTINGS['POOL_DIR'] + '/config',
             '--read-back', '127.0.0.1:' + SETTINGS['READBACK_PORT'], '--read-back-name', SETTINGS['READBACK_NAME'],
             '--tls-cert', SETTINGS['PUBLISHER_CERT'], '--tls-key', SETTINGS['PUBLISHER_KEY'], '--tls-ca', SETTINGS['READBACK_CA'],
-            '--metrics-listen', SETTINGS['KEEPER_METRICS_LISTEN']]
+            '--metrics-listen', SETTINGS['KEEPER_METRICS_LISTEN'],
+            '--history-dir', SETTINGS['POOL_DIR'] + '/history', '--pool', 'idp-gateway-pool']
 
 # 两个替身是同一个脚本。docker：记下怎么被叫的，过 1 秒退出；WORK 里有 fail-up 这个文件时，compose up 以 1 退出。
 # keeper：记下拿到的参数；WORK 里有 exit-2 时以 2 退出；否则一直跑，手上总有一个要 3 秒才做完的子进程

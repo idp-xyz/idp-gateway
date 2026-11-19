@@ -11,7 +11,7 @@
 |---|---|
 | `cmd/gateway-authz` | 请求路径上的服务：agentgateway 的 HTTP ExtAuthZ 端点，判定后按请求发放 Provider 凭证（三种来源：固定 Bearer 令牌文件、开发者令牌加每个请求一个随机数、向令牌端点取的 OAuth2 客户端凭证令牌）；另有一个改撤销表的接口，只认一个工作负载身份 |
 | `internal/egressauthz` | 上面这个服务的判定规则、协议适配与端口 |
-| `cmd/gateway-control` | 控制面的命令行，不在请求路径上。现在有八条命令。前五条管的是单机上的一个池（ADR-0010 第 10 条）：`publish` 把一份网关配置发布上去，没生效就把上一份放回去；`restart` 发布要重启网关才生效的配置；`reconcile` 对账，池和记录对不上时把最后一次得到确认的那一份放回去；`place` 在网关启动之前把那一份放到位，由部署文件在启动时跑；`keep` 是常驻的看守，池里的容器死了它跑启动命令把它们起回来，平时定时对账，并在一个地址上给出指标供告警。后三条是操作员撤销 Provider 账户用的（ADR-0012 V1.2），各对着一个 `gateway-authz` 的撤销接口发一次请求，用撤销者自己的证书走双向 TLS：`revoke` 撤销一个账户（原因必填），`restore` 取消撤销，`revocations` 读整张表；结局和退出码见 `gateway-control revoke --help`，问不到时结局是“不知道”，不自动重试。RouteIntent 的编译、发布的状态和审批都还没有 |
+| `cmd/gateway-control` | 控制面的命令行，不在请求路径上。现在有十一条命令。前五条管的是单机上的一个池（ADR-0010 第 10 条）：`publish` 把一份网关配置发布上去，没生效就把上一份放回去；`restart` 发布要重启网关才生效的配置；`reconcile` 对账，池和记录对不上时把最后一次得到确认的那一份放回去；`place` 在网关启动之前把那一份放到位，由部署文件在启动时跑；`keep` 是常驻的看守，池里的容器死了它跑启动命令把它们起回来，平时定时对账，并在一个地址上给出指标供告警。后三条是操作员撤销 Provider 账户用的（ADR-0012 V1.2），各对着一个 `gateway-authz` 的撤销接口发一次请求，用撤销者自己的证书走双向 TLS：`revoke` 撤销一个账户（原因必填），`restore` 取消撤销，`revocations` 读整张表；结局和退出码见 `gateway-control revoke --help`，问不到时结局是“不知道”，不自动重试。最后三条是池的发布历史（ADR-0013）：`releases` 列出历史并与池的记录比，`release --id` 看一条和它的每一步，`rollback --to` 回到历史里一份到过生效的快照（是一次新的发布）；`publish`、`restart`、`reconcile`、`keep` 给了 `--history-dir` 就记，看守用它给停在半路的发布补上结局，不给就没有历史。RouteIntent 的编译、发布的状态和审批都还没有 |
 | `internal/gatewayconfig` | 上面这个命令的规则、端口与适配：快照、运行配置的摘要、单机上的下发和记录、回读、发布前的离线加载、重启网关容器、看一个池的容器在不在跑并跑它的启动命令 |
 | `internal/platform` | 与上下文无关的技术件 |
 | `internal/architecture` | 包依赖方向的测试 |

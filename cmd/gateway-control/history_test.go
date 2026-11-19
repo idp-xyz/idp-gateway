@@ -849,13 +849,83 @@ func TestKeepWithAHistoryDirCompletesTheStuckReleaseOnItsFirstReconcile(t *testi
 	}
 }
 
-func TestKeepRefusesAMissingHistoryDirectoryWithExitOne(t *testing.T) {
+// ADR-0013 V1.1：历史有毛病时看守不停。目录不在、日志坏了，它照常看、照常对账，只是不补历史，并且说出来。
+func TestKeepGoesOnWhenTheHistoryDirectoryIsMissing(t *testing.T) {
 	h := newHistoryHarness(t)
+	if r := h.publishH(two); r.code != exitActive {
+		t.Fatalf("%d %s", r.code, r.stderr)
+	}
 	h.compose()
-	var stdout, stderr bytes.Buffer
-	args := append(h.keepArgs(), "--history-dir", filepath.Join(t.TempDir(), "nope"), "--pool", "main")
-	if code := run(context.Background(), args, &stdout, &stderr, h.docker.run); code != exitError || !strings.Contains(stderr.String(), "history") || stdout.Len() != 0 {
-		t.Fatalf("%d %q", code, stderr.String())
+	missing := filepath.Join(t.TempDir(), "nope")
+	k := h.keep("--history-dir", missing, "--pool", "main")
+	first := k.next("开头的那一行", func(tended) bool { return true })
+	if first.Reconcile == nil || first.Reconcile.Outcome != "IN_SYNC" || len(first.HistoryNotes) == 0 {
+		t.Fatalf("对账的结局不该变：%+v / %+v", first, first.Reconcile)
+	}
+	if code := k.stop(); code != exitActive {
+		t.Fatalf("退出码 %d", code)
+	}
+}
+
+func TestKeepWithADamagedLogStillReconcilesAndSaysSo(t *testing.T) {
+	h := newHistoryHarness(t)
+	if r := h.publishH(two); r.code != exitActive {
+		t.Fatalf("%d %s", r.code, r.stderr)
+	}
+	if err := os.WriteFile(filepath.Join(h.dir, history.LogName), []byte("garbage\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.compose()
+	k := h.keep("--history-dir", h.dir, "--pool", "main")
+	first := k.next("开头的那一行", func(tended) bool { return true })
+	if first.Reconcile == nil || first.Reconcile.Outcome != "IN_SYNC" || len(first.HistoryNotes) == 0 {
+		t.Fatalf("%+v / %+v", first, first.Reconcile)
+	}
+	if code := k.stop(); code != exitActive {
+		t.Fatalf("退出码 %d", code)
+	}
+}
+
+func TestReconcileWithAMissingHistoryDirectoryKeepsItsOutcomeAndExitCode(t *testing.T) {
+	h := newHistoryHarness(t)
+	if r := h.publishH(two); r.code != exitActive {
+		t.Fatalf("%d %s", r.code, r.stderr)
+	}
+	h.place(one) // 池被人改了
+	args := h.reconcileArgs()
+	args = append(args, "--history-dir", filepath.Join(t.TempDir(), "nope"), "--pool", "main")
+	r := h.run(args)
+	if r.code != exitRestored || r.report.Outcome != "RESTORED" || !strings.Contains(r.stderr, "history") {
+		t.Fatalf("退出码 %d，%s%s", r.code, r.stdout, r.stderr)
+	}
+}
+
+func TestReconcileAndKeepWithAnUnreadableLogKeepTheirOutcome(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads files whatever their mode")
+	}
+	h := newHistoryHarness(t)
+	if r := h.publishH(two); r.code != exitActive {
+		t.Fatalf("%d %s", r.code, r.stderr)
+	}
+	logFile := filepath.Join(h.dir, history.LogName)
+	if err := os.Chmod(logFile, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(logFile, 0o600) })
+	h.place(one) // 池被人改了
+	r := h.run(h.with(h.reconcileArgs()))
+	if r.code != exitRestored || r.report.Outcome != "RESTORED" || !strings.Contains(r.stderr, "history") {
+		t.Fatalf("退出码 %d，%s%s", r.code, r.stdout, r.stderr)
+	}
+	h.compose()
+	k := h.keep("--history-dir", h.dir, "--pool", "main")
+	first := k.next("开头的那一行", func(tended) bool { return true })
+	if first.Reconcile == nil || first.Reconcile.Outcome != "IN_SYNC" || len(first.HistoryNotes) == 0 {
+		t.Fatalf("%+v / %+v", first, first.Reconcile)
+	}
+	if code := k.stop(); code != exitActive {
+		t.Fatalf("退出码 %d", code)
 	}
 }
 

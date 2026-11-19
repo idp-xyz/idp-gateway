@@ -42,6 +42,10 @@ SH-20 和 SH-21 看告警：看守在一个地址上给出指标（--metrics-lis
 是不是跟着变；SH-21 起一个真的 Prometheus（按摘要引用的镜像，主机网络，只听回环）来读同一个看守，装着部署目录里的
 那份规则，看各条规则对着真的看守响不响，并在同一个镜像里跑 promtool（规则的写法，和 rules.test.yml 里造的数）。
 告警送到谁那里（Alertmanager）不在这里。
+SH-23 到 SH-30 看发布历史（docs/adr/ADR-0013.md）：真的发布器和真的看守带着 --history-dir，历史目录现建在本次运行的池的目录下
+（compose.yml 不改，哪个容器都不挂它）。SH-23 排在 SH-19 前面跑：要在历史目录出现之前查"不给 --history-dir 时什么都不写"；
+别的排在告警的用例后面。它们看带历史的发布、先写后做、发布器被杀之后看守补结局、收尾那一行没写上、回滚、漏给参数，以及开机
+的路上不碰历史（历史目录不在、日志写坏，断电再启动照常）。
 
 占用本机回环上的 27618 到 27622，与黑盒套件、Gatekeeper 联调和 Kubernetes 套件的端口重叠，不能同时跑。
 """
@@ -75,6 +79,11 @@ RECORD = '.config.yaml.confirmed'         # 发布器留在配置目录里的记
 HOSTED = RUN / 'deployed'
 HOSTED_MARK = RUN / 'deployed.started'   # SH-19 起过那个池的记号：拆的时候凭它删那个项目的网络
 MONITOR = RUN / 'prometheus'   # SH-21 给 Prometheus 的配置
+# 发布历史（SH-23 到 SH-30，docs/adr/ADR-0013.md）：池的目录下的第三个子目录，与 config、tls 并列。网关、front 和 egress 的
+# 容器都不挂它（compose.yml 不改）。池的名字这里用本套用例的项目名 PROJECT；SH-19 里看守的单元写的是部署文件的项目名。
+HISTORY = POOL / 'history'
+HISTORY_LOG = HISTORY / 'releases.log'
+HISTORY_SNAPSHOTS = HISTORY / 'snapshots'
 STALE = (POOL, PKI, CONTROL, HOSTED, MONITOR, RUN / 'staging', RUN / 'single', RUN / 'expansion')   # 每次运行前后都清掉
 LOCK = pin.lock()
 # 两个镜像都不由本脚本交给 compose：部署文件自己按摘要写着。这里的两个值是拿来核对的（SH-01）。
@@ -371,8 +380,8 @@ def snapshot_file(snapshot: Snapshot) -> str:
     return str(path)
 
 
-def control_command(snapshot: Snapshot) -> list[str]:
-    return [str(CONTROL_BINARY), 'publish', '--snapshot', snapshot_file(snapshot), *pool_flags(), *staging_flags()]
+def control_command(snapshot: Snapshot, *extra: str) -> list[str]:
+    return [str(CONTROL_BINARY), 'publish', '--snapshot', snapshot_file(snapshot), *pool_flags(), *staging_flags(), *extra]
 
 
 def restart_command(snapshot: Snapshot | None, target: str, *extra: str) -> list[str]:
@@ -380,6 +389,11 @@ def restart_command(snapshot: Snapshot | None, target: str, *extra: str) -> list
     用的是这个池上最后一次得到确认的那一份。"""
     chosen = ['--snapshot', snapshot_file(snapshot)] if snapshot else []
     return [str(CONTROL_BINARY), 'restart', '--container', target, *chosen, *pool_flags(), *staging_flags(), *extra]
+
+
+def history_flags(*extra: str) -> list[str]:
+    """带着历史的命令要的：历史目录和池的名字（ADR-0013）。extra 另加，如 --note。"""
+    return ['--history-dir', str(HISTORY), '--pool', PROJECT, *extra]
 
 
 def reconcile_command(*extra: str) -> list[str]:
@@ -401,9 +415,9 @@ def run_control(command: list[str]) -> dict:
     return control_result(done.returncode, done.stdout, done.stderr, started)
 
 
-def control(snapshot: Snapshot) -> dict:
-    """让真的发布器发布这份快照。"""
-    return run_control(control_command(snapshot))
+def control(snapshot: Snapshot, *extra: str) -> dict:
+    """让真的发布器发布这份快照。extra 是另加的参数（SH-24 起带 --history-dir 等）。"""
+    return run_control(control_command(snapshot, *extra))
 
 
 def control_reconcile(*extra: str) -> dict:
@@ -440,7 +454,7 @@ def control_interrupted(snapshot: Snapshot) -> dict:
     return {**control_result(running.returncode, stdout, stderr, started), 'signalled': signalled}
 
 
-def control_killed(snapshot: Snapshot, during: str = 'swap') -> dict:
+def control_killed(snapshot: Snapshot, during: str = 'swap', extra: tuple = ()) -> dict:
     """让真的发布器发布这份快照，中途把它强行杀掉（SIGKILL）：它来不及收拾。
     during 是 'swap'：它刚把文件换上去；是 'staging'：它做离线加载用的临时容器刚出现。
     killed 为假表示没等到那一刻。"""
@@ -450,7 +464,7 @@ def control_killed(snapshot: Snapshot, during: str = 'swap') -> dict:
     else:
         def reached() -> bool:
             return bool(scratch_containers())
-    running = subprocess.Popen(control_command(snapshot), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    running = subprocess.Popen(control_command(snapshot, *extra), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     seen = wait_for(lambda: reached() or running.poll() is not None, 60, every=0.01)
     killed = seen is not None and running.poll() is None
     running.kill()
@@ -458,7 +472,7 @@ def control_killed(snapshot: Snapshot, during: str = 'swap') -> dict:
     return {'killed': killed, 'exit': running.returncode}
 
 
-def restart_killed(snapshot: Snapshot, target: str) -> dict:
+def restart_killed(snapshot: Snapshot, target: str, extra: tuple = ()) -> dict:
     """让真的发布器做一次带重启的发布；docker 刚把网关容器重新起来，并且它在回读口上答得上话了（发布器还在等它
     报告），就把发布器强行杀掉。killed 为假表示没等到那一刻；answered 是看到网关重新起来之后过了多少秒它在回读口上
     答话，没等到重启是 None。等到答话才杀，是因为网关刚启动的头几毫秒里，换上去的文件它看不到：看守正好在那时对账的话，
@@ -466,7 +480,7 @@ def restart_killed(snapshot: Snapshot, target: str) -> dict:
     def started() -> str:
         return docker('inspect', '-f', '{{.State.StartedAt}}', target).stdout.strip()
     before = started()
-    running = subprocess.Popen(restart_command(snapshot, target), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    running = subprocess.Popen(restart_command(snapshot, target, *extra), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     seen = wait_for(lambda: started() not in ('', before) or running.poll() is not None, 90, every=0.01)
     answered = None
     if seen is not None:
@@ -508,6 +522,57 @@ def restart_interrupted(snapshot: Snapshot, target: str, after: float, on_swap=N
         running.kill()
     stdout, stderr = running.communicate(timeout=180)
     return {**control_result(running.returncode, stdout, stderr, started), 'signalled': signalled, 'group': group, 'elsewhere': elsewhere}
+
+
+def releases() -> dict:
+    """gateway-control releases：这个池的发布历史，和它与池的记录对不对得上。"""
+    return run_control([str(CONTROL_BINARY), 'releases', *history_flags(), '--config-dir', str(POOL / 'config')])
+
+
+def release_detail(number: int) -> dict:
+    """gateway-control release --id：一条的详情和每一步。-> 发布器这一次运行的结果（退出码、输出的 JSON…）。"""
+    return run_control([str(CONTROL_BINARY), 'release', *history_flags(), '--id', str(number)])
+
+
+def rollback(number: int, *extra: str) -> dict:
+    """gateway-control rollback --to：回到历史里第 number 条放上去的那一份快照。"""
+    return run_control([str(CONTROL_BINARY), 'rollback', '--to', str(number), *pool_flags(), *staging_flags(), *history_flags(), *extra])
+
+
+def history_rows() -> list[dict]:
+    """releases.log 里的每一行，按先后；读不了（没有这个文件）时是空的。"""
+    try:
+        return [json.loads(line) for line in HISTORY_LOG.read_text(encoding='utf-8').splitlines() if line.strip()]
+    except (OSError, ValueError):
+        return []
+
+
+def release_steps(number: int) -> list[str]:
+    """日志里第 number 条依次写下的各步：状态，带步骤名的写成 APPLYING(replace-file)。"""
+    return [row['state'] + (f"({row['step']})" if row.get('step') else '') for row in history_rows() if row.get('release') == number]
+
+
+def shown(number: int) -> dict:
+    """release --id 给出的那一条（读不到是空的）。"""
+    return release_detail(number)['report'].get('release') or {}
+
+
+def listed(listing: dict, number: int) -> dict:
+    """releases 的输出里第 number 条那一行。"""
+    return next((row for row in listing['report'].get('releases') or [] if row.get('number') == number), {})
+
+
+def history_newest() -> int:
+    return max((row.get('release', 0) for row in history_rows()), default=0)
+
+
+def pool_now() -> dict:
+    """池此刻的样子，拿来比"这条命令没有碰池"：配置文件、池的记录、网关的进程、回读的摘要、历史的日志、存下的快照。"""
+    gateway = container('agentgateway')
+    return {'file': on_disk(), 'record': (POOL / 'config' / RECORD).read_bytes(), 'process': (gateway.get('id'), gateway.get('pid'), gateway.get('started')),
+            'digest': observe()['digest'],
+            'log': HISTORY_LOG.read_bytes() if HISTORY_LOG.exists() else None,
+            'snapshots': sorted(p.name for p in HISTORY_SNAPSHOTS.iterdir()) if HISTORY_SNAPSHOTS.exists() else None}
 
 
 def outcome(done: dict) -> tuple:
@@ -2752,8 +2817,10 @@ def keeper_cases(r: Results, confirmed: Snapshot):
     r.note('五条命令都用过之后', left)
     r.check('叫停看守，以 0 退出。五条命令都用过之后没有留下别的东西', stopped['exit'] == 0 and not stopped['stderr'] and left == CLEAN)
 
+    history_absent_case(r, opening)   # SH-23：要在 SH-19 为看守的单元建出历史目录之前查
     unit_command_case(r, opening)
     alerting_cases(r, opening)
+    history_cases(r, opening)
 
 
 def unit_command_case(r: Results, confirmed: Snapshot):
@@ -2780,6 +2847,8 @@ def unit_command_case(r: Results, confirmed: Snapshot):
     if not r.check(f'这台机器上没有叫 {DEPLOYED_PROJECT} 的 compose 项目（部署文件自己的项目名）。有的话这一条不动它，后面的也就没有跑', not others):
         return
     HOSTED.mkdir()
+    HISTORY.mkdir(mode=0o700)   # 看守的单元的命令行里有 --history-dir ${POOL_DIR}/history：目录要先建好（deploy/compose/README.md）
+    os.chmod(HISTORY, 0o700)
     for name in ('compose.yml', 'front.nginx.conf', 'pin-egress.sh'):
         shutil.copy2(DEPLOY / name, HOSTED / name)
     shutil.copy2(POOL_ENV, HOSTED / '.env')
@@ -2814,9 +2883,10 @@ def unit_command_case(r: Results, confirmed: Snapshot):
             and whole(began) and began.get('action') == '' and reconciled(began).get('outcome') == 'IN_SYNC'
             and reconciled(began).get('snapshot') == confirmed.sha256 and len(keeper.lines) == 1 and not keeper.said)
     numbers = scrape(settings['KEEPER_METRICS_LISTEN'])
-    r.check('单元的命令行以 --metrics-listen ${KEEPER_METRICS_LISTEN} 结尾：.env 里写的那个地址上读得到这个看守的指标，'
+    r.check('单元的命令行以 --metrics-listen ${KEEPER_METRICS_LISTEN} --history-dir ${POOL_DIR}/history --pool <部署文件的项目名> 结尾：.env 里写的那个地址上读得到这个看守的指标，'
             '它说自己守着的是部署文件里写的那个项目，池是完整的',
-            argv[-2:] == ['--metrics-listen', settings['KEEPER_METRICS_LISTEN']] and numbers['status'] == 200
+            argv[-6:] == ['--metrics-listen', settings['KEEPER_METRICS_LISTEN'], '--history-dir', str(HISTORY), '--pool', DEPLOYED_PROJECT]
+            and numbers['status'] == 200
             and numbers['series'].get(f'idp_gateway_keeper_info{{project="{DEPLOYED_PROJECT}"}}') == 1
             and standing(numbers['series'], 'idp_gateway_pool_condition') == ['whole']
             and standing(numbers['series'], 'idp_gateway_pool_reconcile_outcome') == ['IN_SYNC'])
@@ -3070,6 +3140,484 @@ def alerting_cases(r: Results, confirmed: Snapshot):
     r.check('拆掉 Prometheus。两个端口上都没有人了；池还好好的，请求照常，配置目录里没有多出东西',
             removed.returncode == 0 and closed is not None and answering() and left == CLEAN
             and on_disk() == confirmed.text and all(container(service).get('running') for service in LONG_RUNNING))
+
+
+def history_absent_case(r: Results, confirmed: Snapshot):
+    """SH-23。不给 --history-dir 时什么都不写。开始时是 SH-18 做完的样子：池好好地在跑，confirmed 是记录里的那一份，
+    历史的目录还没有人建过（SH-19 要用它，下一条就建）。它排在 SH-19 前面跑，为的就是这一条要在历史目录出现之前查。"""
+    r.case('SH-23', '不给 --history-dir 时什么都不写：前面各条用例跑完之后池的目录下没有历史目录，再跑几条不带历史的命令，也没有多出任何东西')
+
+    def entries() -> list[str]:
+        return sorted(p.name for p in POOL.iterdir())
+
+    def strays() -> list[str]:
+        """运行目录里任何地方的 releases.log，和 snapshots 目录（本脚本自己放要发布的快照文件的那一个除外）。"""
+        found = []
+        for where, directories, files in os.walk(RUN):
+            found += [os.path.join(where, name) for name in files if name == 'releases.log']
+            found += [os.path.join(where, name) for name in directories if name == 'snapshots' and os.path.join(where, name) != str(CONTROL / 'snapshots')]
+        return found
+
+    before, left = entries(), leftovers()
+    r.note('SH-01 到 SH-18、SH-22 都跑完之后，池的目录下有什么', before)
+    r.check('前面各条用例（SH-01 到 SH-18、SH-22，用过 publish、restart、reconcile、place、confirm 和看守，一次都没有给 --history-dir）跑完之后：'
+            '池的目录下只有 config、gateway.env、tls，没有历史目录；整个运行目录里没有 releases.log，也没有历史的 snapshots 目录；配置目录里没有多出文件',
+            before == ['config', 'gateway.env', 'tls'] and not HISTORY.exists() and not strays() and left == CLEAN)
+    again, reconciling = control(confirmed), control_reconcile()
+    r.note('现在再不带历史发布同一份、对一次账：发布器写到标准输出的两份 JSON 的键', [sorted(again['report']), sorted(reconciling['report'])])
+    r.check('再不带历史发布同一份快照、对一次账（都是池已经在的样子，不改池）：ACTIVE、IN_SYNC；输出里没有 release 和 history_settled，标准错误上什么都没有',
+            outcome(again) == (0, 'ACTIVE') and outcome(reconciling) == (0, 'IN_SYNC')
+            and not ({'release', 'history_settled'} & (set(again['report']) | set(reconciling['report'])))
+            and not again['stderr'] and not reconciling['stderr'])
+    half = control(confirmed, '--pool', PROJECT)
+    r.check('只给 --pool、不给 --history-dir：退出码 2，说它没有地方可记，池没有被碰过（悄悄丢掉它比报错糟）',
+            half['exit'] == 2 and not half['report'] and '--pool was given without --history-dir' in half['stderr'] and on_disk() == confirmed.text)
+    r.check('这几条命令之后池的目录下还是没有历史目录，运行目录里还是没有 releases.log，配置目录里没有多出文件',
+            entries() == before and not HISTORY.exists() and not strays() and leftovers() == CLEAN)
+
+
+def history_cases(r: Results, confirmed: Snapshot):
+    """SH-24 到 SH-30（docs/adr/ADR-0013.md）：发布历史接在真的池上。开始时池好好地在跑，三个常驻容器和后端都在，confirmed 是
+    这个池上最后一次得到确认的那份快照，网关在跑的就是它，看守都停了；结束时也是这样（记录是最后一次发布的那一份）。
+    历史目录这时现建：本次运行的池的目录下，0700，归跑这些命令的账号（SH-19 为看守的单元建过一个，空的，先删掉）。
+    池的名字是 PROJECT。发布的快照都与 confirmed 同一套启动设置（deadline 45），要重启的那几次另说。"""
+    routes = confirmed.routes
+    name = container('agentgateway').get('name')
+    key = 'terminationMaxDeadline'
+
+    def answering() -> bool:
+        return get('a.test', '/quick')['status'] == 200
+
+    def quiet(line: dict) -> bool:
+        return not line.get('history_notes')
+
+    shutil.rmtree(HISTORY, ignore_errors=True)
+    HISTORY.mkdir(mode=0o700)
+    os.chmod(HISTORY, 0o700)
+    mode = lambda path: stat.S_IMODE(path.stat().st_mode)   # noqa: E731
+
+    # ---- SH-24 -----------------------------------------------------------------------------------------
+    r.case('SH-24', '带着历史发布：publish --history-dir --pool --note 得 ACTIVE，日志里依次是 STAGED、APPLYING、OBSERVING、ACTIVE，快照存下来，'
+                    'releases 和 release 读得出来；再发布一份，前一条是 SUPERSEDED；带重启的发布多一步"重启网关"')
+    note = 'SH-24：第一份，用来看历史'
+    first = Snapshot([*routes, 'h1'])
+    done = control(first, *history_flags('--note', note))
+    report = done['report']
+    r.note('带着历史发布：发布器的输出', report)
+    r.check('publish --history-dir <池的目录>/history --pool <名字> --note：退出码 0，结局 ACTIVE，换了文件；输出里有这一条的编号（1），标准错误上什么都没有',
+            outcome(done) == (0, 'ACTIVE') and report.get('release') == 1 and report.get('replaced') is True and not done['stderr']
+            and on_disk() == first.text and report.get('snapshot') == first.sha256)
+    steps = release_steps(1)
+    rows = history_rows()
+    r.note('releases.log 里第 1 条的各行', [{k: row.get(k) for k in ('state', 'step', 'at')} for row in rows if row.get('release') == 1])
+    r.check('releases.log：这一条依次是 STAGED、APPLYING（replace-file）、OBSERVING、ACTIVE；每行是一个 JSON，说的都是这个池',
+            steps == ['STAGED', 'APPLYING(replace-file)', 'OBSERVING', 'ACTIVE'] and len(rows) == 4 and {row.get('pool') for row in rows} == {PROJECT}
+            and HISTORY_LOG.read_text(encoding='utf-8').endswith('\n'))
+    stored = HISTORY_SNAPSHOTS / f'{first.sha256}.yaml'
+    before_stored = HISTORY_SNAPSHOTS / f'{confirmed.sha256}.yaml'
+    r.check('快照存在 snapshots/ 下，名字是内容的 SHA-256，内容与发布的一字不差；动手之前放着的那一份（confirmed）也存下来了，同样一字不差',
+            stored.is_file() and stored.read_bytes() == first.text.encode() and before_stored.is_file()
+            and before_stored.read_bytes() == confirmed.text.encode()
+            and sorted(p.name for p in HISTORY_SNAPSHOTS.iterdir()) == sorted([stored.name, before_stored.name]))
+    r.check('权限：历史目录和 snapshots/ 是 0700，releases.log 和快照文件是 0600（历史目录是本脚本建的，其余两样是发布器建的）',
+            mode(HISTORY) == 0o700 and mode(HISTORY_SNAPSHOTS) == 0o700 and mode(HISTORY_LOG) == 0o600
+            and mode(stored) == 0o600 and mode(before_stored) == 0o600)
+    listing = releases()
+    row = listed(listing, 1)
+    r.note('releases 的输出', listing['report'])
+    r.check('releases：退出码 0，LISTED，一条：ACTIVE，命令 publish，快照是这一份（12 位），带备注；与池的记录比，对得上（match）',
+            outcome(listing) == (0, 'LISTED') and len(listing['report'].get('releases') or []) == 1 and row.get('state') == 'ACTIVE'
+            and row.get('command') == 'publish' and row.get('snapshot') == first.sha256[:12] and row.get('has_note') is True
+            and (listing['report'].get('comparison') or {}).get('status') == 'match'
+            and (listing['report'].get('pool_record') or {}).get('snapshot') == first.sha256[:12] and not listing['stderr'])
+    detail = shown(1)
+    r.note('release --id 1 的输出', detail)
+    initiator = detail.get('initiator') or {}
+    r.check('release --id 1：SHOWN，每一步都在（STAGED、APPLYING、OBSERVING、ACTIVE，各有时刻）；发起人是发布器证书上的身份和操作系统账号，'
+            '输出里写明这是进程自己报的、没有人核实；备注原样在，也标着未经核实',
+            outcome(release_detail(1)) == (0, 'SHOWN') and [step['state'] for step in detail.get('steps') or []] == ['STAGED', 'APPLYING', 'OBSERVING', 'ACTIVE']
+            and all(step.get('at') for step in detail['steps']) and initiator.get('workload_identity') == pki.ID['publisher']
+            and f'(uid {os.getuid()})' in str(initiator.get('os_account')) and 'nobody verified it' in str(initiator.get('status'))
+            and detail.get('note') == note and 'nobody verified it' in str(detail.get('note_status'))
+            and detail.get('snapshot') == first.sha256 and detail.get('previous') == confirmed.sha256
+            and detail.get('expected_digest') and detail.get('expected_digest') == detail.get('observed_digest')
+            and detail.get('version') == LOCK['version'] and detail.get('revision') == LOCK['git_revision'])
+
+    second = Snapshot([*routes, 'h2'])
+    done = control(second, *history_flags())
+    listing = releases()
+    r.check('再发布一份：ACTIVE，编号 2；前一条（1）读出来是 SUPERSEDED（读的时候按"后来有更晚的 ACTIVE"推出来的，日志里 1 的最后一行仍是 ACTIVE），'
+            '它说被第 2 条取代；与池的记录比仍对得上',
+            outcome(done) == (0, 'ACTIVE') and done['report'].get('release') == 2 and listed(listing, 1).get('state') == 'SUPERSEDED'
+            and listed(listing, 1).get('recorded_state') == 'ACTIVE' and listed(listing, 1).get('superseded_by') == 2
+            and listed(listing, 2).get('state') == 'ACTIVE' and release_steps(1)[-1] == 'ACTIVE'
+            and (listing['report'].get('comparison') or {}).get('status') == 'match')
+
+    heavier = Snapshot([*routes, 'h2'], deadline=46)   # 与 second 只差启动时才读的那一项：要重启
+    before = container('agentgateway')
+    done = control_restart(heavier, name, *history_flags())
+    seen = observe()
+    after = container('agentgateway')
+    steps = release_steps(3)
+    r.note('带重启的发布：发布器的输出', done['report'])
+    r.note('带重启的发布：第 3 条的各步', steps)
+    r.check('带重启的发布（restart --history-dir …）：ACTIVE，换了文件也重启了网关，编号 3；日志里比 publish 多一步 APPLYING（restart-gateway）：'
+            'STAGED、APPLYING（replace-file）、APPLYING（restart-gateway）、OBSERVING、ACTIVE',
+            outcome(done) == (0, 'ACTIVE') and done['report'].get('release') == 3 and done['report'].get('replaced') is True
+            and done['report'].get('restarted') is True and steps == ['STAGED', 'APPLYING(replace-file)', 'APPLYING(restart-gateway)', 'OBSERVING', 'ACTIVE']
+            and seen['config'].get(key) == '46s' and after.get('pid') != before.get('pid') and shown(3).get('restarted') is True)
+    back = control_restart(second, name, *history_flags())
+    seen = observe()
+    r.check('再用带重启的发布把启动设置改回来（后面各条要用）：ACTIVE，编号 4，历史里也是一次换文件加一次重启；网关在跑的是 second，启动设置是 45 秒',
+            outcome(back) == (0, 'ACTIVE') and back['report'].get('release') == 4 and release_steps(4) == [
+                'STAGED', 'APPLYING(replace-file)', 'APPLYING(restart-gateway)', 'OBSERVING', 'ACTIVE']
+            and seen['config'].get(key) == '45s' and on_disk() == second.text and routes_seen(['h1', 'h2']) == {'h1': 404, 'h2': 200})
+    r.check('四次发布之后没有留下别的东西：配置目录里只有配置文件、它的锁文件和记录；池的目录下是 config、gateway.env、history、tls',
+            leftovers() == CLEAN and sorted(p.name for p in POOL.iterdir()) == ['config', 'gateway.env', 'history', 'tls'])
+
+    # ---- SH-25 -----------------------------------------------------------------------------------------
+    r.case('SH-25', '先写后做：历史写不进去时 publish 什么都不动；改回来之后同一条命令成功')
+    third = Snapshot([*routes, 'h3'])
+    if os.geteuid() == 0:
+        r.check('这一条要一个受文件权限约束的账号：它把历史目录改成不可写', False)
+    else:
+        pool_before, directories = pool_now(), (HISTORY, HISTORY_SNAPSHOTS)
+        refused = None
+        try:
+            os.chmod(HISTORY_LOG, 0o400)
+            for directory in directories:
+                os.chmod(directory, 0o500)
+            refused = control(third, *history_flags())
+            pool_after = pool_now()
+        finally:
+            for directory in directories:
+                os.chmod(directory, 0o700)
+            os.chmod(HISTORY_LOG, 0o600)
+        r.note('历史目录不可写时 publish：退出码和标准错误', [refused['exit'], refused['stderr']])
+        r.check('历史目录不可写（目录 0500，日志 0400）：publish 退出码 1，没有 JSON，标准错误说的是发布历史写不进去、池什么都没有动',
+                refused['exit'] == 1 and not refused['report'] and 'release history could not be written' in refused['stderr']
+                and 'nothing was done to the pool' in refused['stderr'])
+        r.check('池没有被碰：配置文件还是原来那份，池的记录一个字节没变，网关是同一个进程、摘要没变，历史的日志和快照一个字节、一个文件没变；'
+                '经网关的请求照常（现有的路由 200，新的 404）；没有留下别的东西',
+                pool_after == pool_before and on_disk() == second.text and routes_seen(['h2', 'h3']) == {'h2': 200, 'h3': 404}
+                and leftovers() == CLEAN and mode(HISTORY) == mode(HISTORY_SNAPSHOTS) == 0o700 and mode(HISTORY_LOG) == 0o600)
+        done = control(third, *history_flags())
+        r.check('目录改回来之后，同一条命令：ACTIVE，编号 5（上一次什么都没有开始，不占编号），历史里是完整的四步',
+                outcome(done) == (0, 'ACTIVE') and done['report'].get('release') == 5
+                and release_steps(5) == ['STAGED', 'APPLYING(replace-file)', 'OBSERVING', 'ACTIVE'] and on_disk() == third.text
+                and routes_seen(['h3']) == {'h3': 200})
+
+    # ---- SH-26 -----------------------------------------------------------------------------------------
+    r.case('SH-26', '发布器死在半路，看守收拾，历史跟着有了结局：停在 APPLYING，看守下一次对账把放回去的补成 FAILED、更早没有结局的补成 OVERTAKEN；'
+                    '带重启的发布做到一半被杀，对账补成什么就是什么')
+    first_open, second_open = Snapshot([*routes, 'k1']), Snapshot([*routes, 'k2'])
+    top = history_newest()
+    killed_first = control_killed(first_open, extra=tuple(history_flags()))
+    stuck = release_steps(top + 1)
+    r.note('第一次被杀之后，历史里这一条的各步', stuck)
+    r.check('发布器带着历史，刚把文件换上去就被强行杀掉：这一条停在 APPLYING（replace-file）之后，没有结局；配置文件是没人确认过的那份',
+            killed_first['killed'] and stuck[:2] == ['STAGED', 'APPLYING(replace-file)'] and stuck[-1] in ('APPLYING(replace-file)', 'OBSERVING')
+            and on_disk() == first_open.text and record().get('snapshot') == third.sha256
+            and listed(releases(), top + 1).get('state') in ('APPLYING', 'OBSERVING'))
+    log_before = HISTORY_LOG.read_bytes()
+    plain = control_reconcile()
+    r.check('不带历史对一次账（看守没有给 --history-dir 时就是这样）：把记录的那一份放回去（RESTORED，退出码 4）；历史的日志一个字节没动，'
+            '那一条仍然没有结局',
+            outcome(plain) == (4, 'RESTORED') and on_disk() == third.text and HISTORY_LOG.read_bytes() == log_before
+            and release_steps(top + 1) == stuck and 'history_settled' not in plain['report'])
+    killed_second = control_killed(second_open, extra=tuple(history_flags()))
+    r.check('再来一次：又被杀在换上文件之后（这时历史里已经有一条没有结局的了）；这一条也没有结局',
+            killed_second['killed'] and release_steps(top + 2)[:2] == ['STAGED', 'APPLYING(replace-file)']
+            and release_steps(top + 2)[-1] in ('APPLYING(replace-file)', 'OBSERVING') and on_disk() == second_open.text)
+    keeper = Keeper('--interval', '1s', '--reconcile-interval', '5s', *history_flags())
+    healed = keeper.next(restored, 30)
+    stopped_with = {number: shown(number) for number in (top + 1, top + 2)}
+    listing = releases()
+    r.note('看守带着历史收拾之后写的那一行', brief(healed))
+    r.note('看守的这一行里补上结局的编号', reconciled(healed).get('history_settled'))
+    r.check('带着 --history-dir 的看守在第一次对账时把记录的那一份放回去（RESTORED），并把历史补上：这一行的 reconcile 里 history_settled 是 [%d, %d]；'
+            '它没有动容器，没有 history_notes' % (top + 1, top + 2),
+            restored(healed) and reconciled(healed).get('history_settled') == [top + 1, top + 2] and quiet(healed) and healed.get('action') == ''
+            and whole(healed) and on_disk() == third.text and not keeper.said)
+    older, newer = stopped_with[top + 1], stopped_with[top + 2]
+    r.check('最新的那一条补成 FAILED（记录确认的是别的快照：没有生效），步骤名是 reconcile，原因写了记录确认的是哪一份、它没有生效；'
+            '它之前没有结局的那一条补成 OVERTAKEN（后来的发布越过了它，是否生效不知道，不借用 FAILED），原因说了后一条的编号',
+            newer.get('state') == 'FAILED' and release_steps(top + 2)[-1] == 'FAILED(reconcile)' and 'did not take effect' in str(newer.get('reason'))
+            and third.sha256[:12] in str(newer.get('reason'))
+            and older.get('state') == 'OVERTAKEN' and release_steps(top + 1)[-1] == 'OVERTAKEN(reconcile)'
+            and f'a later release ({top + 2})' in str(older.get('reason')) and 'not known' in str(older.get('reason')))
+    r.check('releases：这两条分别是 FAILED 和 OVERTAKEN；最后一条 ACTIVE 仍是第 5 条，与池的记录对得上',
+            listed(listing, top + 1).get('state') == 'OVERTAKEN' and listed(listing, top + 2).get('state') == 'FAILED'
+            and (listing['report'].get('comparison') or {}).get('status') == 'match'
+            and ((listing['report'].get('comparison') or {}).get('history_last_active') or {}).get('number') == 5)
+    stopped = keeper.stop()
+    r.check('叫停看守：以 0 退出，标准错误上什么都没有；再对一次账（带历史），没有什么要补的：IN_SYNC，输出里没有 history_settled',
+            stopped['exit'] == 0 and not stopped['stderr'] and (lambda d: outcome(d) == (0, 'IN_SYNC') and 'history_settled' not in d['report'])(
+                control_reconcile(*history_flags())))
+
+    middle = Snapshot([*routes, 'k3'], deadline=46)
+    top = history_newest()
+    killed = restart_killed(middle, name, extra=tuple(history_flags()))
+    applied = wait_for(lambda: observe()['config'].get(key) == '46s', 20)
+    cut = release_steps(top + 1)
+    r.note('带重启的发布做到一半被杀：历史里这一条的各步', cut)
+    r.check('带重启的发布：docker 刚把网关重新起来、网关在回读口上答得上话，发布器被强行杀掉：文件是新的，网关已经带着新设置起来，记录里仍是上一份；'
+            '历史里这一条停在重启之后，没有结局',
+            killed['killed'] and applied is not None and on_disk() == middle.text and record().get('snapshot') == third.sha256
+            and cut[:3] == ['STAGED', 'APPLYING(replace-file)', 'APPLYING(restart-gateway)'] and cut[-1] in ('APPLYING(restart-gateway)', 'OBSERVING'))
+    keeper = Keeper('--interval', '1s', '--reconcile-interval', '5s', *history_flags())
+    half = keeper.next(lambda line: reconciled(line).get('outcome') == 'RESTART_PENDING', 30)
+    cut_after = shown(top + 1)
+    r.note('带重启的发布做到一半之后看守写的那一行', brief(half))
+    r.note('...历史里这一条补成了什么', [cut_after.get('state'), cut_after.get('reason'), release_steps(top + 1)])
+    r.check('带着 --history-dir 的看守对账：记录的那一份放回去了，启动设置还差一次重启（RESTART_PENDING，指出了那一项），它不重启网关；'
+            '历史里这一条补成了 FAILED（步骤 reconcile）：记录确认的是别的快照，这一份没有生效；补它的是这一次对账，history_settled 是它',
+            reconciled(half).get('history_settled') == [top + 1] and reconciled(half).get('restart') == [key] and reconciled(half).get('replaced') is True
+            and reconciled(half).get('restarted') is False and on_disk() == third.text and cut_after.get('state') == 'FAILED'
+            and release_steps(top + 1)[-1] == 'FAILED(reconcile)' and quiet(half) and half.get('action') == '')
+    keeper.stop()
+    done = control_restart(None, name, *history_flags())
+    seen = observe()
+    r.check('不给快照的 restart（用记录里的那一份重启，把启动设置带回来）：ACTIVE，不再换文件，历史里这一条是 STAGED、APPLYING（restart-gateway）、OBSERVING、ACTIVE；'
+            '之后对账（带历史）是 IN_SYNC，没有什么要补的',
+            outcome(done) == (0, 'ACTIVE') and done['report'].get('replaced') is False and done['report'].get('restarted') is True
+            and release_steps(done['report'].get('release', 0)) == ['STAGED', 'APPLYING(restart-gateway)', 'OBSERVING', 'ACTIVE']
+            and seen['config'].get(key) == '45s' and on_disk() == third.text
+            and (lambda d: outcome(d) == (0, 'IN_SYNC') and 'history_settled' not in d['report'])(control_reconcile(*history_flags()))
+            and leftovers() == CLEAN)
+
+    # ---- SH-27 -----------------------------------------------------------------------------------------
+    r.case('SH-27', '收尾那一行没有写上：看守的下一次对账把它补成 ACTIVE（原因里写明是事后补的）；或者不等看守、再发布一次同一份，它补全那一条，不另开一条。'
+                    'ACTIVE_NOT_RECORDED 和退出码 8 本身卡不准那一瞬间，只有单元测试')
+
+    def drop_last_line() -> dict:
+        """脚本替发布器"没写上"最后一行：把 releases.log 的最后一行去掉，模拟池已经换了、收尾那一笔没有写进去。"""
+        lines = HISTORY_LOG.read_bytes().splitlines(keepends=True)
+        HISTORY_LOG.write_bytes(b''.join(lines[:-1]))   # 原地写：文件的权限不变
+        return json.loads(lines[-1])
+
+    fourth = Snapshot([*routes, 'h4'])
+    done = control(fourth, *history_flags())
+    number = done['report'].get('release', 0)
+    dropped = drop_last_line()
+    listing = releases()
+    r.check('发布一份（ACTIVE），再由本脚本把 releases.log 的最后一行（这一条的 ACTIVE）去掉：这一条停在 OBSERVING；releases 指出历史和池的记录对不上'
+            '（池的记录是这一份，历史里最后一条 ACTIVE 是更早的），退出码仍是 0，标准错误上说了一句',
+            outcome(done) == (0, 'ACTIVE') and dropped.get('state') == 'ACTIVE' and dropped.get('release') == number
+            and release_steps(number) == ['STAGED', 'APPLYING(replace-file)', 'OBSERVING'] and outcome(listing) == (0, 'LISTED')
+            and (listing['report'].get('comparison') or {}).get('status') == 'mismatch'
+            and 'do not agree' in listing['stderr'] and listed(listing, number).get('state') == 'OBSERVING')
+    keeper = Keeper('--interval', '1s', '--reconcile-interval', '5s', *history_flags())
+    healed = keeper.next(lambda line: reconciled(line).get('outcome') == 'IN_SYNC', 30)
+    keeper.stop()
+    after, listing = shown(number), releases()
+    r.note('看守补上之后这一条的各步', release_steps(number))
+    r.check('带着 --history-dir 的看守在第一次对账时（IN_SYNC）把它补成 ACTIVE：这一行的 history_settled 是 [%d]；补上的那一行步骤名是 reconcile，'
+            '原因里写明记录确认的是这份、在这一条开始之后，结局是事后补的' % number,
+            reconciled(healed).get('history_settled') == [number] and after.get('state') == 'ACTIVE'
+            and release_steps(number)[-1] == 'ACTIVE(reconcile)' and 'written afterwards' in str((after.get('steps') or [{}])[-1].get('reason'))
+            and 'made after this release started' in str((after.get('steps') or [{}])[-1].get('reason')) and quiet(healed))
+    r.check('releases 的比对重新对得上（match）；这一条的编号没有变，也没有多出新的一条',
+            (listing['report'].get('comparison') or {}).get('status') == 'match' and history_newest() == number and not listing['stderr'])
+
+    fifth = Snapshot([*routes, 'h5'])
+    done = control(fifth, *history_flags())
+    number = done['report'].get('release', 0)
+    drop_last_line()
+    state = pool_now()
+    done = control(fifth, *history_flags())
+    detail = shown(number)
+    r.note('去掉最后一行之后再跑同样的 publish：发布器的输出', done['report'])
+    r.check('去掉最后一行，不等看守，直接再跑同样的 publish：ACTIVE，没有再写文件；它给停着的那一条补了结局，不另开一条（编号还是 %d，'
+            '输出里 history_settled 是 [%d]），补的那一行步骤名是 publish-again' % (number, number),
+            outcome(done) == (0, 'ACTIVE') and done['report'].get('replaced') is False and done['report'].get('release') == number
+            and done['report'].get('history_settled') == [number] and history_newest() == number
+            and release_steps(number)[-1] == 'ACTIVE(publish-again)' and detail.get('state') == 'ACTIVE'
+            and {k: v for k, v in pool_now().items() if k not in ('log', 'snapshots')} == {k: v for k, v in state.items() if k not in ('log', 'snapshots')})
+    listing = releases()
+    r.check('releases 的比对对得上（match）；池的记录、配置文件、网关一个字没动',
+            (listing['report'].get('comparison') or {}).get('status') == 'match' and on_disk() == fifth.text and leftovers() == CLEAN)
+
+    # ---- SH-28 -----------------------------------------------------------------------------------------
+    r.case('SH-28', '回滚：rollback --to <早先的编号> 是一次新的发布，记着回到的是哪一条，历史里已有的各行一个字不变；回到现在放着的、回到 FAILED 的是 REFUSED；'
+                    '快照被改了一个字节，非零退出，池不动')
+    earlier = shown(1)
+    log_before = HISTORY_LOG.read_bytes()
+    pool_before, gateway_before = pool_now(), container('agentgateway')
+    done = rollback(1)
+    new = done['report'].get('release', 0)
+    seen = observe()
+    detail = shown(new)
+    log_after = HISTORY_LOG.read_bytes()
+    appended = [json.loads(line) for line in log_after[len(log_before):].splitlines() if line.strip()]
+    r.note('回滚：发布器的输出', done['report'])
+    r.check('rollback --to 1（第 1 条放上去的是 first）：退出码 0，ACTIVE，是新的一条（编号 %d），换了文件；配置文件是 first 的快照，一字不差' % (history_newest()),
+            outcome(done) == (0, 'ACTIVE') and new == history_newest() and new > number and done['report'].get('replaced') is True
+            and on_disk() == first.text and done['report'].get('snapshot') == first.sha256)
+    r.check('新的一条记着它回到的是第 1 条（rolled_back_to），命令是 rollback，取代的是回滚之前最后一条 ACTIVE；它也有完整的四步',
+            detail.get('rolled_back_to') == 1 and detail.get('command') == 'rollback' and detail.get('supersedes') == number
+            and [step['state'] for step in detail.get('steps') or []] == ['STAGED', 'APPLYING', 'OBSERVING', 'ACTIVE']
+            and listed(releases(), 1).get('state') == 'SUPERSEDED')
+    r.check('网关在跑的又是那份快照：回读的摘要等于第 1 条当时确认的摘要，也等于这一次的期望值；路由回来了（first 的 h1 是 200，回滚之前的 h5 是 404）；'
+            '网关没有重启',
+            seen['reload'] == LOADED and seen['digest'] == earlier.get('observed_digest') == done['report'].get('expected_digest')
+            and routes_seen(['h1', 'h5']) == {'h1': 200, 'h5': 404} and same_process(gateway_before, container('agentgateway'))
+            and record().get('snapshot') == first.sha256)
+    r.check('历史里已有的各行一个字没变：回滚之后的日志，前面一整段就是回滚之前的日志；多出来的行都是新的那一条的',
+            log_after.startswith(log_before) and appended and {row.get('release') for row in appended} == {new}
+            and [row['state'] for row in appended] == ['STAGED', 'APPLYING', 'OBSERVING', 'ACTIVE'])
+
+    pool_before, log_before = pool_now(), HISTORY_LOG.read_bytes()
+    same = rollback(1)
+    rows = releases()['report']['releases']
+    failed_target = rollback(next(row['number'] for row in rows if row['state'] == 'FAILED'))
+    overtaken_target = rollback(next(row['number'] for row in rows if row['state'] == 'OVERTAKEN'))
+    missing = rollback(999)
+    r.note('回滚到现在放着的 / FAILED 的 / OVERTAKEN 的 / 没有的编号：各自的原因', [same['report'].get('reason'), failed_target['report'].get('reason'),
+                                                                    overtaken_target['report'].get('reason'), missing['report'].get('reason')])
+    r.check('回到现在放着的这一份（第 1 条，池里正是它）：退出码 3，REFUSED，原因说没有什么可回的；什么都没动（配置文件、记录、网关、日志都没变，没有新的一条）',
+            outcome(same) == (3, 'REFUSED') and 'nothing to roll back to' in str(same['report'].get('reason')) and pool_now() == pool_before)
+    r.check('回到一条 FAILED 的、一条 OVERTAKEN 的（都没有到过 ACTIVE）、一个没有的编号：都是 REFUSED（退出码 3），说的是没有到过 ACTIVE / 没有这一条；什么都没动',
+            outcome(failed_target) == (3, 'REFUSED') and 'never reached ACTIVE' in str(failed_target['report'].get('reason'))
+            and 'FAILED' in str(failed_target['report'].get('reason'))
+            and outcome(overtaken_target) == (3, 'REFUSED') and 'never reached ACTIVE' in str(overtaken_target['report'].get('reason'))
+            and outcome(missing) == (3, 'REFUSED') and 'no release 999' in str(missing['report'].get('reason')) and pool_now() == pool_before)
+
+    target = HISTORY_SNAPSHOTS / f'{second.sha256}.yaml'   # 第 2 条放上去的那一份：不是现在放着的
+    original = target.read_bytes()
+    altered = None
+    try:
+        target.write_bytes(b'x' + original[1:])   # 改掉一个字节
+        altered = rollback(2)
+        after = pool_now()
+    finally:
+        target.write_bytes(original)
+    r.note('快照被改了一个字节之后回滚：退出码和标准错误', [altered['exit'], altered['stderr']])
+    r.check('把 snapshots/ 里第 2 条的快照改掉一个字节，再 rollback --to 2：退出码 1，没有 JSON，标准错误说那份快照与它的 SHA-256 对不上、池什么都没有动；'
+            '池没有被碰（配置文件、记录、网关、日志、快照文件的名单都没变）',
+            altered['exit'] == 1 and not altered['report'] and 'SHA-256' in altered['stderr'] and 'nothing was done to the pool' in altered['stderr']
+            and after == pool_before and leftovers() == CLEAN)
+    r.check('把那个字节改回去之后，历史里那份快照还是一字不差', target.read_bytes() == second.text.encode() and mode(target) == 0o600)
+
+    # ---- SH-29 -----------------------------------------------------------------------------------------
+    r.case('SH-29', '有人漏给了 --history-dir：不带历史的发布之后，releases 指出历史和池的记录对不上；之后带着历史再发布一次，又对得上')
+    forgot = Snapshot([*routes, 'h6'])
+    last_active = [row for row in releases()['report']['releases'] if row['state'] == 'ACTIVE'][-1]['number']
+    done = control(forgot)
+    listing = releases()
+    comparison = listing['report'].get('comparison') or {}
+    r.note('漏给参数之后 releases 的比对', comparison)
+    r.check('不带 --history-dir 发布一份（ACTIVE，输出里没有 release）：releases 退出码仍是 0，比对是 mismatch：池的记录是这一份，历史里最后一条 ACTIVE 是第 %d 条；'
+            '输出里的 detail 和标准错误都这样说' % last_active,
+            outcome(done) == (0, 'ACTIVE') and 'release' not in done['report'] and outcome(listing) == (0, 'LISTED') and comparison.get('status') == 'mismatch'
+            and (comparison.get('history_last_active') or {}).get('number') == last_active
+            and (listing['report'].get('pool_record') or {}).get('snapshot') == forgot.sha256[:12]
+            and forgot.sha256[:12] in str(comparison.get('detail')) and 'do not agree' in listing['stderr'])
+    noted = Snapshot([*routes, 'h7'])
+    done = control(noted, *history_flags())
+    listing = releases()
+    r.check('之后带着历史再发布一次：ACTIVE，新的一条；比对又对得上（match），历史里最后一条 ACTIVE 就是它',
+            outcome(done) == (0, 'ACTIVE') and done['report'].get('release') == history_newest()
+            and (listing['report'].get('comparison') or {}).get('status') == 'match' and not listing['stderr']
+            and ((listing['report'].get('comparison') or {}).get('history_last_active') or {}).get('number') == done['report'].get('release'))
+
+    # ---- SH-30 -----------------------------------------------------------------------------------------
+    r.case('SH-30', '开机不靠历史：历史目录挪走、或日志写坏，断电再 docker compose up -d，池照常起来；带着 --history-dir 的看守照常看容器、对账、起容器，'
+                    '只是不补历史，并说出历史的问题；目录放回去之后恢复正常')
+    log_original = HISTORY_LOG.read_bytes()
+    away = HISTORY.with_name('history.away')
+    clean_place = ('IN_PLACE', 'IN_SYNC')
+
+    def one_boot():
+        """断电（三个常驻容器同时被杀），再跑部署文件的启动命令；-> 是否断了，启动的结果。"""
+        dark = power_cut()
+        time.sleep(1)
+        return dark, boot(('a',))
+
+    def booted(dark: bool, seen: dict) -> bool:
+        return (dark and seen['exit'] == 0 and outcome(seen['place']) == (0, 'IN_PLACE') and outcome(seen['confirm']) == (0, 'IN_SYNC')
+                and in_order(seen) and gated(seen, 'a') and not ({'release', 'history_settled'} & (set(seen['place']['report']) | set(seen['confirm']['report'])))
+                and answering())
+
+    def works_with_a_bad_history() -> tuple:
+        """带着 --history-dir 的看守在历史有毛病时：第一行；杀掉网关之后的那一行；有人绕过发布器放了一份没人确认过的文件之后，
+        它下一次对账收回去的那一行；叫停它。"""
+        keeper = Keeper('--interval', '1s', '--reconcile-interval', '3s', *history_flags())
+        first_line = keeper.next(lambda line: True, 20)
+        mark = keeper.mark()
+        docker('kill', container('agentgateway').get('name', '-'))
+        revived = keeper.next(acted, 40, mark)
+        healed = wait_for(answering, 20)
+        mark = keeper.mark()
+        publish(Snapshot([*routes, 'z']))   # 绕过发布器
+        put_back = keeper.next(restored, 20, mark)
+        stopped = keeper.stop()
+        return first_line, revived, healed, put_back, stopped, list(keeper.said)
+
+    os.rename(HISTORY, away)
+    try:
+        dark, seen = one_boot()
+        r.note('历史目录不在时断电再启动', timeline(seen))
+        r.check('历史目录挪走（整个不在了），断电（三个常驻容器同时被强行杀掉），docker compose up -d：退出码 0，place 是 IN_PLACE，confirm 是 IN_SYNC，'
+                '先后照部署文件来，confirm 跑完之前没有应答；请求照常；place 和 confirm 的输出里没有历史的东西（它们不挂历史目录）',
+                booted(dark, seen))
+        keeper_first, revived, healed, put_back, stopped, said = works_with_a_bad_history()
+        r.note('历史目录不在时带着 --history-dir 的看守：第一行', brief(keeper_first))
+        r.note('...它在标准错误上说的', said)
+        r.note('...第一行和杀掉网关之后那一行里的 history_notes', [keeper_first.get('history_notes'), revived.get('history_notes')])
+        r.check('历史目录不在时启动带着 --history-dir 的看守：它没有退出，第一行说三个容器都在跑（whole）、账对得上（IN_SYNC），没有动手；标准错误上有一句，'
+                '说发布历史打不开、不补历史；这一行的 history_notes 说了补不成（它的原因是历史目录不在）',
+                whole(keeper_first) and keeper_first.get('action') == '' and reconciled(keeper_first).get('outcome') == 'IN_SYNC'
+                and any('release history could not be opened' in line for line in said)
+                and any('history' in note and 'no such file' in note for note in keeper_first.get('history_notes') or []))
+        r.check('杀掉网关：看守照常把它起回来（start，修好了），账对得上（IN_SYNC），请求照常；有人绕过发布器放了一份没人确认过的文件，它下一次对账照常收回去'
+                '（RESTORED），那一行的 history_notes 说了补不成；叫停它以 0 退出',
+                revived.get('action') == 'start' and revived.get('condition') == 'down' and revived.get('repaired') is True
+                and reconciled(revived).get('outcome') == 'IN_SYNC' and healed is not None and restored(put_back)
+                and reconciled(put_back).get('previous') == Snapshot([*routes, 'z']).sha256 and on_disk() == noted.text
+                and bool(put_back.get('history_notes')) and stopped['exit'] == 0)
+        reading = releases()
+        r.check('releases 对着不在的目录：退出码 1，说历史目录必须已经存在、不自动创建；发布命令带着它也是（池不动）',
+                reading['exit'] == 1 and not reading['report'] and 'must exist' in reading['stderr']
+                and (lambda d: d['exit'] == 1 and 'history' in d['stderr'] and on_disk() == noted.text)(control(Snapshot([*routes, 'h8']), *history_flags())))
+    finally:
+        if away.exists():
+            os.rename(away, HISTORY)
+    r.check('目录放回去之后恢复正常：releases 对得上（match）', (releases()['report'].get('comparison') or {}).get('status') == 'match' and HISTORY_LOG.read_bytes() == log_original)
+
+    try:
+        HISTORY_LOG.write_bytes(b'this line is not a release\n' + log_original)   # 中间的一行读不懂：历史坏了，不猜，不跳过
+        dark, seen = one_boot()
+        r.check('日志写坏（第一行读不懂，后面的还在），断电，docker compose up -d：与历史好好的时候一样：IN_PLACE、IN_SYNC，先后照部署文件来，请求照常',
+                booted(dark, seen))
+        keeper_first, revived, healed, put_back, stopped, said = works_with_a_bad_history()
+        r.note('日志坏了时带着 --history-dir 的看守：第一行', brief(keeper_first))
+        r.note('...第一行里的 history_notes', keeper_first.get('history_notes'))
+        r.check('日志坏了时带着 --history-dir 的看守：照常启动，第一行 whole、IN_SYNC，没有动手；这一行的 history_notes 说历史坏了、补不成；'
+                '杀掉网关它照常起回来（start，修好了，IN_SYNC），请求照常；有人绕过发布器放了文件它照常收回去（RESTORED）；叫停它以 0 退出',
+                whole(keeper_first) and keeper_first.get('action') == '' and reconciled(keeper_first).get('outcome') == 'IN_SYNC'
+                and any('damaged' in note for note in keeper_first.get('history_notes') or [])
+                and revived.get('action') == 'start' and revived.get('repaired') is True and reconciled(revived).get('outcome') == 'IN_SYNC'
+                and healed is not None and restored(put_back) and on_disk() == noted.text and stopped['exit'] == 0)
+        reading, before = releases(), pool_now()
+        refused = control(Snapshot([*routes, 'h9']), *history_flags())
+        r.check('日志坏了时：releases 退出码 1，说历史坏了；publish 带着它也是退出码 1，池什么都没有动（先写后做）；对账带着它，结局和退出码照常（IN_SYNC，0）',
+                reading['exit'] == 1 and 'damaged' in reading['stderr'] and refused['exit'] == 1 and not refused['report'] and 'damaged' in refused['stderr']
+                and pool_now() == before and (lambda d: outcome(d) == (0, 'IN_SYNC') and 'damaged' in d['stderr'])(control_reconcile(*history_flags())))
+    finally:
+        HISTORY_LOG.write_bytes(log_original)
+    again = control(Snapshot([*routes, 'h10']), *history_flags())
+    keeper = Keeper('--interval', '1s', '--reconcile-interval', '3s', *history_flags())
+    plain_line = keeper.next(lambda line: True, 20)
+    stopped = keeper.stop()
+    listing = releases()
+    r.check('日志改回去之后一切正常：publish 带着历史 ACTIVE，新的一条；带着 --history-dir 的看守第一行没有 history_notes，标准错误上什么都没有；releases 对得上',
+            outcome(again) == (0, 'ACTIVE') and again['report'].get('release') == history_newest() and quiet(plain_line) and not stopped['stderr']
+            and reconciled(plain_line).get('outcome') == 'IN_SYNC' and (listing['report'].get('comparison') or {}).get('status') == 'match')
+    r.check('这一条用例做完之后池是好的：三个常驻容器都在，请求照常，配置目录里没有多出东西；池的目录下是 config、gateway.env、history、tls，'
+            '历史目录是 0700',
+            all(container(service).get('running') for service in LONG_RUNNING) and answering() and leftovers() == CLEAN
+            and sorted(p.name for p in POOL.iterdir()) == ['config', 'gateway.env', 'history', 'tls'] and mode(HISTORY) == 0o700)
 
 
 if __name__ == '__main__':

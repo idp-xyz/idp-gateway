@@ -5,7 +5,7 @@
 跑的池就是正式的部署文件（[`deploy/compose`](../../../deploy/compose/README.md)）描述的那一个，所以也验证部署文件本身：启动的先后，启动时对不上会怎样，停；以及守着这个池的看守。
 
 > 这是机制验证，不是验收，通过不改变验收矩阵里任何用例的 `NOT_RUN`。  
-> 配置是一份只有几条路由的小文件；没有 JWT、ExtAuthZ 和凭证，那些在黑盒套件里。`SH-01` 到 `SH-08` 由这个脚本扮演发布器，看的是网关和这种发布方式本身；`SH-09` 到 `SH-11` 跑的是真的发布器 `cmd/gateway-control` 的三条命令：`publish`、`reconcile`、`restart`；`SH-12` 到 `SH-14` 看部署文件，里面有发布器的第四条命令 `place`；`SH-15` 是网关自己的一个性质；`SH-16` 到 `SH-19` 看看守，也就是第五条命令 `keep`：真的看守在本机上跑着，脚本去杀容器、杀发布器、绕过发布器写文件。`SH-20` 读看守给出的指标；`SH-21` 起一个真的 Prometheus，装着部署目录里的告警规则。`SH-22` 看出口的规则在这个池里是不是真的装上了；它排在 `SH-15` 后面跑。  
+> 配置是一份只有几条路由的小文件；没有 JWT、ExtAuthZ 和凭证，那些在黑盒套件里。`SH-01` 到 `SH-08` 由这个脚本扮演发布器，看的是网关和这种发布方式本身；`SH-09` 到 `SH-11` 跑的是真的发布器 `cmd/gateway-control` 的三条命令：`publish`、`reconcile`、`restart`；`SH-12` 到 `SH-14` 看部署文件，里面有发布器的第四条命令 `place`；`SH-15` 是网关自己的一个性质；`SH-16` 到 `SH-19` 看看守，也就是第五条命令 `keep`：真的看守在本机上跑着，脚本去杀容器、杀发布器、绕过发布器写文件。`SH-20` 读看守给出的指标；`SH-21` 起一个真的 Prometheus，装着部署目录里的告警规则。`SH-22` 看出口的规则在这个池里是不是真的装上了；它排在 `SH-15` 后面跑。 `SH-23` 到 `SH-30` 看发布历史（ADR-0013）：真的发布器、真的看守，对着真的池，历史目录现建在本次运行的池的目录下；`SH-23` 排在 `SH-19` 前面跑，别的排在告警的用例后面。  
 > "断电"是把三个常驻容器同时强行杀掉来模拟的。真的重启一台机器没有做过。部署目录里的两个 systemd 单元没有装到哪台机器上跑过：看守在这里由脚本直接起，不经 systemd。
 
 ## 怎么跑
@@ -40,13 +40,14 @@ python3 tests/integration/compose/units.py            # 一分钟左右；两个
 
 - **启动**：`docker compose up -d`。`netns` 和 `place` 一起开始，后面四个（`egress`、网关、`confirm`、`front`）按上表的顺序一个等一个（第 11 点）；`egress-watch` 在 `egress` 跑完之后启动，别的都不等它。七个容器都写明了不设重启策略。
 - **配置**：本机上的一个目录，只读挂进网关容器。挂的是目录，不是 `config.yaml` 这一个文件。
+- **发布历史**（`SH-23` 到 `SH-30`）：池的目录下的第三个子目录 `history/`，与 `config/`、`tls/` 并列，0700。它不是服务，不在 `compose.yml` 里：网关、`front`、`egress` 的容器都不挂它，`place` 和 `confirm` 不给 `--history-dir`。套件在 `SH-23` 之前不建它（要查没有它），`SH-19` 为看守的单元建一个空的（单元的命令行里有 `--history-dir ${POOL_DIR}/history`），`SH-24` 起现建；池的名字用套件的项目名 `idp-gateway-compose`。碰它的只有套件跑的 `publish`、`restart`、`rollback`、`releases`、`release`、`reconcile` 和看守，都由脚本另给 `--history-dir`、`--pool`。
 - **发布**：发布器在这个目录里写一个临时文件，落盘，再改名盖掉 `config.yaml`。改名是原子的，网关读到的要么是旧的整份，要么是新的整份。
 - **回读**：发布器从本机连回读口，出示自己的客户端证书，读 `/config_dump` 和 `/api/runtime`。写法与黑盒套件的 `P1-RB-03` 相同。发布器的证书不在网关容器里。
 - **证书**：另一个只读挂载的目录，里面是回读口的服务端证书、网关去问 PDP 用的客户端证书和 CA。
 - 七个容器的根文件系统都只读。装出口规则的两个（`egress`、`egress-watch`）以 root 运行，只有 `NET_ADMIN` 一个 capability；其余五个不带任何 capability。网关以运行脚本的那个本机用户的身份运行；会话密钥经环境变量 `SESSION_KEY` 给。它和 `front` 的停止时限设的都是 60 秒（`stop_grace_period`）。
-- **真的发布器**（`SH-09` 到 `SH-11`）：`gateway-control` 直接在本机上运行，与脚本是同一个用户。`publish` 和 `restart` 用本机的 docker 命令另起一个临时容器做离线加载；那个容器的回读口映射到本机回环的 27618，挂的证书目录是另外现做的一套（另一个 CA），比池的那个多一个文件。`restart` 还用 docker 命令重启网关容器。`reconcile` 不用 docker。发布器在配置目录里留两个自己的文件：锁文件 `.config.yaml.lock` 和记录 `.config.yaml.confirmed`（第 9 点）。
+- **真的发布器**（`SH-09` 到 `SH-11`，`SH-23` 起另有历史的三条命令）：`gateway-control` 直接在本机上运行，与脚本是同一个用户。`publish` 和 `restart` 用本机的 docker 命令另起一个临时容器做离线加载；那个容器的回读口映射到本机回环的 27618，挂的证书目录是另外现做的一套（另一个 CA），比池的那个多一个文件。`restart` 还用 docker 命令重启网关容器。`reconcile` 不用 docker。发布器在配置目录里留两个自己的文件：锁文件 `.config.yaml.lock` 和记录 `.config.yaml.confirmed`（第 9 点）。
 - **`place` 和 `confirm` 两步**跑的是同一个 `gateway-control`：脚本把它构建成静态链接的，部署文件把它挂进 nginx 的那个镜像里跑，身份也是运行脚本的那个本机用户。发布器的证书只挂给 `confirm`。
-- **看守**（`SH-16` 到 `SH-19`）：`gateway-control keep` 直接在本机上运行，由脚本起，不经 systemd，与脚本是同一个用户。它跑 docker compose 时用的项目名、两个 compose 文件（部署文件和 `echo.yml`）和变量文件由参数给它，与脚本自己跑 docker compose 时给的相同。`SH-19` 不给这些：两个 systemd 单元里写的命令原样在一个放着 `compose.yml` 和 `.env` 的目录里跑，像装好的机器上那样，那个池没有 `echo`。看一眼和对账的间隔在多数步骤里设得比默认的短（第 14 点）。
+- **看守**（`SH-16` 到 `SH-19`，`SH-26` 到 `SH-30` 里另带 `--history-dir`）：`gateway-control keep` 直接在本机上运行，由脚本起，不经 systemd，与脚本是同一个用户。它跑 docker compose 时用的项目名、两个 compose 文件（部署文件和 `echo.yml`）和变量文件由参数给它，与脚本自己跑 docker compose 时给的相同。`SH-19` 不给这些：两个 systemd 单元里写的命令原样在一个放着 `compose.yml` 和 `.env` 的目录里跑，像装好的机器上那样，那个池没有 `echo`。看一眼和对账的间隔在多数步骤里设得比默认的短（第 14 点）。
 
 ## 结果
 
@@ -65,6 +66,7 @@ python3 tests/integration/compose/units.py            # 一分钟左右；两个
 | 19 个用例、212 项检查 | 每轮 574 到 583 秒 | 第 14 点 |
 | 21 个用例 | 每轮 669 到 686 秒 | 第 15 点 |
 | 22 个用例、251 项检查 | 每轮 659 到 665 秒 | 第 16 点 |
+| 30 个用例、303 项检查（加上 `SH-23` 到 `SH-30`） | 每轮 790 到 838 秒 | 第 17 点 |
 
 11 个用例时，套件用的是自己的一份 compose 文件，池里只有 `front` 和网关两个容器，网关接在 `front` 的网络命名空间里。改成跑部署文件之后，这 11 个用例里改过的是 `SH-01`（按五个服务的样子查，开头多了"还没有记录时启动"）和 `SH-10` 的最后一步（网关由启动命令起起来）。加看守的四个用例时，前 15 个用例的步骤和检查都没有改。同样的量在后来的三轮里相近：
 
@@ -106,6 +108,14 @@ python3 tests/integration/compose/units.py            # 一分钟左右；两个
 | SH-20 | 看守的指标，`--metrics-listen`。池先起来、看守还没启动：那个地址上没有人。安稳的池上它只写开头一行，指标照样在走：隔几秒再读，看过的眼数多了，上一眼和上一次对账的时刻往前走。地址上只有 `/metrics`，只接受 GET 和 HEAD，只听回环。一次发布占着池时网关死了：池是 `down`，被占着，启动命令没跑；锁放开之后它把网关起回来。网关起不来（回读口的私钥不见了）：接连没修好的次数在增加；私钥放回去，下一次再试就好了。有人绕过发布器放一份文件：往回放的次数加一，容器没动。叫停它：以 0 退出，地址上没有人了。地址被占着时它不启动，退出码 1；`--metrics-listen` 是空的时退出码 2，池没有被动过 | PASS |
 | SH-21 | 部署目录里的告警规则。`promtool check rules` 说 8 条写法没有毛病，`promtool test rules`（造的数）通过。一个真的 Prometheus 3.14.0（主机网络，只听回环）读真的看守：安稳时一条都不响。绕过发布器放一份文件，`GatewayPoolSnapshotPutBack` 响了。网关死了而池被占着，`GatewayPoolNotWhole` 在等它的 2 分钟；锁放开、网关回来之后这条撤了，没有响，`GatewayPoolBroughtBack` 响了。叫停看守之后 `GatewayKeeperDown` 先是 pending，再响，从看守停下算起 60 到 75 秒。拆掉 Prometheus 之后池还好好的 | PASS |
 | SH-22 | 出口的规则。`egress` 已经以退出码 0 跑完、`egress-watch` 在跑，两个都是 root，除了 `NET_ADMIN` 没有别的 capability。从池的网络命名空间里连：钉着的两处（后端的名字钉在它的地址上，回读路由转给的管理地址）和 `front` 转给网关的那个端口连得上，后端那个地址的另一个端口、回环上网关的指标端口、一个不相干的地址、IPv6 的回环都被规则拒绝；`egress-watch` 重写规则的 8 秒里连了不少于 500 次，每一次都被拒绝。部署说明里的 `docker compose run --rm --no-deps egress forget`：退出码 0，两处重新钉过，钉着的没有变，请求照常。断电：`egress-watch` 跟着 `netns` 死了；再跑启动命令，`egress` 在这次启动里重新跑，在网关启动之前以 0 跑完，新的命名空间里规则在。`egress` 读不了配置（配置文件是 0600）：`docker compose up -d` 以非零码结束，`egress` 在标准错误上说 `cannot read`，网关、`confirm`、`front`、`egress-watch` 都没有启动，`place` 照常跑完，配置文件没有被动过；改回 0644 再跑启动命令，池又是完整的 | PASS |
+| SH-23 | 不给 `--history-dir` 时什么都不写。前面各条用例（`SH-01` 到 `SH-18`、`SH-22`）跑完之后，池的目录下只有 `config`、`gateway.env`、`tls`，没有历史目录；整个运行目录里没有 `releases.log`，也没有历史的 `snapshots` 目录；配置目录里没有多出文件。再不带历史发布同一份快照、对一次账：`ACTIVE`、`IN_SYNC`，输出里没有 `release` 和 `history_settled`，标准错误上什么都没有；只给 `--pool` 不给 `--history-dir`：退出码 2。之后还是没有历史目录 | PASS |
+| SH-24 | 带着历史发布。`publish --history-dir --pool --note`：`ACTIVE`，输出里有编号 1；`releases.log` 里这一条依次是 `STAGED`、`APPLYING`（`replace-file`）、`OBSERVING`、`ACTIVE`；快照存在 `snapshots/` 下，内容与发布的一字不差，动手之前放着的那份也存了；历史目录和 `snapshots/` 是 0700，日志和快照文件是 0600。`releases` 列出它，与池的记录比对得上；`release --id 1` 给出每一步、发起人（证书上的身份和操作系统账号，写明没有人核实）、备注（也标着未经核实）。再发布一份：前一条读出来是 `SUPERSEDED`。带重启的发布：多一步 `APPLYING`（`restart-gateway`） | PASS |
+| SH-25 | 先写后做。历史目录和日志不可写时 `publish`：退出码 1，没有 JSON，标准错误说是发布历史写不进去、池什么都没有动；配置文件、池的记录、网关进程、回读摘要、历史的日志和快照名单都一个字节没变，请求照常，没有留下别的东西。目录改回来之后同一条命令成功，历史里是完整的四步 | PASS |
+| SH-26 | 发布器死在半路，看守收拾，历史跟着有了结局。带历史的发布器刚把文件换上去就被杀：这一条停在 `APPLYING`；不带历史对一次账把记录的那份放回去，历史一个字节没动；再杀一次；带着 `--history-dir` 的看守在第一次对账放回去（`RESTORED`），并把最新的补成 `FAILED`、更早没有结局的补成 `OVERTAKEN`。带重启的发布做到一半被杀：看守的对账是 `RESTART_PENDING`，这一条补成 `FAILED`；不给快照的 `restart` 把启动设置带回来 | PASS |
+| SH-27 | 收尾那一行没有写上。成功发布之后，脚本把 `releases.log` 的最后一行（`ACTIVE`）去掉：`releases` 指出对不上；看守的下一次对账把它补成 `ACTIVE`（原因里写明事后补的），比对重新对得上。另一次：去掉最后一行之后不等看守，直接再跑同样的 `publish`：补全那一条，不另开一条，不再写文件。`ACTIVE_NOT_RECORDED` 和退出码 8 本身没有在真的池上造：卡不准那一瞬间，只有单元测试 | PASS |
+| SH-28 | 回滚。`rollback --to 1`：`ACTIVE`，新的一条，记着回到的是第 1 条；网关在跑的又是那份快照（回读的摘要等于第 1 条当时确认的），路由回来了；历史里已有的各行一个字没变。回到现在放着的、回到 `FAILED` 的、回到 `OVERTAKEN` 的、回到没有的编号：`REFUSED`，池没有动。把 `snapshots/` 里一份快照改掉一个字节再回滚：退出码 1，池没有动 | PASS |
+| SH-29 | 漏给 `--history-dir`。不带历史的发布之后，`releases` 指出对不上（`mismatch`），退出码仍是 0；带着历史再发布一次，又对得上 | PASS |
+| SH-30 | 开机不靠历史。历史目录挪走，断电，`docker compose up -d`：`place` 是 `IN_PLACE`，`confirm` 是 `IN_SYNC`，请求照常；带着 `--history-dir` 的看守照常工作（杀掉网关它起回来，绕过发布器放的文件它收回去），说出历史打不开。日志写坏（第一行读不懂）：同样；`releases` 和 `publish` 带着它退出码 1，`reconcile` 的结局不变。放回去之后一切正常 | PASS |
 
 ## 看清的事
 
@@ -511,7 +521,7 @@ python3 tests/integration/compose/units.py            # 一分钟左右；两个
 
 Prometheus 容器的 `/prometheus` 是 tmpfs。进程不是 root 时，这个 tmpfs 要写成运行它的用户的 uid 和 gid，不然它一启动就以 1 退出，什么都读不到。测试里的 Prometheus 每秒读一次；平时的 Prometheus 是 15 秒。两次读之间发生又过去的事它看不到，除了那两条数次数的。
 
-这两条没有做对照（把做法改坏几处，看有没有用例不通过）。`units.py` 仍是 6/6：看守单元的命令行末尾是 `--metrics-listen`，值取自 `.env`。
+这两条没有做对照（把做法改坏几处，看有没有用例不通过）。`units.py` 仍是 6/6：看守单元的命令行里有 `--metrics-listen`，值取自 `.env`（2026-11-19 起它后面还有 `--history-dir`、`--pool`，见第 17 点）。
 
 ### 16. 出口的规则：网关启动之前装好，`egress-watch` 守着
 
@@ -554,9 +564,44 @@ Prometheus 容器的 `/prometheus` 是 tmpfs。进程不是 root 时，这个 tm
 
 第 13 处：`SH-22` 里"断电：`egress-watch` 跟着 `netns` 死了"那一项照样通过。脚本发现命名空间里没有地址了自己也会退出，只是慢一些：那一遍记下的是 0.95 秒、退出码 1；没有改坏时三轮都是 0.06 秒、退出码 137（上面"断电之后"）。所以做对照时这一项检查分不出起作用的是共用 PID 命名空间，还是脚本自己发现命名空间没了；只有 `tests/contracts` 的那两条测试发现了这一处。之后这项检查收紧了：还要求退出码是 137，也就是随 `netns` 的 PID 命名空间被内核杀掉的。收紧之后在副本里对这一处再跑：这一项不通过（那一遍 1.11 秒、退出码 1），别的 14 项通过；不改坏时 15 项全过（0.06 秒、退出码 137）。套件随后连跑的三轮里这一项记下的是 0.07、0.1、0.07 秒，退出码都是 137。`pin-egress.sh` 的 11 处在隔离测试里各是哪个用例发现的，见 [`tests/integration/egressnet/README.md`](../egressnet/README.md) 的"对照"。第 3 处带偶然性，这一次第一遍就发现了，没有多跑。
 
+### 17. 发布历史：真的发布器、真的看守，对着真的池
+
+`SH-23` 到 `SH-30`，[ADR-0013](../../../docs/adr/ADR-0013.md) V1.1。第 14 点是看守，第 9 到 11 点是发布器；这一点看的是它们加上历史之后：历史记得对不对，写不进去时池动不动，发布器死在半路之后历史跟着怎么样，开机的路上碰不碰它。
+
+**做法。**
+
+- **历史目录现建在本次运行的池的目录下**（`.run/pool/history`），与 `config`、`tls` 并列，0700，池的名字是套件的项目名。部署文件一个字没改：网关、`front`、`egress` 的容器都不挂它，`place` 和 `confirm` 不给 `--history-dir`。带历史的命令由脚本另给 `--history-dir`、`--pool`（`control`、`control_restart`、`control_killed`、`restart_killed` 多了一个可以不给的参数），三条新命令各有一个函数（`releases`、`release_detail`、`rollback`）。读历史的两处（`releases.log` 逐行读 JSON，`snapshots/` 逐字节比）不经发布器，是脚本自己读的。
+- **`SH-23` 排在 `SH-19` 前面跑**，别的在告警的用例后面。原因是 `SH-23` 要在历史目录出现之前查"不带 `--history-dir` 时什么都不写"，而 `SH-19` 要为看守的单元建一个。别的八个用例接着 `SH-21` 留下的池：记录是 `opening`，三个常驻容器在跑；做完之后池是好的，记录是最后一次发布的那一份。
+- **每一步都用真的东西**：真的发布器（离线加载另起临时容器）、真的看守（`--interval 1s --reconcile-interval 5s` 或 3s）、真的网关和 `docker kill`、`power_cut()` 加 `docker compose up -d`、`SIGKILL`。`SH-25` 用文件权限造"写不进去"：历史目录和 `snapshots/` 改成 0500，`releases.log` 改成 0400，`try`/`finally` 改回（照黑盒 `P1-RV-10` 的做法：root 不受权限约束，那时这一项记为不通过，不悄悄跳过）。`SH-27` 用脚本去掉 `releases.log` 的最后一行，模拟"池已经换了、收尾那一笔没写进去"。`SH-28` 把一份快照文件的第一个字节改掉，`finally` 里写回原样。
+- **`SH-19` 的改动**（唯一改到现有用例的地方）：看守单元的命令行多了 `--history-dir ${POOL_DIR}/history --pool idp-gateway-pool`，所以 `SH-19` 开始时在池的目录下建一个空的历史目录（不然看守会在标准错误上说历史打不开，那一项"标准错误上什么都没有"就不成立了），那一项检查的比较从"命令行以 `--metrics-listen <地址>` 结尾"改成"以 `--metrics-listen <地址> --history-dir <池的目录>/history --pool <部署文件的项目名>` 结尾"，文字跟着改。别的检查没有动。
+
+**看到了什么**（单独跑这八个用例得到的；整套里的数字见"结果"）：
+
+- **带着历史发布。** `publish --history-dir … --note` 得 `ACTIVE`，输出里 `release` 是 1。日志里这一条是 `STAGED`、`APPLYING`（`replace-file`）、`OBSERVING`、`ACTIVE`，第一行到最后一行相隔 1.1 秒左右（离线加载之后，换文件、等网关）。快照文件存在，内容与发布的一字不差，动手之前放着的那一份也一并存下了；权限与 ADR 一致。`release --id 1` 里发起人的身份是 `spiffe://idp.test/gateway-control/publisher`（证书上的那个 URI），账号是 `tops (uid 1000)`，两样都带着"进程自己报的，没有人核实"；备注原样在，也标着未经核实。再发布一份：第 1 条读出来是 `SUPERSEDED`，日志里它的最后一行仍是 `ACTIVE`。带重启的发布的日志：`STAGED`、`APPLYING`（`replace-file`）、`APPLYING`（`restart-gateway`）、`OBSERVING`、`ACTIVE`。
+- **先写后做。** 历史写不进去时 `publish`：退出码 1，标准错误是 `the release history could not be written, so nothing was done to the pool: history: open …/snapshots/.<sha>.tmp: permission denied`。配置文件、池的记录、网关进程、回读摘要、日志、`snapshots/` 的名单都没有变，没有留下临时文件。改回来之后同一条命令成功，编号接着上一条（失败的那次没有占编号）。
+- **发布器死在半路。** 带历史的发布器刚把文件换上去就被 `SIGKILL`：历史停在 `STAGED`、`APPLYING`（`replace-file`），没有 `OBSERVING`，没有结局。不带历史的对账把记录的那一份放回去，日志一个字节没动。再杀一次；带着 `--history-dir` 的看守第一次对账就放回去（`RESTORED`），那一行的 `reconcile.history_settled` 是 `[6, 7]`：第 7 条（最新的）补成 `FAILED`，原因写着池的记录确认的是哪一份、这一份没有生效；第 6 条补成 `OVERTAKEN`，原因说后一条（7）开始时它没有结局，是否生效不知道。步骤名都是 `reconcile`。
+- **带重启的发布做到一半被杀**（docker 刚把网关重新起来，发布器就被杀）：历史停在 `STAGED`、`APPLYING`（`replace-file`）、`APPLYING`（`restart-gateway`）、`OBSERVING`。看守的对账是 `RESTART_PENDING`（记录的那一份放回去了，启动设置还差一次重启），这一条补成 `FAILED`，原因里除了"池的记录确认的是别的快照，它没有生效"，还带着对账说的那一段（启动设置不同，`terminationMaxDeadline`）。网关这时已经带着新的启动设置在跑：`FAILED` 说的是"这份快照没有成为池的记录"，不是"池没有被动过"。不给快照的 `restart` 把启动设置带回来（`ACTIVE`，不再换文件，历史是 `STAGED`、`APPLYING`（`restart-gateway`）、`OBSERVING`、`ACTIVE`）。
+- **收尾那一行没有写上。** 去掉最后一行之后这一条停在 `OBSERVING`，`releases` 指出对不上（池的记录是这一份，历史里最后一条 `ACTIVE` 是更早的），退出码仍是 0，标准错误上有一句。看守第一次对账（`IN_SYNC`）把它补成 `ACTIVE`，步骤名 `reconcile`，原因是"池的记录确认的是这份快照，确认在这一条开始之后；结局是事后补上的"，比对重新对得上。不等看守、再跑同样的 `publish`：`ACTIVE`，`replaced` 为假，`release` 还是原来的编号，`history_settled` 是 `[编号]`，补上的那一行步骤名是 `publish-again`，没有另开一条。
+- **回滚。** `rollback --to 1`：`ACTIVE`，换了文件，新的一条，`rolled_back_to` 是 1，`supersedes` 是回滚之前最后一条 `ACTIVE`；回读摘要等于第 1 条当时确认的摘要，也等于这次的期望值；日志的前面一整段就是回滚之前的日志，多出来的四行都是新的那一条的。再 `rollback --to 1`：`REFUSED`，退出码 3，原因 `this is the snapshot in place now: there is nothing to roll back to`，日志和池一个字节没变。回到 `FAILED` 的、`OVERTAKEN` 的：`REFUSED`，原因 `never reached ACTIVE (it ended FAILED)`、`… (it ended OVERTAKEN)`；没有的编号：`REFUSED`，`there is no release 999 in the history of this pool`。快照文件改掉一个字节：退出码 1，没有 JSON，`a stored snapshot does not have the SHA-256 it is stored under`，`nothing was done to the pool`，池没有动。
+- **漏给 `--history-dir`。** 不带历史发布一份，`releases` 的比对是 `mismatch`，退出码仍是 0，`detail` 里写着池的记录确认的是哪一份、历史里最后一条 `ACTIVE` 是第几条，标准错误上有一句；带着历史再发布一次，比对又是 `match`。
+- **开机不靠历史。** 历史目录挪走，断电（三个常驻容器同时被杀），`docker compose up -d`：`place` 是 `IN_PLACE`，`confirm` 是 `IN_SYNC`，先后照部署文件，`confirm` 跑完之前没有应答，请求照常；它们的输出里没有 `release`。这时启动带着 `--history-dir` 的看守：它没有退出，第一行是 `whole`、`IN_SYNC`，没有动手；标准错误上说 `the release history could not be opened, so nothing in it will be completed`，那一行的 `history_notes` 说补不成，原因是目录不在。杀掉网关：它起回来（`start`，修好了，`IN_SYNC`）；绕过发布器放一份文件：它下一次对账收回去（`RESTORED`）。`releases` 对着不在的目录：退出码 1。日志写坏（第一行读不懂，后面的还在）：开机一样；看守照常启动，`history_notes` 说 `the release history is damaged` 和读不懂的是哪一行；`releases` 和带历史的 `publish` 退出码 1，`publish` 没有动池；带历史的 `reconcile` 结局和退出码照常（`IN_SYNC`，0），标准错误上说一句。放回去之后恢复正常，看守的第一行没有 `history_notes`。
+
+**没有覆盖的。**
+
+- **`ACTIVE_NOT_RECORDED` 和退出码 8 本身。** 它要收尾那一笔恰好写不进去，而池已经是 `ACTIVE`：在真的池上卡不准那一瞬间（`SH-25` 造的是动手之前就写不进去）。只有单元测试。`SH-27` 用"去掉最后一行"造的是它留下的状态（历史停在 `OBSERVING`，池已经换了），不是它本身。
+- 磁盘满、文件系统只读、历史目录的属主不对：造的只有目录和日志文件不可写（`SH-25`）。
+- 回滚到要重启才生效的一份（`--with-restart`）没有在真的池上跑；老快照用现在的镜像加载不了而被 `REFUSED`，只有单元测试。
+- 看守的单元带着历史在系统级的 systemd 里跑：`SH-19` 原样跑了那条命令，历史目录是空的，没有一条停在半路的发布。
+- 历史很长时 `releases`、看守每分钟的对账读整份日志要多久：没有量。
+- 同一秒内的先后：池的记录里的确认时刻只到秒，同一份快照先后发布两次、第二次中途被杀、而两次确认落在同一秒内时，对账会把第二次补成 `ACTIVE`；单元测试里有"早于开始就不补"，没有在真的池上造这个。
+- 这八个用例没有做对照（把做法改坏几处，看有没有用例不通过）。
+
+**连跑三轮**（2026-11-19，定稿的脚本）：都是 30/30、303 项检查（原有的 251 项里 `SH-19` 的一项因为单元的命令行多了两个参数换了文字，另加这八个用例的 52 项），三轮的检查项逐项相同，每轮 838、790、795 秒；`SH-15` 三轮都通过。在这三轮之前，写用例的时候整套另跑过两遍：第二遍 30/30、808 秒；第一遍是 29/30、799 秒，不通过的是 `SH-15`（第 13 点）的一项，"后端起来 20 秒之后网关对这条路由仍然答 503"：这一遍 20 秒之后得到的是 200。那一遍里 `SH-15` 的别的检查都通过（后端的名字解析不了时网关答 503，说名字解析失败；重启网关之后 0.06 秒请求就得到 200）。`SH-15` 在历史的路上之前，没有碰过历史，也没有给发布器或看守加任何参数；没有为了让它通过改它的检查。第 13 点写的是"测试里等了 20 秒，另一次单独的实验里等了 240 秒，都没有恢复；多久会自己恢复没有量到"：这一遍的 200 与那句话不合，事后查了原因（2026-11-19，套件之外的实验）。先在同样的池上重做这一段：第一个 503 之后安静 5、15、20、22、25、30、40、60、90 秒各一遍再发一个请求，九遍都还是 503；另一遍每 3 秒发一个请求，60 秒里 20 个都是 503。然后在隔离网络里（`tests/integration/egressnet` 的一份副本，解析器是替身）让解析器对网关的第一次查询作不同的回答，之后改成正常给出地址：答"名字不存在"而不带可缓存的时间，3 秒时的请求已经是 200；答"名字不存在"并带 15 秒的否定缓存时间（SOA），3、8、12 秒时是 503，17 秒起是 200；带 600 秒的，50 秒时仍是 503；答出错（SERVFAIL）或者不应答，2 秒时的请求已经是 200。再从一个 compose 网络里的容器经 Docker 的解析器去问这台机器真实的上游：对不存在的名字答的是"名字不存在"，SOA 的 TTL 是 3600 秒。所以：**网关照着解析器给的否定缓存时间办事**。池里后端的名字第一次用到时不存在，上游答的可以缓存一小时，网关就在这一小时里一直答 503，到时候自己会好；第 13 点里"等了 20 秒、240 秒都没有恢复"是这个原因，"名字解析得了之后也不恢复"的说法不对。那一遍的 200，是上游当时没有给出可以缓存的否定回答（那一阵这台机器的代理很不稳）。`SH-15` 因此依赖本机的上游解析器怎么答，这是它偶发不通过的原因，也是 Clash 开着 fake-IP 时它过不了的原因。第 13 点的正文和 `SH-15` 的改法在这之后另做。
+
 ## 没有覆盖的
 
 - 发布器的几个只有单元测试的分支（见第 10 点末尾），看守的几个（见第 14 点末尾）。
+- 发布历史的几处：`ACTIVE_NOT_RECORDED` 和退出码 8 本身，磁盘满和文件系统只读，`rollback --with-restart`，历史很长时的读取时间，同一秒内的先后；看守的单元带着历史在系统级 systemd 里跑。见第 17 点末尾。
 - **真的重启一台机器，或者重启 docker。** 这里的断电是把三个常驻容器同时强行杀掉。docker 守护进程重启之后各容器是什么状态、两个 systemd 单元在开机过程中跑得是不是时候，都没有看过。
 - **两个 systemd 单元装在一台机器上的样子。** 没有装过。做过的是三样：用 `systemd-analyze verify` 查写法；它们之间的关系，在用户级的 systemd 里用替身命令跑（`units.py`）；它们里面写的命令，不经 systemd 原样跑（`SH-19`）。没有看过的：系统级的 systemd，看守换了账号（`User=`）之后用不用得了 docker，与 `docker.service` 的先后，开机和关机。池的单元以 root 跑启动命令、看守以另一个账号跑同一条命令时，容器会不会被重建，也没有看过：`SH-19` 里两条命令是同一个用户跑的。
 - 看守修好一个 `orphaned` 的池之后，出口的规则在不在：只在套件之外看过一次（第 16 点），没有检查看着它。`egress` 失败只试过读不了配置这一种（`SH-22`）；别的失败方式，比如 iptables 装不上，没有试。`egress-watch` 死了而 `netns` 还在时会怎样，没有试。
