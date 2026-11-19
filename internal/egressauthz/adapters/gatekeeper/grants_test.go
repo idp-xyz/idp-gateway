@@ -2,6 +2,7 @@ package gatekeeper
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"go.idp.xyz/idp-gateway/internal/egressauthz/ports"
+	"go.idp.xyz/idp-gateway/internal/platform/workloadtls"
+	"go.idp.xyz/idp-gateway/internal/platform/workloadtls/tlstest"
 )
 
 const pdpToken = "pdp-token-for-tests"
@@ -264,5 +267,134 @@ func TestLoadToken(t *testing.T) {
 		} else if strings.Contains(err.Error(), pdpToken) {
 			t.Errorf("%s: 错误信息里有令牌", name)
 		}
+	}
+}
+
+// ---- 这一跳的工作负载 mTLS ---------------------------------------------------------------
+
+const (
+	pdpName     = "gatekeeper.idp.test"
+	gatewayName = "spiffe://idp.test/egress/gateway-authz"
+	otherName   = "spiffe://idp.test/apps/parcel-service"
+)
+
+// mtlsPDP 是一个要求并验证客户端证书的 PDP：服务端证书由 serverCA 签发，客户端证书要由 clientCA 签发。
+type mtlsPDP struct {
+	server *httptest.Server
+	calls  atomic.Int32
+	peer   atomic.Value // 到达处理器的连接上，对端证书里的 URI
+}
+
+func newMTLSPDP(t *testing.T, serverCA, clientCA *tlstest.CA) *mtlsPDP {
+	t.Helper()
+	p := &mtlsPDP{}
+	leaf := serverCA.Issue("pdp", nil, pdpName)
+	p.server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p.calls.Add(1)
+		p.peer.Store(workloadtls.PeerIdentity(r.TLS))
+		says(http.StatusOK, `{"decision":true,"reason":"rebac:use"}`)(w, r)
+	}))
+	p.server.TLS = &tls.Config{
+		MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{leaf.Certificate},
+		ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientCA.Pool(),
+	}
+	p.server.StartTLS()
+	t.Cleanup(p.server.Close)
+	return p
+}
+
+func (p *mtlsPDP) grants(t *testing.T, client *tls.Config) *Grants {
+	t.Helper()
+	g, err := New(Config{BaseURL: p.server.URL, Token: ports.NewSecret(pdpToken), TLS: client, Timeout: 500 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return g
+}
+
+func clientTLS(t *testing.T, serverCA *tlstest.CA, leaf tlstest.Leaf, name string) *tls.Config {
+	t.Helper()
+	config, err := workloadtls.ClientConfig(leaf.CertFile, leaf.KeyFile, serverCA.File(), name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return config
+}
+
+func TestPresentsItsWorkloadCertificate(t *testing.T) {
+	ca := tlstest.NewCA(t, "workload CA")
+	p := newMTLSPDP(t, ca, ca)
+	mine := ca.Issue("gateway-authz", []string{gatewayName})
+	granted, err := p.grants(t, clientTLS(t, ca, mine, pdpName)).MayUse(context.Background(), "client-1", "tenant-1", "account-blue")
+	if err != nil || !granted {
+		t.Fatalf("%v, %v", granted, err)
+	}
+	if got, _ := p.peer.Load().(string); got != gatewayName {
+		t.Fatalf("PDP 看到的对端身份是 %q", got)
+	}
+}
+
+func TestPDPThatDoesNotAcceptOurCertificateIsNoConclusion(t *testing.T) {
+	ca, other := tlstest.NewCA(t, "workload CA"), tlstest.NewCA(t, "someone else's CA")
+	mine := ca.Issue("gateway-authz", []string{gatewayName})
+	rogue := other.Issue("gateway-authz", []string{gatewayName})
+	ask := func(t *testing.T, p *mtlsPDP, config *tls.Config) error {
+		t.Helper()
+		granted, err := p.grants(t, config).MayUse(context.Background(), "client-1", "tenant-1", "account-blue")
+		if granted {
+			t.Error("没有结论的询问被读成了有授权")
+		}
+		return err
+	}
+	for name, run := range map[string]func(t *testing.T) (*mtlsPDP, *tls.Config){
+		"不出示客户端证书": func(t *testing.T) (*mtlsPDP, *tls.Config) {
+			return newMTLSPDP(t, ca, ca), tlstest.ClientConfig(ca, pdpName, nil)
+		},
+		"出示的证书是别的 CA 签的": func(t *testing.T) (*mtlsPDP, *tls.Config) {
+			return newMTLSPDP(t, ca, ca), clientTLS(t, ca, rogue, pdpName)
+		},
+		"PDP 的证书是别的 CA 签的": func(t *testing.T) (*mtlsPDP, *tls.Config) {
+			return newMTLSPDP(t, other, ca), clientTLS(t, ca, mine, pdpName)
+		},
+		"PDP 的证书不是给这个名字的": func(t *testing.T) (*mtlsPDP, *tls.Config) {
+			return newMTLSPDP(t, ca, ca), clientTLS(t, ca, mine, "somewhere-else.idp.test")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, config := run(t)
+			err := ask(t, p, config)
+			if err == nil {
+				t.Fatal("握手没有成功却没有报错")
+			}
+			if p.calls.Load() != 0 {
+				t.Fatal("请求到了处理器")
+			}
+			for _, secret := range []string{pdpToken, "PRIVATE KEY", "BEGIN"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("错误信息里有 %q：%v", secret, err)
+				}
+			}
+		})
+	}
+	// 对照：同一个 PDP，换成对的证书就问得到。
+	p := newMTLSPDP(t, ca, ca)
+	if err := ask(t, p, tlstest.ClientConfig(ca, pdpName, nil)); err == nil {
+		t.Fatal("不带证书却问到了")
+	}
+	if granted, err := p.grants(t, clientTLS(t, ca, mine, pdpName)).MayUse(context.Background(), "client-1", "tenant-1", "account-blue"); err != nil || !granted {
+		t.Fatalf("%v, %v", granted, err)
+	}
+}
+
+func TestClientCertificateNeedsHTTPS(t *testing.T) {
+	ca := tlstest.NewCA(t, "workload CA")
+	config := clientTLS(t, ca, ca.Issue("gateway-authz", []string{gatewayName}), pdpName)
+	for _, address := range []string{"http://127.0.0.1:27623", "http://localhost:3000", "http://gk.example.com"} {
+		if _, err := New(Config{BaseURL: address, Token: ports.NewSecret(pdpToken), TLS: config}); err == nil {
+			t.Errorf("%s: 带着客户端证书的配置接受了 http", address)
+		}
+	}
+	if _, err := New(Config{BaseURL: "https://127.0.0.1:27623", Token: ports.NewSecret(pdpToken), TLS: config}); err != nil {
+		t.Fatal(err)
 	}
 }

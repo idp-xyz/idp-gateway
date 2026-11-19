@@ -12,11 +12,13 @@ gateway-authz（产品构建）。假的部分：Provider（黑盒套件的 mock
 网关配置就是黑盒套件的 agentgateway.poc.yaml，只换了三处：签发者、JWKS 的来源，以及
 "Token 环境"的来源（见 GATEWAY_DIFFERENCES）。登记表按本地实例里的租户和客户端现生成。
 
-租户、客户端和授权关系只建在本机实例里。已发布的 gk.idp.xyz 是生产环境，本脚本不访问它。
+gateway-authz 问 PDP 走的是 27623：栈里 PDP 前面的 nginx（compose.local.yml 的 pdp-mtls），要求本次运行的工作负载 CA 签发、
+CN 是 gateway-authz 的客户端证书；每次运行开始时这里把 nginx 的服务端证书和 CA 换成新做的。
+租户、客户端和授权关系只建在本机实例里（它们走 27622，PDP 自己的端口，没有关）。已发布的 gk.idp.xyz 是生产环境，本脚本不访问它。
 占用黑盒套件的端口 27611-27616 和 27619（配置里的回读口），两者不能同时运行。
 """
 from __future__ import annotations
-import argparse, base64, http.client, json, os, secrets, socket, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
+import argparse, base64, http.client, json, os, secrets, socket, ssl, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
 
 import jwt
@@ -35,6 +37,10 @@ import pki  # noqa: E402
 PROJECT = 'idp-gateway-gk'
 ISSUER = 'http://127.0.0.1:27621'
 BRIDGE = 'http://127.0.0.1:27622'
+PDP_PORT = 27623                  # PDP 前面要求客户端证书的 nginx（compose.local.yml 的 pdp-mtls）
+PDP_URL = f'https://127.0.0.1:{PDP_PORT}'
+PDP_NAME = 'pdp.gatekeeper.idp.test'   # nginx 的服务端证书是给这个名字的；gateway-authz 按它验证 PDP 一端
+PDP_TLS = RUN / 'pdp-tls'         # nginx 读的目录：server.crt、server.key、ca.crt，最后写 ready
 AUDIENCE = 'idp-egress-gateway'   # 与黑盒套件相同。本机实例的 TOKEN_AUDIENCE 里加了它，见 compose.local.yml
 OTHER_AUDIENCE = 'bip-api'        # Gatekeeper 默认的受众：发给别的服务的令牌
 PORTS = {'gateway': 27611, 'provider': 27612, 'authz': 27613, 'admin': 27614, 'stats': 27615, 'readiness': 27616,
@@ -81,6 +87,15 @@ def call(method: str, url: str, body=None, headers: dict | None = None, form: di
         return status, json.loads(raw or b'null')
     except ValueError:
         return status, raw.decode(errors='replace')
+
+
+# 黑盒套件的 pki.py 只有网关、Broker 等的证书。这里在它的表里加几张联调要用的：gateway-authz 自己的客户端证书
+# （CN 就是名字，nginx 按它认）、nginx 的服务端证书，以及别的 CA 签的同名客户端证书。不改 pki.py 本身。
+pki.ID['gateway-authz'] = 'spiffe://idp.test/egress/gateway-authz'
+pki.ID['pdp'] = 'spiffe://idp.test/gatekeeper/pdp'
+pki.LEAVES['gateway-authz'] = ('ca', 'gateway-authz', None)
+pki.LEAVES['rogue-gateway-authz'] = ('rogue-ca', 'gateway-authz', None)
+pki.LEAVES['pdp'] = ('ca', 'pdp', PDP_NAME)
 
 
 def stack_env() -> dict:
@@ -223,9 +238,52 @@ def container(service: str, action: str):
     subprocess.run(['docker', action, name], check=True, capture_output=True)
 
 
-def start_authz(token_file: Path | None):
-    """token_file 为 None 时不接 Gatekeeper：只看登记表。"""
-    ask = ['--gatekeeper-url', BRIDGE, '--gatekeeper-token-file', str(token_file)] if token_file else []
+def publish_pdp_tls():
+    """把本次运行的 CA 和 nginx 的服务端证书交给 pdp-mtls，并让它重新加载；等到它用新的证书应答。"""
+    PDP_TLS.mkdir(exist_ok=True)
+    ready = PDP_TLS / 'ready'
+    ready.unlink(missing_ok=True)
+    for name, source in (('server.crt', 'pdp.crt'), ('server.key', 'pdp.key'), ('ca.crt', 'ca.crt')):
+        target = PDP_TLS / name
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # 原地改写：容器里挂的是这个目录
+        with os.fdopen(fd, 'wb') as f:
+            f.write((TLS / source).read_bytes())
+    ready.write_text('1\n')
+    name = f'{PROJECT}-pdp-mtls-1'
+    label = subprocess.run(['docker', 'inspect', '-f', '{{index .Config.Labels "com.docker.compose.project"}}', name],
+                           capture_output=True, text=True).stdout.strip()
+    if label != PROJECT:
+        die(f'容器 {name} 不存在或不属于 compose 项目 {PROJECT}：改过 compose.local.yml 之后要重新运行 stack.sh up')
+    end, context = time.time() + 30, pki.client_context(TLS, 'gateway-authz')
+    while time.time() < end:
+        # nginx 还在等 ready 时 reload 会失败；起来以后第一次就读的是新文件。
+        subprocess.run(['docker', 'exec', name, 'nginx', '-s', 'reload'], capture_output=True)
+        status, _ = pdp_probe(context)
+        if status is not None:
+            return
+        time.sleep(1)
+    die('pdp-mtls 没有在 30 秒内用新的证书应答：见 stack.sh logs pdp-mtls')
+
+
+def pdp_probe(context, path: str = '/authz/check', method: str = 'POST', body: dict | None = None):
+    """直接问 nginx 这一跳（带着 PDP 令牌）：返回 (状态码, 应答正文)。握手没过时状态码为 None。"""
+    headers = {'Authorization': 'Bearer ' + ENV['GK_PDP_AUTH_TOKEN'], 'Content-Type': 'application/json'}
+    conn = pki.GatekeeperConnection(PDP_PORT, context, 5, name=PDP_NAME)
+    try:
+        conn.request(method, path, body=json.dumps(body or {}), headers=headers)
+        response = conn.getresponse()
+        return response.status, response.read().decode(errors='replace')
+    except (OSError, ssl.SSLError) as e:
+        return None, f'{type(e).__name__}: {e}'
+    finally:
+        conn.close()
+
+
+def start_authz(token_file: Path | None, certificate: str = 'gateway-authz'):
+    """token_file 为 None 时不接 Gatekeeper：只看登记表。certificate 是 TLS/ 里出示给 PDP 的客户端证书的名字。"""
+    ask = ['--gatekeeper-url', PDP_URL, '--gatekeeper-token-file', str(token_file),
+           '--gatekeeper-tls-cert', str(TLS / f'{certificate}.crt'), '--gatekeeper-tls-key', str(TLS / f'{certificate}.key'),
+           '--gatekeeper-tls-ca', str(TLS / 'ca.crt'), '--gatekeeper-name', PDP_NAME] if token_file else []
     start('gateway-authz', [str(RUN / 'gateway-authz'), '--listen', f"127.0.0.1:{PORTS['authz']}",
                             '--tls-cert', str(TLS / 'gatekeeper.crt'), '--tls-key', str(TLS / 'gatekeeper.key'),
                             '--client-ca', str(TLS / 'ca.crt'), '--policy', str(RUN / 'policy.json'),
@@ -238,6 +296,7 @@ def prepare(state: dict) -> dict:
         if port_open(port):
             die(f'端口 {port}（{name}）已被占用：黑盒套件在跑，或上一次运行没有收尾')
     pki.issue(TLS)
+    publish_pdp_tls()
     provider_tokens = {a: f'mock-{a}-' + secrets.token_urlsafe(24) for a in ('account-blue', 'account-green')}
     admin_secret = secrets.token_urlsafe(24)
     blue, green = state['blue'], state['green']
@@ -545,6 +604,43 @@ def run_cases(r: Results, state: dict, made: dict):
             r.check('旧密钥签的令牌仍被接受', gw(old)['status'] == 200)
             r.note('新密钥签的令牌，第一个请求的状态码', gw(new)['status'])
             r.check(f'{ROTATION_WAIT} 秒内被接受', wait_allowed(new, ROTATION_WAIT))
+
+    # 编号接着 GK-11：GK-12 留给 --key-rotation，它不是每次都跑。
+    r.case('GK-13', 'gateway-authz 到 PDP 那一跳：出示的证书不对（别的 CA 签的；同一个 CA 签的别的身份）问不到，不记成策略拒绝；换回正确的证书后照常')
+    # gateway-authz 的参数里客户端证书四个要么都给要么都不给，所以"不带证书"没法直接做出来：别的 CA 签的证书不在 nginx 列出的 CA 里，
+    # Go 的客户端根本不会把它发出去，线上看到的就是没有证书。那一种另外用不带证书的直接请求确认（下面第一个检查）。
+    probe = {'subject': blue['client_id'], 'tenant': state['blue']['tenant_id']}
+    check = {'subject': {'id': probe['subject']}, 'action': 'provider_account.use',
+             'resource': {'type': 'provider_account', 'id': 'account-blue'},
+             'context': {'tenant_id': probe['tenant'], 'contextual_tuples': [
+                 {'user': 'user:' + probe['subject'], 'relation': 'member', 'object': 'org:' + probe['tenant']}]}}
+    ours, nobody = pki.client_context(TLS, 'gateway-authz'), pki.client_context(TLS, None)
+    status, _ = pdp_probe(nobody, body=check)
+    r.note('不带证书直接问 nginx', status)
+    r.check('不带证书直接问 nginx：问不到（握手不成，或 400）', status in (None, 400))
+    status, _ = pdp_probe(pki.client_context(TLS, 'business-app'), body=check)
+    r.note('同一个 CA 签的别的身份直接问 nginx', status)
+    r.check('同一个 CA 签的别的身份（business-app）直接问 nginx：403', status == 403)
+    status, answer = pdp_probe(ours, body=check)
+    r.check('gateway-authz 的证书直接问 nginx：200，PDP 说有授权', status == 200 and '"decision":true' in answer.replace(' ', ''))
+    status, _ = pdp_probe(ours, path='/admin/me', method='GET')
+    r.note('gateway-authz 的证书问别的路径', status)
+    r.check('别的路径不转给 login-consent：404', status == 404)
+    for label, certificate in (('别的 CA 签的证书', 'rogue-gateway-authz'), ('同一个 CA 签的别的身份', 'business-app')):
+        stop('gateway-authz')
+        start_authz(RUN / 'pdp-token', certificate)
+        try:
+            mark = fresh()
+            answer = gw(tok['blue'])
+            r.note(f'{label}：调用方看到的状态码', answer['status'])
+            r.check(f'{label}：状态码 503，不是策略拒绝的 403', answer['status'] == 503)
+            r.check(f'{label}：gateway-authz 记为 GRANT_STATE_UNAVAILABLE', last_reason(mark) == 'GRANT_STATE_UNAVAILABLE')
+            r.check(f'{label}：调用方得到的不是 ACCOUNT_NOT_GRANTED', answer['json'].get('reason_code') != 'ACCOUNT_NOT_GRANTED')
+            r.check(f'{label}：Provider 没有收到请求', not provider_hits(secret))
+        finally:
+            stop('gateway-authz')
+            start_authz(RUN / 'pdp-token')
+    r.check('换回正确的证书后放行', wait_allowed(tok['blue'], 10))
 
     logs = ''.join((RUN / f'{n}.log').read_text(errors='replace') for n in ('gateway-authz', 'gateway'))
     r.check('PDP 令牌、Provider 凭证和客户端密钥都不在网关与 gateway-authz 的日志里',

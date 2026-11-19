@@ -2,7 +2,8 @@
 //
 // 它在请求路径上：只用标准库，不连数据库。第一版从文件读登记表和凭证，撤销状态放在
 // 内存里，这三样都是占位（见 docs/adr/ADR-0009.md）。账户的使用授权可以再交给
-// Gatekeeper 的 PDP 确认一遍（--gatekeeper-url），不配置时只看登记表。
+// Gatekeeper 的 PDP 确认一遍（--gatekeeper-url），不配置时只看登记表。这一跳出示工作负载证书
+// （--gatekeeper-tls-*、--gatekeeper-name，四个一起给）；PDP 不在回环地址上时必须给。
 //
 // 凭证文件有三种，至少给一种（见 docs/adr/ADR-0011.md）：--credentials 是固定的 Bearer
 // 令牌；--developer-tokens 是账号加开发者令牌，认证头里的随机数每个请求现做；--oauth-clients
@@ -16,6 +17,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -24,6 +26,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -69,6 +72,10 @@ type options struct {
 	revokerIdentity string
 	gatekeeperURL   string
 	gatekeeperToken string
+	gatekeeperCert  string
+	gatekeeperKey   string
+	gatekeeperCA    string
+	gatekeeperName  string
 }
 
 func parse(args []string, output io.Writer) (options, error) {
@@ -100,6 +107,11 @@ func parse(args []string, output io.Writer) (options, error) {
 	add(&o.revokerIdentity, "revoker-identity", "能改撤销表的工作负载身份：只能撤销、恢复和读出撤销表。要和 --revocations 一起给", false)
 	add(&o.gatekeeperURL, "gatekeeper-url", "Gatekeeper PDP 的地址；设了它，登记表放行的请求还要 Gatekeeper 确认账户的使用授权", false)
 	add(&o.gatekeeperToken, "gatekeeper-token-file", "访问 Gatekeeper PDP 的 Bearer 令牌文件，权限须为 0600 或更严", false)
+	add(&o.gatekeeperCert, "gatekeeper-tls-cert", "本服务出示给 Gatekeeper PDP 的工作负载证书（PEM）。四个 --gatekeeper-tls-* / --gatekeeper-name 要么都给、要么都不给；"+
+		"--gatekeeper-url 不是回环地址时必须给，给了之后它必须是 https", false)
+	add(&o.gatekeeperKey, "gatekeeper-tls-key", "上面那张证书的私钥（PEM）", false)
+	add(&o.gatekeeperCA, "gatekeeper-tls-ca", "签发 PDP 一端证书的 CA（PEM）；系统自带的根证书不被信任", false)
+	add(&o.gatekeeperName, "gatekeeper-name", "验证 PDP 一端证书时要对上的名字", false)
 	if err := flags.Parse(args); err != nil {
 		return o, err
 	}
@@ -127,6 +139,9 @@ func parse(args []string, output io.Writer) (options, error) {
 	if (o.gatekeeperURL == "") != (o.gatekeeperToken == "") {
 		return o, errors.New("--gatekeeper-url and --gatekeeper-token-file go together")
 	}
+	if err := checkGatekeeperTLS(o); err != nil {
+		return o, err
+	}
 	// 没有文件的写入口改的东西重启就没有了；没有写入口的文件谁也改不了。
 	if (o.revocations == "") != (o.revokerIdentity == "") {
 		return o, errors.New("--revocations and --revoker-identity go together")
@@ -136,6 +151,38 @@ func parse(args []string, output io.Writer) (options, error) {
 			"who asks for credentials may not be who lifts a revocation")
 	}
 	return o, nil
+}
+
+// checkGatekeeperTLS 核对到 PDP 的那一跳：客户端证书的四个参数一起给或一起不给；PDP 不在本机回环地址上时
+// 必须给，这一跳不能只靠一个共享的令牌；给了就必须走 https。
+func checkGatekeeperTLS(o options) error {
+	given := 0
+	for _, v := range []string{o.gatekeeperCert, o.gatekeeperKey, o.gatekeeperCA, o.gatekeeperName} {
+		if v != "" {
+			given++
+		}
+	}
+	if given != 0 && given != 4 {
+		return errors.New("--gatekeeper-tls-cert, --gatekeeper-tls-key, --gatekeeper-tls-ca and --gatekeeper-name go together")
+	}
+	if o.gatekeeperURL == "" {
+		if given != 0 {
+			return errors.New("--gatekeeper-tls-* and --gatekeeper-name need --gatekeeper-url")
+		}
+		return nil
+	}
+	address, err := url.Parse(o.gatekeeperURL)
+	if err != nil || address.Host == "" {
+		return errors.New("--gatekeeper-url is not an absolute URL")
+	}
+	switch {
+	case given == 0 && address.Scheme == "https" && !gatekeeper.Loopback(address.Hostname()):
+		return errors.New("--gatekeeper-url is not a loopback address, so --gatekeeper-tls-cert, --gatekeeper-tls-key, " +
+			"--gatekeeper-tls-ca and --gatekeeper-name are required: this hop may not rest on a shared token alone")
+	case given != 0 && address.Scheme != "https":
+		return errors.New("--gatekeeper-url must be https when a client certificate is configured")
+	}
+	return nil
 }
 
 // run 启动服务，直到 ctx 取消。ready 非 nil 时在开始接受连接前被调用一次。
@@ -193,13 +240,20 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 
 	// 账户的使用授权：默认只看登记表；配置了 Gatekeeper 就每次再问它一遍。
 	grantSource := "policy"
+	var pdpTLS *tls.Config
 	var options []application.Option
 	if o.gatekeeperURL != "" {
 		token, err := gatekeeper.LoadToken(o.gatekeeperToken)
 		if err != nil {
 			return err
 		}
-		grants, err := gatekeeper.New(gatekeeper.Config{BaseURL: o.gatekeeperURL, Token: token})
+		if o.gatekeeperCert != "" {
+			pdpTLS, err = workloadtls.ClientConfig(o.gatekeeperCert, o.gatekeeperKey, o.gatekeeperCA, o.gatekeeperName)
+			if err != nil {
+				return fmt.Errorf("gatekeeper: %w", err)
+			}
+		}
+		grants, err := gatekeeper.New(gatekeeper.Config{BaseURL: o.gatekeeperURL, Token: token, TLS: pdpTLS})
 		if err != nil {
 			return err
 		}
@@ -254,7 +308,7 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 		"credentials", bearerTokens, "developer_tokens", developerTokens, "oauth_clients", oauthClients,
 		"revocations", revocationStore, "revoked_accounts", revokedAccounts, "revocation_epoch", revocationEpoch,
 		"gateway_identity", o.gatewayIdentity, "broker_identity", o.brokerIdentity, "revoker_identity", o.revokerIdentity,
-		"grants", grantSource)
+		"grants", grantSource, "gatekeeper_mtls", pdpTLS != nil)
 	if ready != nil {
 		ready(listener.Addr())
 	}

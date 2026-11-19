@@ -20,9 +20,9 @@ tests/integration/gatekeeper/stack.sh down      # 删除容器、网络、卷和
 | 谁 | 是什么 |
 |---|---|
 | 真的 | Gatekeeper（Hydra v26.2.0 签发的令牌与 JWKS、login-consent 的 PDP、OpenFGA）、agentgateway 1.7.0（`deploy/agentgateway/agentgateway.lock.json` 锁定的构建，即上游镜像里的那个二进制；启动前核对，做法与黑盒套件相同）、`gateway-authz` 的产品构建 |
-| 假的 | Provider（黑盒套件的 `mock_provider.py`）、工作负载证书（每次运行现做的 CA） |
+| 假的 | Provider（黑盒套件的 `mock_provider.py`）、工作负载证书（每次运行现做的 CA）、PDP 前面要求客户端证书的 TLS 终结（本仓库在栈里加的一个 nginx，Gatekeeper 自己没有这一层；见"联调中看清的事"第 6 点） |
 
-本机实例是独立的 compose 项目 `idp-gateway-gk`，只在回环地址上发布两个端口：`27621`（Hydra 公共端点）和 `27622`（login-consent：管理 API 与 PDP）。它与 Gatekeeper 自己的开发栈相比改了什么，写在 `compose.local.yml` 的开头。联调本身占用黑盒套件的 `27611`–`27616` 和 `27619`（配置里的回读口，联调不用它，但网关会打开它），两者不能同时跑。
+本机实例是独立的 compose 项目 `idp-gateway-gk`，只在回环地址上发布三个端口：`27621`（Hydra 公共端点）、`27622`（login-consent：管理 API 与 PDP）和 `27623`（PDP 前面要求客户端证书的 nginx，`gateway-authz` 问 PDP 走这个端口）。它与 Gatekeeper 自己的开发栈相比改了什么，写在 `compose.local.yml` 的开头。联调本身占用黑盒套件的 `27611`–`27616` 和 `27619`（配置里的回读口，联调不用它，但网关会打开它），两者不能同时跑。
 
 证书、随机生成的管理密钥和 PDP 令牌、测试客户端的密钥都在 `.run/` 里（已被 git 忽略）。
 
@@ -44,7 +44,7 @@ type provider_account
 
 ## 结果
 
-2026-11-11，Gatekeeper `f36dc06`，agentgateway 1.7.0：默认的 11 个用例全部通过；加上 `--key-rotation` 后的第 12 个用例 FAIL（见下面第 4 点）。逐项结果写在 `.run/result.json`，不入库；这里没有像黑盒套件那样的证据文件。
+2026-11-19，Gatekeeper `f36dc06`，agentgateway 1.7.0：默认的 12 个用例（GK-01 到 GK-11 和 GK-13）连跑两遍，全部通过，`gateway-authz` 问 PDP 都经过带客户端证书的那条路。GK-12 只在加了 `--key-rotation` 时才跑，这次没有重跑，结果仍是 2026-11-11 的 FAIL（见下面第 4 点）；GK-13 因此接在 GK-11 后面，没有占用 12。逐项结果写在 `.run/result.json`，不入库；这里没有像黑盒套件那样的证据文件。
 
 同一天早些时候对着 Gatekeeper `0920e96` 是同样的结果，那时适配器还靠 `reason` 的措辞认拒绝。现在的适配器对着 `0920e96` 过不了 GK-08（见下面第 3 点）。
 
@@ -60,6 +60,7 @@ type provider_account
 | GK-09 | PDP 不可达：同上 | PASS |
 | GK-10 | `gateway-authz` 拿着错误的 PDP 令牌：同上 | PASS |
 | GK-11 | 一次判定的耗时，问与不问 Gatekeeper（仅记录） | PASS |
+| GK-13 | `gateway-authz` 到 PDP 那一跳出示的证书不对（别的 CA 签的；同一个 CA 签的别的身份）：调用方得到 503 而不是策略拒绝的 403，Provider 收不到请求；不带证书直接问 nginx 也问不到；换回正确的证书后照常 | PASS |
 | GK-12（`--key-rotation`） | Hydra 换了访问令牌的签名密钥，网关不重启、60 秒内接受新密钥签的令牌 | **FAIL** |
 
 网关配置就是黑盒套件的 `agentgateway.poc.yaml`，只换了三处：签发者、JWKS 的来源（文件换成 Hydra 的地址）、"Token 环境"的来源。
@@ -161,6 +162,8 @@ Gatekeeper 的控制台目前轮换的是 ID 令牌的密钥集；访问令牌�
 
 ### 5. 多问一次 Gatekeeper 的代价
 
+（下面是 2026-11-11 经回环明文量的；2026-11-19 起这一跳经 nginx 的 TLS，GK-11 里每次都问 Gatekeeper 的 p50 在 1.6 毫秒左右、p99 2.7 毫秒，同一条连接上握手只付一次。没有重做下面的表。）
+
 以网关的身份在一条连接上连续问 `gateway-authz` 300 次（本机，回环，Gatekeeper 在容器里）：
 
 | | p50 | p90 | p99 |
@@ -172,6 +175,17 @@ Gatekeeper 的控制台目前轮换的是 ID 令牌的密钥集；访问令牌�
 
 另外要知道：这套环境里一个放行的请求经网关走完全程大约 44 毫秒，而被拒绝的请求不到 1 毫秒。多出来的时间在网关到 Mock Provider 那一跳上，与 Gatekeeper 无关；原因没有查。
 
+### 6. 到 PDP 的工作负载 mTLS（2026-11-19，网关一侧）
+
+做了：`gateway-authz` 问 PDP 时出示自己的工作负载证书，并按给定的 CA 和名字验证 PDP 一端（启动参数 `--gatekeeper-tls-cert`、`--gatekeeper-tls-key`、`--gatekeeper-tls-ca`、`--gatekeeper-name`；四个要么都给，要么都不给；`--gatekeeper-url` 不是回环地址时必须给，给了之后必须是 https；Bearer 令牌照带）。问不到、握手不成、对端证书不对，都是没有结论，调用方得到 503。本机栈里 PDP 前面多了一个 nginx（`compose.local.yml` 的 `pdp-mtls`，端口 `27623`）：要求并验证本次运行的工作负载 CA 签发的客户端证书，只转 `POST /authz/check`，别的路径 404。联调的 `GK-13` 看这一条。
+
+要知道：
+
+- **本机实例里 PDP 自己的 `27622` 端口仍然开着**（联调还要用它建租户、客户端和授权关系）。"PDP 只收带证书的连接"要 Gatekeeper 自己做；这里证明的是网关一侧会出示证书，不带证书经这条路问不到。
+- **只认 `gateway-authz` 这一个身份，做到的是 CN，不是 SAN 里的 URI。** nginx 没有按 SAN URI 取值的变量，镜像里也没有 njs；所以它认的是客户端证书 subject 的 CN 等于 `gateway-authz`（先要通过 CA 的验证）。同一个 CA 签的别的身份（`GK-13` 用的是 `business-app`）被挡在 403；一张 CN 写成 `gateway-authz`、URI 却是别的身份的证书会被放过，这套 PKI 里 CN 就是证书的名字，这一点没有堵。按 URI 认要换一个能读 SAN 的终结点。
+- "不带客户端证书"没法用 `gateway-authz` 的参数做出来（四个参数一起给）。别的 CA 签的证书不在 nginx 列出的 CA 里，Go 的客户端不会把它发出去，线上看到的就是没有证书；另外 `GK-13` 用不带证书的直接请求确认 nginx 答 400。
+- 没有做：证书轮换和吊销（证书启动时读一次，与 `internal/platform/workloadtls` 一样）；Gatekeeper 自己的 PDP 端点要求客户端证书；生产形态的证书签发。
+
 ## 需要 Gatekeeper 一侧决定的
 
 第 4 条 Gatekeeper 已经定了。其余的都没有动，也不该由本仓库动：
@@ -180,7 +194,7 @@ Gatekeeper 的控制台目前轮换的是 ID 令牌的密钥集；访问令牌�
 2. 出站网关的专属受众，以及 M2M 客户端怎么登记它。
 3. 令牌里要不要带环境；不带的话，按签发者区分环境是否就是约定。
 4. PDP 怎么区分"拒绝"和"没查成"。已定：没查成的应答带 `"indeterminate": true`（Gatekeeper `10dc843`），适配器已改用它，见上面第 3 点。
-5. 给 `gateway-authz` 的 PDP 访问方式：现在是一个共享的 Bearer 令牌，Gatekeeper 自己的注释建议再加 mTLS。
+5. 给 `gateway-authz` 的 PDP 访问方式：现在是一个共享的 Bearer 令牌，Gatekeeper 自己的注释建议再加 mTLS。网关一侧已经做了（2026-11-19，见上面第 6 点）；PDP 自己要求客户端证书仍要 Gatekeeper 做。
 6. 访问令牌的签名密钥怎么换：新密钥先发布、过一个重取周期再启用，还是让 JWKS 响应带上可缓存的时长（见上面第 4 点的三条路）。
 
 ### 网关这一侧的建议
@@ -193,7 +207,7 @@ Gatekeeper 的控制台目前轮换的是 ID 令牌的密钥集；访问令牌�
 | 2 | 给出站网关一个专属受众，并且**按客户端登记**。不要用全局的 `TOKEN_AUDIENCE` | 没有专属受众，任何发给 `bip-api` 的令牌都能拿来敲出站网关的门，`GK-03` 挡的就是这个。全局开关会让之后新建的每个 M2M 客户端都能申请这个受众 |
 | 3 | 令牌里带环境：由令牌钩子写入 `env`，并把它加进 Hydra 的顶层声明白名单。至少要约定一个签发者只属于一个环境 | 不带也能跑，联调就是按签发者区分的。但那样"令牌的环境"和"路由的环境"都出自同一份网关配置，签发者配错时没有第二道检查；带了，`gateway-authz` 现有的那条比对就仍然有用 |
 | 4 | PDP 用状态码或单独的字段区分"拒绝"和"没查成"。**Gatekeeper 已经定了**：单独的字段 `indeterminate`（`10dc843`），状态码仍是 200 | 当时两者只差 `reason` 里的一个字符串。适配器已改成按这个字段认"没查成"，拒绝不再取决于措辞（上面第 3 点） |
-| 5 | `gateway-authz` 到 PDP 用工作负载 mTLS，共享的 Bearer 令牌只作过渡 | 与 ADR-0008 第 5 条一致：网关到 `gateway-authz` 那一跳已经是这样（`P1-AZ-11`、`P1-TL-01`）。这一跳的适配器现在只会带 Bearer 令牌，还不会出示客户端证书；它对非回环地址只接受 https，这一条只有单元测试。Gatekeeper 定了之后这边要跟着做 |
+| 5 | `gateway-authz` 到 PDP 用工作负载 mTLS，共享的 Bearer 令牌只作过渡 | 与 ADR-0008 第 5 条一致：网关到 `gateway-authz` 那一跳已经是这样（`P1-AZ-11`、`P1-TL-01`）。网关一侧已经做了（2026-11-19）：适配器出示客户端证书并验证 PDP 一端，非回环地址不给证书就不启动；联调里经本机的 nginx 看到了（`GK-13`，第 6 点）。PDP 自己要求客户端证书仍要 Gatekeeper 做 |
 | 6 | 先发布、后启用：新密钥先进 JWKS，过一段约定的时间再用它签发 | 网关侧按 ADR-0010 第 8 条把 JWKS 放在快照里，不按地址去取，那段时间要长于"发现 JWKS 变了，加一次发布"。不建议只靠缩短缓存时长：那样网关启动仍然依赖 JWKS 地址可达，重取遇到 5xx 时的表现也不好（上面第 4 点） |
 
 **2026-11-19，仓库所有者把这几项交给网关一侧定，记在[开发计划](../../../docs/development-plan.md) 1.2 和 1.3。** 上表的第 1、2、5、6 条照表里的做；第 3 条 P2 不带环境，沿用路由常量；第 4 条 Gatekeeper 早已定了。P2 用的就是这里的本机实例。这是网关一侧的决定，不是 Gatekeeper 团队的确认；上表各条要在本机实例之外成立，仍要 Gatekeeper 自己改。
@@ -204,7 +218,7 @@ Gatekeeper 的控制台目前轮换的是 ID 令牌的密钥集；访问令牌�
 
 - 生产形态的 Gatekeeper：这里是它的开发配置（Hydra `--dev`、明文 HTTP、开发用的固定密钥，只是换了管理密钥并给 PDP 加了令牌）。
 - 模型里没有 `provider_account` 类型的 Gatekeeper 实例：适配器把 `unknown action` 读成没有结论，这一条只有单元测试（上面第 3 点）。
-- `gateway-authz` 到 PDP 的 TLS：本机是回环上的明文；适配器对非回环地址只接受 https，这一条只有单元测试。
+- Gatekeeper 自己的 PDP 端点要求客户端证书：本机实例里它的 `27622` 端口仍是回环上的明文，mTLS 是前面加的 nginx 做的（第 6 点）；真实的证书签发和轮换也没有。
 - 用户令牌（授权码流程）、Mode B 的 Broker 路由、写操作路由。
 - 并发与负载；上面的耗时是单连接顺序请求。
 - 授权结果的缓存：现在每个请求都问。

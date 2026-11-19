@@ -18,9 +18,12 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT=idp-gateway-gk
 HYDRA_PORT=27621
 BRIDGE_PORT=27622
+PDP_MTLS_PORT=27623
 
 export GK_SRC="${GK_SRC:-$HOME/.local/src/idp-gatekeeper}"
 export GK_RUN="$HERE/.run"
+# pdp-mtls（nginx）以这个用户运行，才读得了 .run/pdp-tls 里 0600 的私钥。
+GK_UID="$(id -u)"; GK_GID="$(id -g)"; export GK_UID GK_GID
 # 授权模型默认是 Gatekeeper 自己的模型加上 provider-account.types.json 里的类型。后者是本仓库的
 # 提议，Gatekeeper 的仓库和已发布的实例里都没有；它只存在于这套本地环境。
 # 把 GK_OPENFGA_MODEL 指向别的文件可以换成任意模型，包括 Gatekeeper 原样的 deploy/openfga/model.json。
@@ -40,7 +43,7 @@ compose() {
 
 prepare() {
   [ -f "$GK_SRC/deploy/compose/docker-compose.yml" ] || die "找不到 Gatekeeper 的检出：$GK_SRC"
-  mkdir -p "$GK_RUN" && chmod 700 "$GK_RUN"
+  mkdir -p "$GK_RUN" "$GK_RUN/pdp-tls" && chmod 700 "$GK_RUN" "$GK_RUN/pdp-tls"
 
   if [ -z "$GK_OPENFGA_MODEL" ]; then
     GK_OPENFGA_MODEL="$GK_RUN/openfga-model.json"
@@ -102,6 +105,8 @@ case "${1:-}" in
     prepare
     compose build -q
     compose up -d --quiet-pull
+    # nginx 的配置写在 compose.local.yml 里；compose 不认为配置内容变了就要重建容器，所以每次 up 都重建它（很快，没有状态）。
+    compose up -d --quiet-pull --force-recreate --no-deps pdp-mtls
     wait_ready || { compose ps -a; die "没有在限定时间内就绪，见 ./stack.sh logs"; }
     echo "就绪。Gatekeeper 检出：$(git -C "$GK_SRC" rev-parse --short HEAD)；授权模型库：$GK_OPENFGA_STORE"
     "$0" env
@@ -110,7 +115,7 @@ case "${1:-}" in
     prepare
     compose down -v --remove-orphans
     # 卷没了，里面的租户和客户端也就没了；留着它们的凭据文件只会让下一次联调拿着失效的凭据。
-    rm -f "$GK_RUN/clients.json" "$GK_RUN/result.json"
+    rm -f "$GK_RUN/clients.json" "$GK_RUN/result.json" "$GK_RUN/pdp-tls/ready"
     ;;
   ps)
     prepare
@@ -126,6 +131,7 @@ case "${1:-}" in
     echo "GK_JWKS_URL=http://127.0.0.1:$HYDRA_PORT/.well-known/jwks.json"
     echo "GK_TOKEN_URL=http://127.0.0.1:$HYDRA_PORT/oauth2/token"
     echo "GK_BRIDGE_URL=http://127.0.0.1:$BRIDGE_PORT"
+    echo "GK_PDP_MTLS_URL=https://127.0.0.1:$PDP_MTLS_PORT   # 要客户端证书；run.py 开始时才给 nginx 证书"
     echo "GK_SECRETS_FILE=$GK_RUN/stack.env"
     ;;
   *)

@@ -770,8 +770,11 @@ func TestRefusesToStart(t *testing.T) {
 		"监听地址不可用":             {replace("--listen", "256.0.0.1:1"), ""},
 		"有 Gatekeeper 地址没有令牌": {append(h.args("127.0.0.1:0"), "--gatekeeper-url", "https://gk.idp.test"), "go together"},
 		"有令牌没有 Gatekeeper 地址": {append(h.args("127.0.0.1:0"), "--gatekeeper-token-file", write("t1", "pdp-token", 0o600)), "go together"},
+		// 非回环的地址要带客户端证书才过得了参数检查，这一条要走到读令牌文件那一步，所以带上。
 		"Gatekeeper 令牌别人可读": {append(h.args("127.0.0.1:0"), "--gatekeeper-url", "https://gk.idp.test",
-			"--gatekeeper-token-file", write("t2", "pdp-token", 0o644)), "readable by others"},
+			"--gatekeeper-token-file", write("t2", "pdp-token", 0o644),
+			"--gatekeeper-tls-cert", h.peers["gateway"].CertFile, "--gatekeeper-tls-key", h.peers["gateway"].KeyFile,
+			"--gatekeeper-tls-ca", h.ca.File(), "--gatekeeper-name", "gk.idp.test"), "readable by others"},
 		"明文连接非回环的 Gatekeeper": {append(h.args("127.0.0.1:0"), "--gatekeeper-url", "http://gk.idp.test",
 			"--gatekeeper-token-file", write("t3", "pdp-token", 0o600)), "must be https"},
 	}

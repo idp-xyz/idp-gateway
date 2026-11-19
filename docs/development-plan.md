@@ -149,6 +149,7 @@ flowchart TD
 - **依据**：`GW-FR-003`、`GW-FR-004`、`GW-FR-021`、`GW-FR-028`；联调报告"联调中看清的事"第 1 到 4 点。
 - **等**：不等了（1.2 和 1.3 在 2026-11-19 定了）。这一轮只做 1.3 第 4 项：到 PDP 的 mTLS。别的各项保持联调现在的做法。
 - **做完的标准**：联调套件按定下来的做法全部通过；凡是 Gatekeeper 已经接受的项，不再靠只加在本机实例里的改动；`gateway-authz` 到 PDP 出示客户端证书，没有证书的连接问不到结果。
+- **到哪了（2026-11-19）**：1.3 第 4 项的网关一侧做完了。`gateway-authz` 加了 `--gatekeeper-tls-cert`、`--gatekeeper-tls-key`、`--gatekeeper-tls-ca`、`--gatekeeper-name`（四个一起给；PDP 地址不是回环地址时必须给，给了必须是 https；Bearer 令牌照带）；本机栈在 PDP 前面加了要求客户端证书的 nginx，联调 12 个默认用例连跑两遍全过，新的 `GK-13` 看到证书不对时调用方得到 503、Provider 没有收到请求。没有做到的：本机实例里 PDP 自己的端口仍开着，"PDP 只收带证书的连接"要 Gatekeeper 自己做；nginx 认的是证书的 CN，不是 SAN 里的 URI（详见[联调报告](../tests/integration/gatekeeper/README.md)第 6 点）。1.3 的其余各项、令牌形状的核对和 JWKS 的手工放入这一轮没有动。
 
 ### 2.4 黑盒报告里两条"未解决"
 

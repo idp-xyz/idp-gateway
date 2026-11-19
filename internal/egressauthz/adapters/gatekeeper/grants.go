@@ -54,6 +54,10 @@ type Config struct {
 	BaseURL string
 	// Token 是 PDP 要求的 Bearer 令牌。
 	Token ports.Secret
+	// TLS 非 nil 时，这一跳出示它里面的客户端证书，并按它的 RootCAs 和 ServerName 验证 PDP 一端
+	// （workloadtls.ClientConfig 做出来的就是这样一份）。此时 BaseURL 必须是 https，回环地址也一样。
+	// 令牌照带。
+	TLS *tls.Config
 	// Timeout 为 0 时取 DefaultTimeout。
 	Timeout time.Duration
 }
@@ -77,7 +81,9 @@ func New(cfg Config) (*Grants, error) {
 	}
 	switch {
 	case base.Scheme == "https":
-	case base.Scheme == "http" && loopback(base.Hostname()):
+	case base.Scheme == "http" && cfg.TLS != nil:
+		return nil, errors.New("gatekeeper: a client certificate is configured, so the PDP address must be https")
+	case base.Scheme == "http" && Loopback(base.Hostname()):
 	default:
 		return nil, errors.New("gatekeeper: the PDP address must be https (plain http is accepted for loopback only)")
 	}
@@ -88,11 +94,18 @@ func New(cfg Config) (*Grants, error) {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	if cfg.TLS != nil {
+		tlsConfig = cfg.TLS.Clone()
+		if tlsConfig.MinVersion < tls.VersionTLS12 {
+			tlsConfig.MinVersion = tls.VersionTLS12
+		}
+	}
 	transport := &http.Transport{
 		// 不读环境里的代理设置：这条连接上走的是授权判定和令牌。
 		Proxy:                 nil,
 		DialContext:           (&net.Dialer{Timeout: timeout}).DialContext,
-		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
+		TLSClientConfig:       tlsConfig,
 		TLSHandshakeTimeout:   timeout,
 		ResponseHeaderTimeout: timeout,
 		ForceAttemptHTTP2:     true,
@@ -225,7 +238,8 @@ func (g *Grants) MayUse(ctx context.Context, subject, tenantID, accountID string
 	}
 }
 
-func loopback(host string) bool {
+// Loopback 报告 host 是不是回环地址（localhost 或回环 IP）。
+func Loopback(host string) bool {
 	if host == "localhost" {
 		return true
 	}

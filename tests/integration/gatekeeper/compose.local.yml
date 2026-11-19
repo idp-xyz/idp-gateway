@@ -2,8 +2,8 @@
 # 不单独使用：由同目录的 stack.sh 以独立的项目名拉起，Gatekeeper 的检出目录只读、不写入任何文件。
 #
 # 与 Gatekeeper 自己的开发栈相比，这里改了这些：
-#   - 只在 127.0.0.1 上发布两个端口：Hydra 公共端点 27621、login-consent（管理 API 与 PDP）27622，
-#     其余端口一律不发布；
+#   - 只在 127.0.0.1 上发布三个端口：Hydra 公共端点 27621、login-consent（管理 API 与 PDP）27622、
+#     PDP 前面要求客户端证书的 TLS 终结 27623（见 pdp-mtls），其余端口一律不发布；
 #   - 证书和密钥放在本仓库的 .run/ 里；
 #   - 不向宿主机上的平台采集器导出遥测；
 #   - PDP 端点要求 Bearer 令牌，管理 API 的密钥每套环境随机生成（Gatekeeper 的开发默认值是固定值，
@@ -13,7 +13,7 @@
 #   - 镜像改从本机够得着的仓库取（本机到不了 Docker Hub）。Hydra 没有别的镜像源，用它官方发布的
 #     二进制在本地打包，版本与 Gatekeeper 写定的一致。
 #
-# 变量由 stack.sh 提供：GK_RUN（本仓库的 .run 目录）、GK_OPENFGA_MODEL、GK_OPENFGA_STORE、
+# 变量由 stack.sh 提供：GK_UID、GK_GID（nginx 要读 .run/pdp-tls 里 0600 的私钥）、GK_RUN（本仓库的 .run 目录）、GK_OPENFGA_MODEL、GK_OPENFGA_STORE、
 # ADMIN_API_KEY、GK_PDP_AUTH_TOKEN。
 
 x-no-telemetry: &no-telemetry
@@ -115,3 +115,67 @@ services:
     ports: !override
       - "127.0.0.1:27622:3000"
     extra_hosts: !reset []
+
+  # gateway-authz 到 PDP 那一跳的工作负载 mTLS，本机的样子。Gatekeeper 自己没有这一层：这是本仓库在它前面加的
+  # 一个 nginx，用来证明网关一侧会出示客户端证书、没有证书（或证书不对）经这条路问不到。
+  #   - 只转 POST /authz/check 给 login-consent，别的路径一律 404；
+  #   - 客户端证书必须是本次运行的工作负载 CA 签发的，并且 subject 的 CN 是 gateway-authz。nginx 没有按 SAN 里的
+  #     URI 取值的变量（也没有 njs），所以这里认的是 CN，不是 SPIFFE 身份：同一个 CA 签的别的身份（CN 不同）
+  #     被挡掉，但一张 CN 写成 gateway-authz 却带着别的 URI 的证书会被放过。这套 PKI 里 CN 就是证书的名字；
+  #   - 服务端证书、私钥和 CA 由 run.py 每次运行现做，放在 .run/pdp-tls/，run.py 写完后让 nginx 重新加载；
+  #     run.py 写下 ready 之前 nginx 不起来；
+  #   - login-consent 自己的 27622 端口照开（联调要用它建租户、客户端和授权关系）：本机实例里 PDP 自己的端口
+  #     没有关，"PDP 只收带证书的连接"要 Gatekeeper 自己做。
+  pdp-mtls:
+    image: public.ecr.aws/nginx/nginx-unprivileged:stable-alpine@sha256:c3fc8fa482be50ef709c6438eb1bc98d50dbfe5a9b48be90711b8814f4dfd701
+    user: "${GK_UID}:${GK_GID}"
+    entrypoint: ["/bin/sh", "-c", "until [ -s /pdp-tls/ready ]; do sleep 1; done; exec nginx -g 'daemon off;'"]
+    ports:
+      - "127.0.0.1:27623:8443"
+    volumes:
+      - ${GK_RUN}/pdp-tls:/pdp-tls:ro
+    configs:
+      - source: pdp-mtls-conf
+        target: /etc/nginx/nginx.conf
+    depends_on:
+      - login-consent
+
+configs:
+  pdp-mtls-conf:
+    content: |
+      worker_processes 1;
+      pid /tmp/nginx.pid;
+      error_log /dev/stderr warn;
+      events { worker_connections 64; }
+      http {
+        log_format pdp '$$remote_addr verify=$$ssl_client_verify dn="$$ssl_client_s_dn" $$request_method $$uri -> $$status';
+        access_log /dev/stdout pdp;
+        client_body_temp_path /tmp/client_temp;
+        proxy_temp_path /tmp/proxy_temp;
+        fastcgi_temp_path /tmp/fastcgi_temp;
+        uwsgi_temp_path /tmp/uwsgi_temp;
+        scgi_temp_path /tmp/scgi_temp;
+        # Docker 的解析器：login-consent 被停了再起来（联调的 GK-09）之后地址可能变，不能只在启动时解析一次。
+        resolver 127.0.0.11 valid=1s;
+        map $$ssl_client_s_dn $$gateway_authz {
+          default 0;
+          "CN=gateway-authz" 1;
+        }
+        server {
+          listen 8443 ssl;
+          ssl_protocols TLSv1.2 TLSv1.3;
+          ssl_certificate /pdp-tls/server.crt;
+          ssl_certificate_key /pdp-tls/server.key;
+          ssl_client_certificate /pdp-tls/ca.crt;
+          ssl_verify_client on;
+          location = /authz/check {
+            if ($$gateway_authz = 0) { return 403; }
+            limit_except POST { deny all; }
+            set $$pdp http://login-consent:3000;
+            proxy_pass $$pdp;
+            proxy_connect_timeout 1s;
+            proxy_read_timeout 5s;
+          }
+          location / { return 404; }
+        }
+      }
