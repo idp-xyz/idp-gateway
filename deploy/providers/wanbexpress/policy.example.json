@@ -1,0 +1,118 @@
+{
+  "version": "wanbexpress-example",
+  "default_decision": "DENY",
+  "registered_operations": [
+    {
+      "route_id": "wanbexpress-whoami-get",
+      "provider_id": "wanbexpress",
+      "operation_id": "whoami.get",
+      "environment": "TEST",
+      "method": "GET",
+      "path_prefix": "/providers/wanbexpress/v1/whoami",
+      "upstream_hostname": "api-sbx.wanbexpress.com",
+      "port": 80,
+      "credential_binding_ref": "gatekeeper:wanbexpress-test",
+      "allowed_tenants": [
+        "TENANT-ID-BLUE",
+        "TENANT-ID-GREEN"
+      ],
+      "accounts_by_tenant": {
+        "TENANT-ID-BLUE": [
+          "account-blue"
+        ],
+        "TENANT-ID-GREEN": [
+          "account-green"
+        ]
+      },
+      "allowed_service_ids": [
+        "CLIENT-ID-BLUE",
+        "CLIENT-ID-GREEN"
+      ]
+    },
+    {
+      "route_id": "wanbexpress-parcels-create",
+      "provider_id": "wanbexpress",
+      "operation_id": "parcels.create",
+      "environment": "TEST",
+      "method": "POST",
+      "path_prefix": "/providers/wanbexpress/v1/parcels",
+      "upstream_hostname": "api-sbx.wanbexpress.com",
+      "port": 80,
+      "credential_binding_ref": "gatekeeper:wanbexpress-test",
+      "allowed_tenants": [
+        "TENANT-ID-BLUE",
+        "TENANT-ID-GREEN"
+      ],
+      "accounts_by_tenant": {
+        "TENANT-ID-BLUE": [
+          "account-blue"
+        ],
+        "TENANT-ID-GREEN": [
+          "account-green"
+        ]
+      },
+      "allowed_service_ids": [
+        "CLIENT-ID-BLUE",
+        "CLIENT-ID-GREEN"
+      ]
+    },
+    {
+      "route_id": "wanbexpress-parcels-get",
+      "provider_id": "wanbexpress",
+      "operation_id": "parcels.get",
+      "environment": "TEST",
+      "method": "GET",
+      "path_prefix": "/providers/wanbexpress/v1/parcels",
+      "upstream_hostname": "api-sbx.wanbexpress.com",
+      "port": 80,
+      "credential_binding_ref": "gatekeeper:wanbexpress-test",
+      "allowed_tenants": [
+        "TENANT-ID-BLUE",
+        "TENANT-ID-GREEN"
+      ],
+      "accounts_by_tenant": {
+        "TENANT-ID-BLUE": [
+          "account-blue"
+        ],
+        "TENANT-ID-GREEN": [
+          "account-green"
+        ]
+      },
+      "allowed_service_ids": [
+        "CLIENT-ID-BLUE",
+        "CLIENT-ID-GREEN"
+      ]
+    },
+    {
+      "route_id": "wanbexpress-parcels-delete",
+      "provider_id": "wanbexpress",
+      "operation_id": "parcels.delete",
+      "environment": "TEST",
+      "method": "DELETE",
+      "path_prefix": "/providers/wanbexpress/v1/parcels",
+      "upstream_hostname": "api-sbx.wanbexpress.com",
+      "port": 80,
+      "credential_binding_ref": "gatekeeper:wanbexpress-test",
+      "allowed_tenants": [
+        "TENANT-ID-BLUE",
+        "TENANT-ID-GREEN"
+      ],
+      "accounts_by_tenant": {
+        "TENANT-ID-BLUE": [
+          "account-blue"
+        ],
+        "TENANT-ID-GREEN": [
+          "account-green"
+        ]
+      },
+      "allowed_service_ids": [
+        "CLIENT-ID-BLUE",
+        "CLIENT-ID-GREEN"
+      ]
+    }
+  ],
+  "allow_request_redirects": false,
+  "enforce_tls_upstream": false,
+  "gateway_may_retry_non_idempotent": false,
+  "notes": "Example for the WanbExpress sandbox. TENANT-ID-*, CLIENT-ID-* are placeholders: fill in the Gatekeeper tenant ids and the M2M client ids (the sub of the caller's token) when deploying. account-blue and account-green are the ids of the provider_account objects in Gatekeeper and the second part of the developer-token file's handles (gatekeeper:wanbexpress-test/account-blue). enforce_tls_upstream is false because the sandbox is plain HTTP; gateway-authz does not read the field (it ignores everything outside the rows' decision fields). A production upstream must be https."
+}

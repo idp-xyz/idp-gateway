@@ -32,3 +32,5 @@ tests/integration/egressnet/.run/
 
 # 单机部署：照 .env.example 填好的那一份是这台机器自己的，不进仓库。
 deploy/compose/.env
+
+tests/integration/wanbexpress/.run/

@@ -1,0 +1,433 @@
+# WanbExpress (万邦速达) sandbox: outbound configuration for agentgateway 1.7.0, written by hand from the
+# reviewed configuration tests/acceptance/blackbox/agentgateway.poc.yaml (its route
+# mockcarrier-parcels-get-developer-token is the model). Development plan 3.2, first step.
+# What is different from the reviewed one is listed in deploy/providers/wanbexpress/README.md.
+#
+# Four operations, and nothing else reaches the carrier:
+#   GET    /providers/wanbexpress/v1/whoami               -> GET    /api/whoami
+#   POST   /providers/wanbexpress/v1/parcels              -> POST   /api/parcels
+#   GET    /providers/wanbexpress/v1/parcels/{processCode} -> GET    /api/parcels/{processCode}
+#   DELETE /providers/wanbexpress/v1/parcels/{processCode} -> DELETE /api/parcels/{processCode}
+#
+# Values that change with the deployment are written here as the values of the integration rig
+# (tests/integration/gatekeeper): the issuer and its JWKS, gateway-authz's address and the
+# certificate paths (relative to the directory the gateway is started in). The upstream is the carrier's sandbox:
+# api-sbx.wanbexpress.com, port 80, PLAIN HTTP. The developer token is therefore sent in clear over the
+# public internet. That is acceptable for the sandbox only; an upstream for the production
+# environment must be https, and nothing here has checked TLS towards the carrier.
+# The environment is TEST: the token has no env claim, so it is a constant of the route.
+#
+# Run from a copy, with the session key in the SESSION_KEY environment variable and no
+# config.session.key in this file (the reviewed configuration's note on item 6 applies unchanged).
+# Ports 27611-27620 as in the reviewed configuration: 27611 callers (loopback), 27613 gateway-authz,
+# 27614 admin, 27615 stats, 27616 readiness, 27619 read-back.
+config:
+  adminAddr: 127.0.0.1:27614
+  statsAddr: 127.0.0.1:27615
+  readinessAddr: 127.0.0.1:27616
+  storage:
+    mode: readOnly
+
+frontendPolicies:
+  networkAuthorization:
+    rules:
+    - allow: 'destination.port == 27611'
+    - allow: 'destination.port == 27619 && source.spiffeId == "spiffe://idp.test/gateway-control/publisher"'
+
+  # One access-log line per call, with the numbers that tie it to gateway-authz's decision and to the
+  # carrier's own numbers (same expressions as the reviewed configuration; see its comments).
+  # ReferenceId is the number we give the carrier; ProcessCode is the carrier's. The carrier's example
+  # ProcessCode, SBXPAA0000038638YQ, is of the accepted form (1 to 64 of A-Z a-z 0-9 . _ -).
+  accessLog:
+    add:
+      authz_decision_id: 'has(extauthz.decision_id) ? extauthz.decision_id : response.headers["x-idp-decision-id"]'
+      tenant_ref: 'jwt.tenant_id'
+      provider_reference_id: 'json(request.body).ReferenceId.matches("^[A-Za-z0-9._-]{1,64}$") ? json(request.body).ReferenceId : "(malformed)"'
+      provider_request_id: 'json(response.body).Data.ProcessCode.matches("^[A-Za-z0-9._-]{1,64}$") ? json(response.body).Data.ProcessCode : "(malformed)"'
+
+gateways:
+  read-back:
+    port: 27619
+    tls:
+      cert: .run/tls/gateway-readback.crt
+      key: .run/tls/gateway-readback.key
+      root: .run/tls/ca.crt
+  egress-test:
+    port: 27611
+    bindAddress: 127.0.0.1
+    protocol: HTTP
+    jwtAuth:
+      mode: strict
+      issuer: http://127.0.0.1:27621
+      audiences: [idp-egress-gateway]
+      jwks:
+        url: http://127.0.0.1:27621/.well-known/jwks.json
+
+routes:
+- name: wanbexpress-whoami-get
+  gateways: [egress-test]
+  hostnames: ["egress-api.idp.test"]
+  matches:
+  - path:
+      pathPrefix: /providers/wanbexpress/v1/whoami
+    method: GET
+  policies:
+    # Path shape (whoami: the path is exactly this; nothing below it). The reviewed
+    # configuration's canonical-path rule is a weaker form of this one: the characters allowed are the
+    # same, and no segment starts with a dot, so "." and ".." cannot occur. The shape is also what keeps
+    # a path that merely starts with the registered prefix (a list, a search, a deeper path) from reaching the
+    # carrier; gateway-authz's register only compares a prefix, so this rule is the only place that says it.
+    authorization:
+      rules:
+      - allow: 'request.path == "/providers/wanbexpress/v1/whoami"'
+    extAuthz:
+      host: 127.0.0.1:27613
+      failureMode:
+        denyWithStatus: 503
+      includeRequestHeaders:
+      - x-provider-account
+      policies:
+        backendTLS:
+          cert: .run/tls/gateway.crt
+          key: .run/tls/gateway.key
+          root: .run/tls/ca.crt
+          hostname: gatekeeper.idp.test
+        http:
+          requestTimeout: 1s
+      protocol:
+        http:
+          path: '"/v1/extauthz/check"'
+          addRequestHeaders:
+            x-idp-verified-subject: jwt.sub
+            x-idp-verified-tenant: jwt.tenant_id
+            x-idp-verified-env: '"TEST"'
+            x-idp-route-id: '"wanbexpress-whoami-get"'
+            x-idp-provider-id: '"wanbexpress"'
+            x-idp-operation-id: '"whoami.get"'
+            x-idp-environment: '"TEST"'
+            x-idp-method: request.method
+            x-idp-path: request.path
+          metadata:
+            decision_id: 'response.headers["x-idp-decision-id"]'
+          includeResponseHeaders:
+          - authorization
+    urlRewrite:
+      # The carrier's Host. The sandbox's name, without a port: the port is the backend's.
+      authority:
+        full: api-sbx.wanbexpress.com
+      path:
+        prefix: /api/whoami
+    responseHeaderModifier:
+      remove:
+      - location
+      - set-cookie
+      - x-idp-decision-id
+    # No retry policy on purpose. The gateway does not repeat a request.
+    timeout:
+      requestTimeout: 15s
+  backends:
+  - host: api-sbx.wanbexpress.com:80
+    policies:
+      # Fail closed if the PDP allowed but released no credential. The caller's token was removed
+      # after validation, so a header that starts like this can only have come from the PDP.
+      authorization:
+        rules:
+        - allow: 'request.headers["authorization"].startsWith("Hc-OweDeveloper ")'
+      transformations:
+        request:
+          replace: 'request.headers.filterKeys(k, k in ["accept", "authorization", "content-type", "idempotency-key", "traceparent", "x-client-trace"])'
+      requestHeaderModifier:
+        # The carrier accepts only this Accept. Written here, after the allow list above has run,
+        # so whatever the caller sent is replaced and a caller that sent none gets it too.
+        set:
+          accept: application/json
+        remove:
+        - x-provider-account
+        - cookie
+        - x-forwarded-host
+        - x-forwarded-for
+        - x-forwarded-proto
+        - forwarded
+        - x-idp-verified-subject
+        - x-idp-verified-tenant
+        - x-idp-verified-env
+
+- name: wanbexpress-parcels-create
+  gateways: [egress-test]
+  hostnames: ["egress-api.idp.test"]
+  matches:
+  - path:
+      pathPrefix: /providers/wanbexpress/v1/parcels
+    method: POST
+  policies:
+    # Path shape (create: POST on exactly /parcels). The reviewed
+    # configuration's canonical-path rule is a weaker form of this one: the characters allowed are the
+    # same, and no segment starts with a dot, so "." and ".." cannot occur. The shape is also what keeps
+    # a path that merely starts with the registered prefix (a list, a search, a deeper path) from reaching the
+    # carrier; gateway-authz's register only compares a prefix, so this rule is the only place that says it.
+    authorization:
+      rules:
+      - allow: 'request.path == "/providers/wanbexpress/v1/parcels"'
+    extAuthz:
+      host: 127.0.0.1:27613
+      failureMode:
+        denyWithStatus: 503
+      includeRequestHeaders:
+      - x-provider-account
+      policies:
+        backendTLS:
+          cert: .run/tls/gateway.crt
+          key: .run/tls/gateway.key
+          root: .run/tls/ca.crt
+          hostname: gatekeeper.idp.test
+        http:
+          requestTimeout: 1s
+      protocol:
+        http:
+          path: '"/v1/extauthz/check"'
+          addRequestHeaders:
+            x-idp-verified-subject: jwt.sub
+            x-idp-verified-tenant: jwt.tenant_id
+            x-idp-verified-env: '"TEST"'
+            x-idp-route-id: '"wanbexpress-parcels-create"'
+            x-idp-provider-id: '"wanbexpress"'
+            x-idp-operation-id: '"parcels.create"'
+            x-idp-environment: '"TEST"'
+            x-idp-method: request.method
+            x-idp-path: request.path
+          metadata:
+            decision_id: 'response.headers["x-idp-decision-id"]'
+          includeResponseHeaders:
+          - authorization
+    urlRewrite:
+      # The carrier's Host. The sandbox's name, without a port: the port is the backend's.
+      authority:
+        full: api-sbx.wanbexpress.com
+      path:
+        prefix: /api/parcels
+    responseHeaderModifier:
+      remove:
+      - location
+      - set-cookie
+      - x-idp-decision-id
+    # No retry policy on purpose. A create that times out has an unknown result; the same ReferenceId answers 0x100005 if it did go through.
+    timeout:
+      requestTimeout: 15s
+  backends:
+  - host: api-sbx.wanbexpress.com:80
+    policies:
+      # Fail closed if the PDP allowed but released no credential. The caller's token was removed
+      # after validation, so a header that starts like this can only have come from the PDP.
+      authorization:
+        rules:
+        - allow: 'request.headers["authorization"].startsWith("Hc-OweDeveloper ")'
+      transformations:
+        request:
+          replace: 'request.headers.filterKeys(k, k in ["accept", "authorization", "content-type", "idempotency-key", "traceparent", "x-client-trace"])'
+      requestHeaderModifier:
+        # The carrier accepts only this Accept. Written here, after the allow list above has run,
+        # so whatever the caller sent is replaced and a caller that sent none gets it too.
+        set:
+          accept: application/json
+        remove:
+        - x-provider-account
+        - cookie
+        - x-forwarded-host
+        - x-forwarded-for
+        - x-forwarded-proto
+        - forwarded
+        - x-idp-verified-subject
+        - x-idp-verified-tenant
+        - x-idp-verified-env
+
+- name: wanbexpress-parcels-get
+  gateways: [egress-test]
+  hostnames: ["egress-api.idp.test"]
+  matches:
+  - path:
+      pathPrefix: /providers/wanbexpress/v1/parcels
+    method: GET
+  policies:
+    # Path shape (get: GET on /parcels/{processCode}, one segment). The reviewed
+    # configuration's canonical-path rule is a weaker form of this one: the characters allowed are the
+    # same, and no segment starts with a dot, so "." and ".." cannot occur. The shape is also what keeps
+    # a path that merely starts with the registered prefix (a list, a search, a deeper path) from reaching the
+    # carrier; gateway-authz's register only compares a prefix, so this rule is the only place that says it.
+    authorization:
+      rules:
+      - allow: 'request.path.matches("^/providers/wanbexpress/v1/parcels/[A-Za-z0-9][A-Za-z0-9._-]*$")'
+    extAuthz:
+      host: 127.0.0.1:27613
+      failureMode:
+        denyWithStatus: 503
+      includeRequestHeaders:
+      - x-provider-account
+      policies:
+        backendTLS:
+          cert: .run/tls/gateway.crt
+          key: .run/tls/gateway.key
+          root: .run/tls/ca.crt
+          hostname: gatekeeper.idp.test
+        http:
+          requestTimeout: 1s
+      protocol:
+        http:
+          path: '"/v1/extauthz/check"'
+          addRequestHeaders:
+            x-idp-verified-subject: jwt.sub
+            x-idp-verified-tenant: jwt.tenant_id
+            x-idp-verified-env: '"TEST"'
+            x-idp-route-id: '"wanbexpress-parcels-get"'
+            x-idp-provider-id: '"wanbexpress"'
+            x-idp-operation-id: '"parcels.get"'
+            x-idp-environment: '"TEST"'
+            x-idp-method: request.method
+            x-idp-path: request.path
+          metadata:
+            decision_id: 'response.headers["x-idp-decision-id"]'
+          includeResponseHeaders:
+          - authorization
+    urlRewrite:
+      # The carrier's Host. The sandbox's name, without a port: the port is the backend's.
+      authority:
+        full: api-sbx.wanbexpress.com
+      path:
+        prefix: /api/parcels
+    responseHeaderModifier:
+      remove:
+      - location
+      - set-cookie
+      - x-idp-decision-id
+    # No retry policy on purpose. The gateway does not repeat a request.
+    timeout:
+      requestTimeout: 15s
+  backends:
+  - host: api-sbx.wanbexpress.com:80
+    policies:
+      # Fail closed if the PDP allowed but released no credential. The caller's token was removed
+      # after validation, so a header that starts like this can only have come from the PDP.
+      authorization:
+        rules:
+        - allow: 'request.headers["authorization"].startsWith("Hc-OweDeveloper ")'
+      transformations:
+        request:
+          replace: 'request.headers.filterKeys(k, k in ["accept", "authorization", "content-type", "idempotency-key", "traceparent", "x-client-trace"])'
+      requestHeaderModifier:
+        # The carrier accepts only this Accept. Written here, after the allow list above has run,
+        # so whatever the caller sent is replaced and a caller that sent none gets it too.
+        set:
+          accept: application/json
+        remove:
+        - x-provider-account
+        - cookie
+        - x-forwarded-host
+        - x-forwarded-for
+        - x-forwarded-proto
+        - forwarded
+        - x-idp-verified-subject
+        - x-idp-verified-tenant
+        - x-idp-verified-env
+
+- name: wanbexpress-parcels-delete
+  gateways: [egress-test]
+  hostnames: ["egress-api.idp.test"]
+  matches:
+  - path:
+      pathPrefix: /providers/wanbexpress/v1/parcels
+    method: DELETE
+  policies:
+    # Path shape (delete: DELETE on /parcels/{processCode}, one segment). The reviewed
+    # configuration's canonical-path rule is a weaker form of this one: the characters allowed are the
+    # same, and no segment starts with a dot, so "." and ".." cannot occur. The shape is also what keeps
+    # a path that merely starts with the registered prefix (a list, a search, a deeper path) from reaching the
+    # carrier; gateway-authz's register only compares a prefix, so this rule is the only place that says it.
+    authorization:
+      rules:
+      - allow: 'request.path.matches("^/providers/wanbexpress/v1/parcels/[A-Za-z0-9][A-Za-z0-9._-]*$")'
+    extAuthz:
+      host: 127.0.0.1:27613
+      failureMode:
+        denyWithStatus: 503
+      includeRequestHeaders:
+      - x-provider-account
+      policies:
+        backendTLS:
+          cert: .run/tls/gateway.crt
+          key: .run/tls/gateway.key
+          root: .run/tls/ca.crt
+          hostname: gatekeeper.idp.test
+        http:
+          requestTimeout: 1s
+      protocol:
+        http:
+          path: '"/v1/extauthz/check"'
+          addRequestHeaders:
+            x-idp-verified-subject: jwt.sub
+            x-idp-verified-tenant: jwt.tenant_id
+            x-idp-verified-env: '"TEST"'
+            x-idp-route-id: '"wanbexpress-parcels-delete"'
+            x-idp-provider-id: '"wanbexpress"'
+            x-idp-operation-id: '"parcels.delete"'
+            x-idp-environment: '"TEST"'
+            x-idp-method: request.method
+            x-idp-path: request.path
+          metadata:
+            decision_id: 'response.headers["x-idp-decision-id"]'
+          includeResponseHeaders:
+          - authorization
+    urlRewrite:
+      # The carrier's Host. The sandbox's name, without a port: the port is the backend's.
+      authority:
+        full: api-sbx.wanbexpress.com
+      path:
+        prefix: /api/parcels
+    responseHeaderModifier:
+      remove:
+      - location
+      - set-cookie
+      - x-idp-decision-id
+    # No retry policy on purpose. A DELETE that is sent again is harmless to the carrier but the gateway does not do it.
+    timeout:
+      requestTimeout: 15s
+  backends:
+  - host: api-sbx.wanbexpress.com:80
+    policies:
+      # Fail closed if the PDP allowed but released no credential. The caller's token was removed
+      # after validation, so a header that starts like this can only have come from the PDP.
+      authorization:
+        rules:
+        - allow: 'request.headers["authorization"].startsWith("Hc-OweDeveloper ")'
+      transformations:
+        request:
+          replace: 'request.headers.filterKeys(k, k in ["accept", "authorization", "content-type", "idempotency-key", "traceparent", "x-client-trace"])'
+      requestHeaderModifier:
+        # The carrier accepts only this Accept. Written here, after the allow list above has run,
+        # so whatever the caller sent is replaced and a caller that sent none gets it too.
+        set:
+          accept: application/json
+        remove:
+        - x-provider-account
+        - cookie
+        - x-forwarded-host
+        - x-forwarded-for
+        - x-forwarded-proto
+        - forwarded
+        - x-idp-verified-subject
+        - x-idp-verified-tenant
+        - x-idp-verified-env
+
+# Read-back: the only route on the read-back listener, as in the reviewed configuration.
+- name: read-back
+  gateways: [read-back]
+  matches:
+  - path:
+      exact: /config_dump
+    method: GET
+  - path:
+      exact: /api/runtime
+    method: GET
+  policies:
+    timeout:
+      requestTimeout: 2s
+  backends:
+  - host: 127.0.0.1:27614
