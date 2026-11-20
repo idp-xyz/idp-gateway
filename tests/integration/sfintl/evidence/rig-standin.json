@@ -9,8 +9,8 @@
  },
  "gatekeeper_commit": "f36dc06",
  "repository": {
-  "commit": "0dddab8",
-  "uncommitted_files": 6
+  "commit": "094c5e5",
+  "uncommitted_files": 0
  },
  "registry_sha256": "f1f4d438f82d25140e286b79865ea01ea12be3e6a74dca9f0a1c7dd474bd0e4d",
  "registry_note": "the example register; each run fills its placeholders with that run's tenant and client ids, so the filled copy differs from run to run",
@@ -18,11 +18,11 @@
  "environment": [
   "TEST"
  ],
- "started_at_utc": "2026-11-20T06:45:22+00:00",
- "finished_at_utc": "2026-11-20T06:45:50+00:00",
+ "started_at_utc": "2026-11-20T06:50:41+00:00",
+ "finished_at_utc": "2026-11-20T06:51:06+00:00",
  "clock": {
-  "carrier_response_date": "Fri, 20 Nov 2026 06:45:23 GMT",
-  "offset_seconds": -0.5,
+  "carrier_response_date": "Fri, 20 Nov 2026 06:50:41 GMT",
+  "offset_seconds": -1.0,
   "resolution_seconds": 1,
   "taken_from": "the Date header of the first query (SF-01), as it reached the caller"
  },
@@ -128,7 +128,7 @@
       {
        "route": "default/sfintl-orders-create",
        "http.status": "200",
-       "provider_reference_id": "IDPGW-20261120-8e4af5c8002e",
+       "provider_reference_id": "IDPGW-20261120-6de1e284d469",
        "provider_request_id": "SF6043000100001"
       }
      ]
@@ -1302,12 +1302,12 @@
     "slow: what the caller got": {
      "status": 504,
      "error": "carrier_timeout",
-     "seconds": 8.024
+     "seconds": 8.018
     },
     "cut: what the caller got": {
      "status": 502,
      "error": "carrier_unreachable",
-     "seconds": 0.018
+     "seconds": 0.009
     },
     "status 503: what the caller got": {
      "status": 502,

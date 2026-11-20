@@ -1,0 +1,1209 @@
+{
+ "kind": "rig: the real local Gatekeeper, agentgateway 1.7.0 as a local binary, gateway-authz and provider-signer as local processes",
+ "upstream_kind": "the carrier's sandbox",
+ "operator_and_approver": "Not recorded. The repository owner decided on 2026-11-19 (development plan 1.6) that this technical software has no operator and approver kept apart: this file records what was run, on which commits and images, and what was seen. It is a record of verification, not a gate decision.",
+ "agentgateway": {
+  "version": "1.7.0",
+  "image": "cr.agentgateway.dev/agentgateway@sha256:60216aafb03d37f94e952ff3d51d2f630a65b10ecaebdc0a864882f92610c45b",
+  "local_binary_sha256": "c7ef326b7b5702451e94bab55ff484d600d5abdc5344a4cdf7c72fc0bcff9e24"
+ },
+ "gatekeeper_commit": "f36dc06",
+ "repository": {
+  "commit": "094c5e5",
+  "uncommitted_files": 0
+ },
+ "registry_sha256": "f1f4d438f82d25140e286b79865ea01ea12be3e6a74dca9f0a1c7dd474bd0e4d",
+ "registry_note": "the example register; each run fills its placeholders with that run's tenant and client ids, so the filled copy differs from run to run",
+ "gateway_configuration_sha256": "2f9ee3c8a792b533df77197ec87d393b978883dfd4e5d0e2262b8cf54967d70c",
+ "environment": [
+  "TEST"
+ ],
+ "started_at_utc": "2026-11-20T06:53:46+00:00",
+ "finished_at_utc": "2026-11-20T06:54:04+00:00",
+ "clock": {
+  "carrier_response_date": "Fri, 20 Nov 2026 06:53:48 GMT",
+  "offset_seconds": -0.1,
+  "resolution_seconds": 1,
+  "taken_from": "the Date header of the first query (SF-01), as it reached the caller"
+ },
+ "dataset": {
+  "reference_prefix": "IDPGW-20261120-",
+  "orders_created_and_cancelled": [
+   "SF6043039280127",
+   "SF6043039280135"
+  ],
+  "orders_left_uncancelled": []
+ },
+ "upstream": {
+  "kind": "the carrier's sandbox",
+  "name": "api-ifsp-sit.sf.global",
+  "name_resolved_to_at_the_start": [
+   "156.59.125.28"
+  ],
+  "addresses_the_signer_and_gateway_authz_held_connections_to": [
+   "156.59.125.28:80"
+  ]
+ },
+ "gateway_proxy_variables": {
+  "proxy_variables_removed_from_the_gateway_process": [
+   "NO_PROXY",
+   "no_proxy"
+  ],
+  "present_in_the_gateway_process": false
+ },
+ "cases": [
+  {
+   "id": "SF-01",
+   "title": "query, create, query, cancel, query: the blue tenant's real Gatekeeper token, through the gateway",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "query of an order number that does not exist: HTTP 200, apiResultCode 0, wrongData status 4001",
+     "result": "pass"
+    },
+    {
+     "check": "query: gateway-authz decided ACTIVE_ACCOUNT_GRANT for agent-numbers.query",
+     "result": "pass"
+    },
+    {
+     "check": "create: HTTP 200, apiResultCode 0, success true",
+     "result": "pass"
+    },
+    {
+     "check": "create: the envelope has exactly apiResultCode, apiResultData, apiTimestamp",
+     "result": "pass"
+    },
+    {
+     "check": "create: a sfWaybillNo and our customerOrderNo, and no business code",
+     "result": "pass"
+    },
+    {
+     "check": "create: gateway-authz decided ACTIVE_ACCOUNT_GRANT for orders.create",
+     "result": "pass"
+    },
+    {
+     "check": "no Set-Cookie and no X-Mock-Provider from the carrier reach the caller",
+     "result": "skipped",
+     "reason": "the stand-in sets both; the sandbox was not asked to"
+    },
+    {
+     "check": "the create's access-log line carries provider_reference_id = our customerOrderNo",
+     "result": "pass"
+    },
+    {
+     "check": "the create's access-log line carries provider_request_id = the sfWaybillNo",
+     "result": "pass"
+    },
+    {
+     "check": "query of the new order: HTTP 200, apiResultCode 0, wrongData status 4002",
+     "result": "pass"
+    },
+    {
+     "check": "the second query: gateway-authz decided ACTIVE_ACCOUNT_GRANT for agent-numbers.query",
+     "result": "pass"
+    },
+    {
+     "check": "cancel: HTTP 200, apiResultCode 0, success true, code 200",
+     "result": "pass"
+    },
+    {
+     "check": "cancel: gateway-authz decided ACTIVE_ACCOUNT_GRANT for orders.cancel",
+     "result": "pass"
+    },
+    {
+     "check": "query after the cancel: HTTP 200, apiResultCode 0, wrongData status 4001",
+     "result": "pass"
+    },
+    {
+     "check": "exactly one token request was made for the blue app up to here",
+     "result": "skipped",
+     "reason": "the sandbox does not show its token requests to us"
+    }
+   ],
+   "notes": {
+    "access log": {
+     "lines_with_the_order_number": 1,
+     "lines_with_provider_reference_id": 1,
+     "fields": [
+      {
+       "route": "default/sfintl-orders-create",
+       "http.status": "200",
+       "provider_reference_id": "IDPGW-20261120-7d0df52e539b",
+       "provider_request_id": "SF6043039280135"
+      }
+     ]
+    },
+    "cancel attempts": 2
+   }
+  },
+  {
+   "id": "SF-02",
+   "title": "the same create again while the order exists: success, code 123052, the same waybill; a cancel that is too early fails and the next one works",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "the first create succeeded and answered a waybill",
+     "result": "pass"
+    },
+    {
+     "check": "the same create again: HTTP 200, apiResultCode 0, success true, code 123052",
+     "result": "pass"
+    },
+    {
+     "check": "the same create again: the waybill number is the first one",
+     "result": "pass"
+    },
+    {
+     "check": "fault cancel-not-yet: the caller gets the carrier's code 500 and the order still exists",
+     "result": "skipped",
+     "reason": "the fault is the stand-in's; the sandbox is not asked to misbehave"
+    },
+    {
+     "check": "the cancel after that fault succeeds",
+     "result": "skipped",
+     "reason": "the fault is the stand-in's"
+    },
+    {
+     "check": "the order made for this case is cancelled",
+     "result": "pass"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "SF-03",
+   "title": "what the carrier receives (stand-in only): the caller's bytes unchanged, the blue app's own credential, none of the caller's headers",
+   "result": "skipped",
+   "checks": [
+    {
+     "check": "every check of this case",
+     "result": "skipped",
+     "reason": "only the stand-in can say what it received, and a planted credential is not sent to the sandbox"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "SF-04",
+   "title": "no token, a token for another audience, a forged signature, on each of the three paths: 401, and nothing is asked downstream",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "no token /orders: 401",
+     "result": "pass"
+    },
+    {
+     "check": "no token /orders: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "no token /orders: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "no token /orders: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "no token /order-cancellations: 401",
+     "result": "pass"
+    },
+    {
+     "check": "no token /order-cancellations: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "no token /order-cancellations: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "no token /order-cancellations: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "no token /agent-number-queries: 401",
+     "result": "pass"
+    },
+    {
+     "check": "no token /agent-number-queries: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "no token /agent-number-queries: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "no token /agent-number-queries: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "another audience /orders: 401",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /orders: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /orders: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /orders: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "another audience /order-cancellations: 401",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /order-cancellations: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /order-cancellations: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /order-cancellations: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "another audience /agent-number-queries: 401",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /agent-number-queries: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /agent-number-queries: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /agent-number-queries: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "forged signature /orders: 401",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /orders: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /orders: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /orders: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "forged signature /order-cancellations: 401",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /order-cancellations: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /order-cancellations: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /order-cancellations: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "forged signature /agent-number-queries: 401",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /agent-number-queries: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /agent-number-queries: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /agent-number-queries: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "SF-05",
+   "title": "tenants: green gets the green app; green cannot cancel blue's order (the stand-in's assumption); blue asking for green's account is refused (sandbox: green has no account)",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "green (no account in this run): 403",
+     "result": "pass"
+    },
+    {
+     "check": "green gets the green app, and green cannot cancel an order of the blue app",
+     "result": "skipped",
+     "reason": "there is one sandbox account; order ownership per app is the stand-in's assumption and is not sent to the sandbox"
+    },
+    {
+     "check": "blue asking for the green account: 403",
+     "result": "pass"
+    },
+    {
+     "check": "the reason is ACCOUNT_NOT_GRANTED",
+     "result": "pass"
+    },
+    {
+     "check": "blue asking for the green account: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "blue asking for the green account: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    }
+   ],
+   "notes": {
+    "green: gateway-authz's reason": "ACCOUNT_NOT_GRANTED"
+   }
+  },
+  {
+   "id": "SF-06",
+   "title": "a client the register knows but Gatekeeper has no grant for: 403, the signer is not called",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "403",
+     "result": "pass"
+    },
+    {
+     "check": "the reason is ACCOUNT_NOT_GRANTED",
+     "result": "pass"
+    },
+    {
+     "check": "the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "SF-07",
+   "title": "a method or a path that is not registered does not get to the signer or the carrier",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "GET /orders: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "GET /orders: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "GET /orders: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /orders: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "GET /order-cancellations: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "GET /order-cancellations: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "GET /order-cancellations: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /order-cancellations: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "GET /agent-number-queries: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "GET /agent-number-queries: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "GET /agent-number-queries: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /agent-number-queries: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "PUT /orders: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /orders: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /orders: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /orders: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "PUT /order-cancellations: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /order-cancellations: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /order-cancellations: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /order-cancellations: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "PUT /agent-number-queries: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /agent-number-queries: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /agent-number-queries: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /agent-number-queries: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "DELETE /orders: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /orders: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /orders: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /orders: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "DELETE /order-cancellations: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /order-cancellations: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /order-cancellations: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /order-cancellations: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "DELETE /agent-number-queries: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /agent-number-queries: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /agent-number-queries: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /agent-number-queries: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "PATCH /orders: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /orders: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /orders: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /orders: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "PATCH /order-cancellations: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /order-cancellations: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /order-cancellations: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /order-cancellations: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "PATCH /agent-number-queries: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /agent-number-queries: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /agent-number-queries: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /agent-number-queries: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "/orders/: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders/: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders/: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "/orders/X: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders/X: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders/X: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "/orders-extra: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders-extra: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders-extra: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "/order-cancellations/1: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "/order-cancellations/1: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/order-cancellations/1: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "/agent-number-queries/x: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "/agent-number-queries/x: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/agent-number-queries/x: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "/orders/../orders: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders/../orders: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders/../orders: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "/orders/%2e%2e: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders/%2e%2e: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders/%2e%2e: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "/orders%2fX: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders%2fX: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders%2fX: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "/%252e: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "/%252e: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/%252e: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "/orders;x=1: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders;x=1: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders;x=1: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "/orders%00: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders%00: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders%00: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "//orders: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "//orders: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "//orders: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "/ORDERS: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "/ORDERS: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/ORDERS: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "/sfintl/v1/orders: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "/sfintl/v1/orders: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/sfintl/v1/orders: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "/providers/wanbexpress/v1/parcels: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "/providers/wanbexpress/v1/parcels: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/providers/wanbexpress/v1/parcels: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "/providers/sfintl/v2/orders: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "/providers/sfintl/v2/orders: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/providers/sfintl/v2/orders: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "query string on an allowed path: refused (400)",
+     "result": "pass"
+    },
+    {
+     "check": "query string: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "query string: nothing reached the carrier (judged by the signer's log: refused before the carrier (query_not_allowed))",
+     "result": "pass"
+    }
+   ],
+   "notes": {
+    "who refused the query string": "the signer, 400 query_not_allowed (HTTP 400 to the caller)"
+   }
+  },
+  {
+   "id": "SF-08",
+   "title": "the signer's own refusals, through the gateway: the caller gets the signer's JSON, and the carrier is not asked",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "Content-Type text/plain: the signer's 415 unsupported_media_type, as written",
+     "result": "pass"
+    },
+    {
+     "check": "Content-Type text/plain: nothing reached the carrier (judged by the signer's log: refused before the carrier (unsupported_media_type))",
+     "result": "pass"
+    },
+    {
+     "check": "Content-Type text/plain: the carrier got no dispatch (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "a JSON array: the signer's 400 body_not_json_object, as written",
+     "result": "pass"
+    },
+    {
+     "check": "a JSON array: nothing reached the carrier (judged by the signer's log: refused before the carrier (body_not_json_object))",
+     "result": "pass"
+    },
+    {
+     "check": "a JSON array: the carrier got no dispatch (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "two JSON objects: the signer's 400 body_not_json_object, as written",
+     "result": "pass"
+    },
+    {
+     "check": "two JSON objects: nothing reached the carrier (judged by the signer's log: refused before the carrier (body_not_json_object))",
+     "result": "pass"
+    },
+    {
+     "check": "two JSON objects: the carrier got no dispatch (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "an empty body: the signer's 400 body_not_json_object, as written",
+     "result": "pass"
+    },
+    {
+     "check": "an empty body: nothing reached the carrier (judged by the signer's log: refused before the carrier (body_not_json_object))",
+     "result": "pass"
+    },
+    {
+     "check": "an empty body: the carrier got no dispatch (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "a body that is not JSON: the signer's 400 body_not_json_object, as written",
+     "result": "pass"
+    },
+    {
+     "check": "a body that is not JSON: nothing reached the carrier (judged by the signer's log: refused before the carrier (body_not_json_object))",
+     "result": "pass"
+    },
+    {
+     "check": "a body that is not JSON: the carrier got no dispatch (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "body over 1 MiB: refused (413)",
+     "result": "pass"
+    },
+    {
+     "check": "body over 1 MiB: the signer's 413 request_too_large, as written",
+     "result": "pass"
+    },
+    {
+     "check": "body over 1 MiB: nothing reached the carrier (judged by the signer's log: refused before the carrier (request_too_large))",
+     "result": "pass"
+    },
+    {
+     "check": "body over 1 MiB: the carrier got no dispatch (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    }
+   ],
+   "notes": {
+    "body over 1 MiB": {
+     "status": 413,
+     "who": "provider-signer",
+     "signer_error": "request_too_large"
+    }
+   }
+  },
+  {
+   "id": "SF-09",
+   "title": "gateway-authz allows and releases no credential: the gateway's backend rule refuses, so the signer is not called; a caller's own Authorization does not take its place",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "the PDP is set to allow without a credential",
+     "result": "pass"
+    },
+    {
+     "check": "the caller sends nothing of its own: the caller does not get a success (403)",
+     "result": "pass"
+    },
+    {
+     "check": "the caller sends nothing of its own: the PDP did allow it (so it is the gateway that refused)",
+     "result": "pass"
+    },
+    {
+     "check": "the caller sends nothing of its own: the answer is not the carrier's",
+     "result": "pass"
+    },
+    {
+     "check": "the caller sends nothing of its own: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "the caller sends nothing of its own: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "the caller's own Authorization after its token: the caller does not get a success (403)",
+     "result": "pass"
+    },
+    {
+     "check": "the caller's own Authorization after its token: the PDP did allow it (so it is the gateway that refused)",
+     "result": "pass"
+    },
+    {
+     "check": "the caller's own Authorization after its token: the answer is not the carrier's",
+     "result": "pass"
+    },
+    {
+     "check": "the caller's own Authorization after its token: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "the caller's own Authorization after its token: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "the caller's own Authorization before its token: refused (401)",
+     "result": "pass"
+    },
+    {
+     "check": "the caller's own Authorization before its token: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "the caller's own Authorization before its token: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "the PDP is set back to normal",
+     "result": "pass"
+    },
+    {
+     "check": "control: with a credential released, the same request is served and the carrier saw the blue app's key, not the planted one",
+     "result": "skipped",
+     "reason": "what the carrier received is stand-in only; not repeated at the sandbox"
+    },
+    {
+     "check": "the product build of gateway-authz is back and allows again",
+     "result": "pass"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "SF-10",
+   "title": "the logs of the gateway, gateway-authz and provider-signer, this run's output and the result file hold none of this run's secrets",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "gateway log: none of the 11 secrets of this run, and no value of the carrier's authorization scheme",
+     "result": "pass"
+    },
+    {
+     "check": "gateway-authz log: none of the 11 secrets of this run, and no value of the carrier's authorization scheme",
+     "result": "pass"
+    },
+    {
+     "check": "provider-signer log: none of the 11 secrets of this run, and no value of the carrier's authorization scheme",
+     "result": "pass"
+    },
+    {
+     "check": "standard output: none of the 11 secrets of this run, and no value of the carrier's authorization scheme",
+     "result": "pass"
+    },
+    {
+     "check": "result file: none of the 11 secrets of this run, and no value of the carrier's authorization scheme",
+     "result": "pass"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "SF-12",
+   "title": "revocation through gateway-control: a read-only query is refused, the signer is not called, green is not touched; restored, blue is served again",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "before: blue is served",
+     "result": "skipped",
+     "reason": "the confirming query is the one after the restore"
+    },
+    {
+     "check": "gateway-control revoke: exit 0, REVOKED, the account is revoked and it changed",
+     "result": "pass"
+    },
+    {
+     "check": "blue's next request: 403",
+     "result": "pass"
+    },
+    {
+     "check": "the reason is ACCOUNT_REVOKED, in the answer and in gateway-authz's decision",
+     "result": "pass"
+    },
+    {
+     "check": "blue's request after the revocation: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "blue's request after the revocation: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "green is not affected by blue's revocation",
+     "result": "skipped",
+     "reason": "there is one sandbox account"
+    },
+    {
+     "check": "gateway-control revocations: LISTED, blue's account is in the table and no other",
+     "result": "pass"
+    },
+    {
+     "check": "gateway-control restore: exit 0, LIFTED, the account is not revoked and it changed",
+     "result": "pass"
+    },
+    {
+     "check": "after the restore blue is served again: query HTTP 200, apiResultCode 0",
+     "result": "pass"
+    },
+    {
+     "check": "gateway-authz is the same process throughout (same pid, still running)",
+     "result": "pass"
+    }
+   ],
+   "notes": {
+    "gateway-control revoke": {
+     "exit": 0,
+     "outcome": "REVOKED",
+     "said": "gateway-control: REVOKED: account-blue is revoked (revocation epoch 1)"
+    },
+    "blue's next request": {
+     "status": 403,
+     "reason_code": "ACCOUNT_REVOKED",
+     "gateway-authz decided": "ACCOUNT_REVOKED"
+    }
+   }
+  },
+  {
+   "id": "SF-13",
+   "title": "the token and the apps file (stand-in only): a voided token keeps failing until key_version changes; a token is replaced before it is used expired; a file that does not load changes nothing",
+   "result": "skipped",
+   "checks": [
+    {
+     "check": "every check of this case",
+     "result": "skipped",
+     "reason": "the sandbox token is not voided or shortened from here, and the apps file is not rewritten against the real carrier"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "SF-14",
+   "title": "a create whose result is unknown, and a carrier that misbehaves (stand-in only): one dispatch, no replay, the signer's own error",
+   "result": "skipped",
+   "checks": [
+    {
+     "check": "every check of this case",
+     "result": "skipped",
+     "reason": "the sandbox cannot be made slow, cut off, or given a bad answer; faults are the stand-in's"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "SF-15",
+   "title": "the hop to the signer, called directly: only the gateway's certificate is served, and a credential is required",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "no client certificate: the handshake or the request fails",
+     "result": "pass"
+    },
+    {
+     "check": "no client certificate: nothing reached the carrier (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "no client certificate: the carrier got no dispatch (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "the rogue-gateway certificate (another CA): the handshake or the request fails",
+     "result": "pass"
+    },
+    {
+     "check": "the rogue-gateway certificate (another CA): nothing reached the carrier (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "the rogue-gateway certificate (another CA): the carrier got no dispatch (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "the business-app certificate (right CA, another identity): 403 caller_not_allowed, as written",
+     "result": "pass"
+    },
+    {
+     "check": "the business-app certificate (right CA, another identity): nothing reached the carrier (judged by the signer's log: refused before the carrier (caller_not_allowed))",
+     "result": "pass"
+    },
+    {
+     "check": "the business-app certificate (right CA, another identity): the carrier got no dispatch (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "the gateway certificate and no Authorization: 403 credential_malformed, as written",
+     "result": "pass"
+    },
+    {
+     "check": "the gateway certificate and no Authorization: nothing reached the carrier (judged by the signer's log: refused before the carrier (credential_malformed))",
+     "result": "pass"
+    },
+    {
+     "check": "the gateway certificate and no Authorization: the carrier got no dispatch (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    }
+   ],
+   "notes": {}
+  }
+ ],
+ "summary": {
+  "cases": 14,
+  "cases_failed": 0,
+  "cases_skipped": 3,
+  "checks": 233,
+  "checks_passed": 168,
+  "checks_failed": 0,
+  "checks_skipped": 65
+ }
+}
