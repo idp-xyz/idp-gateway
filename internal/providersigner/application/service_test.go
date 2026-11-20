@@ -358,12 +358,13 @@ func TestFailures(t *testing.T) {
 		"unsupported_media_type": UnsupportedMediaType, "credential_malformed": CredentialMalformed,
 		"request_too_large": RequestTooLarge, "body_not_json_object": BodyNotJSONObject, "internal": Internal,
 		"carrier_timeout": CarrierTimeout, "carrier_unreachable": CarrierUnreachable, "carrier_status": CarrierStatus,
-		"carrier_answer_unreadable": CarrierAnswerUnreadable,
+		"carrier_answer_unreadable": CarrierAnswerUnreadable, "carrier_circuit_open": CarrierCircuitOpen,
 	}
 	statuses := map[string]int{
 		"caller_not_allowed": 403, "unknown_operation": 404, "query_not_allowed": 400, "unsupported_media_type": 415,
 		"credential_malformed": 403, "request_too_large": 413, "body_not_json_object": 400, "internal": 500,
 		"carrier_timeout": 504, "carrier_unreachable": 502, "carrier_status": 502, "carrier_answer_unreadable": 502,
+		"carrier_circuit_open": 503,
 	}
 	for code, failure := range all {
 		if failure.Code != code || failure.Status != statuses[code] || failure.Detail == "" {

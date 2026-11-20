@@ -1,5 +1,6 @@
 // Package application 把一次出站判定串起来：选定账户、按登记表判定、查撤销状态，
-// 配置了授权来源时再问一次账户的使用授权，需要时取出凭证。它不知道请求是经哪种协议来的。
+// 配置了授权来源时再问一次账户的使用授权，配置了配额时再按 Provider 账户限流，
+// 需要时取出凭证。它不知道请求是经哪种协议来的。
 package application
 
 import (
@@ -19,6 +20,8 @@ const (
 	ReasonRevocationStateUnavailable = "REVOCATION_STATE_UNAVAILABLE"
 	ReasonCredentialUnavailable      = "CREDENTIAL_UNAVAILABLE"
 	ReasonGrantStateUnavailable      = "GRANT_STATE_UNAVAILABLE"
+	ReasonRateLimited                = "RATE_LIMITED"
+	ReasonRateLimitUnavailable       = "RATE_LIMIT_STATE_UNAVAILABLE"
 )
 
 // ErrIndeterminate 表示判定没能完成。调用方必须按拒绝处理，并且不能把它报告成策略拒绝。
@@ -56,6 +59,10 @@ type Outcome struct {
 	Account string
 	// BindingRef 只在放行时有值。
 	BindingRef string
+	// RateLimited 为 true 时这次请求因配额被拒绝：Allowed 为 false，RetryAfter 是至少 1 的秒数。
+	RateLimited bool
+	// RetryAfter 是调用方应当等待的秒数，只在 RateLimited 为 true 时大于 0。
+	RetryAfter int
 }
 
 // CredentialHandle 返回放行结果对应的凭证句柄；未放行时为空。
@@ -73,6 +80,7 @@ type Service struct {
 	revocations ports.Revocations
 	ledger      ports.RevocationLedger
 	grants      ports.Grants
+	limiter     ports.RateLimiter
 	newID       func() string
 }
 
@@ -89,6 +97,12 @@ func WithGrants(grants ports.Grants) Option {
 // 应当是同一张表，由装配的一方保证。
 func WithRevocationLedger(ledger ports.RevocationLedger) Option {
 	return func(s *Service) { s.ledger = ledger }
+}
+
+// WithRateLimiter 在策略、撤销和授权都放行之后按 Provider 账户配额限流。
+// limiter 为 nil 时不限流。限流器报错按没有结论处理（失败关闭）；被拒绝的请求不取凭证。
+func WithRateLimiter(limiter ports.RateLimiter) Option {
+	return func(s *Service) { s.limiter = limiter }
 }
 
 // New 构造 Service。policy 在进程生命周期内不变；换登记表要换进程。
@@ -148,7 +162,7 @@ func (s *Service) Decide(ctx context.Context, in Input) (Outcome, error) {
 		out.Reason = ReasonAccountRevoked
 		return out, nil
 	}
-	// 放在最后问：前面任何一步拒绝，都不必为这个请求发一次网络调用。
+	// 放在配额之前问：前面任何一步拒绝，都不必为这个请求发一次网络调用，也不扣配额。
 	if s.grants != nil {
 		granted, err := s.grants.MayUse(ctx, principal.ServiceID, principal.TenantID, out.Account)
 		if err != nil {
@@ -157,6 +171,28 @@ func (s *Service) Decide(ctx context.Context, in Input) (Outcome, error) {
 		}
 		if !granted {
 			out.Reason = string(domain.ReasonAccountNotGranted)
+			return out, nil
+		}
+	}
+	// 配额排在策略、撤销、授权之后：前面任何一步拒绝，都不消耗额度，也不为这个请求取凭证。
+	// 多条规则是否同时放行由限流器在一次调用里决定；这里只在它允许之后才把判定标成放行。
+	if s.limiter != nil {
+		allowed, retryAfter, err := s.limiter.Allow(ctx, domain.RateLimitSubject{
+			ProviderID: in.ProviderID, AccountID: out.Account, TenantID: in.Tenant,
+			OperationID: in.OperationID, ServiceID: in.Subject,
+		})
+		if err != nil {
+			out.Reason = ReasonRateLimitUnavailable
+			return out, fmt.Errorf("%w: rate limit: %w", ErrIndeterminate, err)
+		}
+		if !allowed {
+			if retryAfter < 1 {
+				retryAfter = 1
+			}
+			out.Allowed = false
+			out.RateLimited = true
+			out.RetryAfter = retryAfter
+			out.Reason = ReasonRateLimited
 			return out, nil
 		}
 	}

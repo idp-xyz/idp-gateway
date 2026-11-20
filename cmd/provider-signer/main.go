@@ -6,6 +6,9 @@
 //
 // 它在请求路径上：只用标准库。操作表是写死的（见 internal/providersigner/domain），承运商的地址
 // 只来自 --carrier-url，调用方的任何东西都到不了承运商。除了操作表里的几个 POST 路径，没有别的接口。
+//
+// --cb-failure-threshold 与 --cb-open-duration 是被动熔断：连续若干次承运商故障后，在打开时长内
+// 直接回答 503 carrier_circuit_open，不再联系承运商。阈值为 0 时关闭，这是默认。
 package main
 
 import (
@@ -46,17 +49,19 @@ func main() {
 }
 
 type options struct {
-	listen           string
-	tlsCert          string
-	tlsKey           string
-	clientCA         string
-	gatewayIdentity  string
-	carrierURL       string
-	plainHTTPHost    string
-	carrierTimeout   time.Duration
-	lang             string
-	maxRequestBytes  int64
-	maxResponseBytes int64
+	listen             string
+	tlsCert            string
+	tlsKey             string
+	clientCA           string
+	gatewayIdentity    string
+	carrierURL         string
+	plainHTTPHost      string
+	carrierTimeout     time.Duration
+	lang               string
+	maxRequestBytes    int64
+	maxResponseBytes   int64
+	cbFailureThreshold int
+	cbOpenDuration     time.Duration
 }
 
 func parse(args []string, output io.Writer) (options, error) {
@@ -85,6 +90,8 @@ func parse(args []string, output io.Writer) (options, error) {
 	flags.StringVar(&o.lang, "lang", "en", "请求头 lang 的值，en、zh-CN、zh-HK 之一")
 	flags.Int64Var(&o.maxRequestBytes, "max-request-bytes", 1<<20, "接受网关的请求正文的上限（字节），必须大于 0")
 	flags.Int64Var(&o.maxResponseBytes, "max-response-bytes", 4<<20, "接受承运商的应答正文的上限（字节），必须大于 0")
+	flags.IntVar(&o.cbFailureThreshold, "cb-failure-threshold", 0, "被动熔断：连续多少次承运商故障后打开电路。0 表示关闭；必须 >= 0")
+	flags.DurationVar(&o.cbOpenDuration, "cb-open-duration", 30*time.Second, "电路打开后持续的时间；--cb-failure-threshold 大于 0 时必须大于 0")
 	if err := flags.Parse(args); err != nil {
 		return o, err
 	}
@@ -109,6 +116,10 @@ func parse(args []string, output io.Writer) (options, error) {
 		return o, errors.New("--max-request-bytes must be greater than zero")
 	case o.maxResponseBytes <= 0:
 		return o, errors.New("--max-response-bytes must be greater than zero")
+	case o.cbFailureThreshold < 0:
+		return o, errors.New("--cb-failure-threshold must not be negative")
+	case o.cbFailureThreshold > 0 && o.cbOpenDuration <= 0:
+		return o, errors.New("--cb-open-duration must be greater than zero")
 	}
 	return o, nil
 }
@@ -126,7 +137,17 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 	if err != nil {
 		return fmt.Errorf("--carrier-url: %w", err)
 	}
-	service, err := application.New(carrier, application.Settings{Lang: o.lang, MaxRequestBytes: o.maxRequestBytes})
+	var serviceOptions []application.Option
+	if o.cbFailureThreshold > 0 {
+		breaker, err := domain.NewCircuitBreaker(domain.CircuitBreakerConfig{
+			FailureThreshold: o.cbFailureThreshold, OpenDuration: o.cbOpenDuration,
+		})
+		if err != nil {
+			return err
+		}
+		serviceOptions = append(serviceOptions, application.WithCircuitBreaker(breaker))
+	}
+	service, err := application.New(carrier, application.Settings{Lang: o.lang, MaxRequestBytes: o.maxRequestBytes}, serviceOptions...)
 	if err != nil {
 		return err
 	}
@@ -144,7 +165,8 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 		"gateway_identity", o.gatewayIdentity, "carrier_host", carrier.Host(), "carrier_scheme", carrier.Scheme(),
 		"plain_http_host", o.plainHTTPHost, "lang", o.lang, "carrier_timeout", o.carrierTimeout.String(),
 		"max_request_bytes", o.maxRequestBytes, "max_response_bytes", o.maxResponseBytes,
-		"operations", len(domain.Operations()))
+		"operations", len(domain.Operations()),
+		"cb_failure_threshold", o.cbFailureThreshold, "cb_open_duration", o.cbOpenDuration.String())
 	if ready != nil {
 		ready(listener.Addr())
 	}

@@ -16,6 +16,9 @@
 // 撤销（见 docs/adr/ADR-0012.md）：--revocations 给出保存撤销表的文件，--revoker-identity
 // 给出唯一能改它的工作负载身份，两个要一起给。都不给时撤销表在内存里、永远是空的，也没有
 // 改它的接口。
+//
+// --rate-limits 可选。给出时按文件里的配额对每个 Provider 账户限流，超额回答 429 和
+// Retry-After，原因码 RATE_LIMITED。不给则不限流。文件里没有秘密。
 package main
 
 import (
@@ -83,6 +86,7 @@ type options struct {
 	gatekeeperKey          string
 	gatekeeperCA           string
 	gatekeeperName         string
+	rateLimits             string
 }
 
 func parse(args []string, output io.Writer) (options, error) {
@@ -124,6 +128,8 @@ func parse(args []string, output io.Writer) (options, error) {
 	add(&o.gatekeeperKey, "gatekeeper-tls-key", "上面那张证书的私钥（PEM）", false)
 	add(&o.gatekeeperCA, "gatekeeper-tls-ca", "签发 PDP 一端证书的 CA（PEM）；系统自带的根证书不被信任", false)
 	add(&o.gatekeeperName, "gatekeeper-name", "验证 PDP 一端证书时要对上的名字", false)
+	add(&o.rateLimits, "rate-limits", "按 Provider 账户限流的配额文件（JSON：version 与 buckets）。不设则不限流。"+
+		"文件里没有秘密，0644 或 0600 都可以；启动时读不成就不启动；文件被换掉之后重读，新文件读不成就沿用上一份", false)
 	if err := flags.Parse(args); err != nil {
 		return o, err
 	}
@@ -307,6 +313,16 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 		grantSource = "policy+gatekeeper"
 		options = append(options, application.WithGrants(grants))
 	}
+	rateLimits := "disabled"
+	rateLimitBuckets := 0
+	if o.rateLimits != "" {
+		limits, err := filestore.LoadRateLimits(o.rateLimits, logger)
+		if err != nil {
+			return err
+		}
+		rateLimits, rateLimitBuckets = "enabled", limits.Len()
+		options = append(options, application.WithRateLimiter(limits))
+	}
 
 	// 撤销表：给了文件就用文件里的那一张，它也是能改的那一张；没有给就在内存里，没有人能改。
 	revocationStore, revokedAccounts, revocationEpoch := "memory", 0, uint64(0)
@@ -356,7 +372,8 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 		"sf_openapi_apps", sfOpenAPIApps, "sf_openapi_plain_http_host", o.sfOpenAPIPlainHTTPHost,
 		"revocations", revocationStore, "revoked_accounts", revokedAccounts, "revocation_epoch", revocationEpoch,
 		"gateway_identity", o.gatewayIdentity, "broker_identity", o.brokerIdentity, "revoker_identity", o.revokerIdentity,
-		"grants", grantSource, "gatekeeper_mtls", pdpTLS != nil)
+		"grants", grantSource, "gatekeeper_mtls", pdpTLS != nil,
+		"rate_limits", rateLimits, "rate_limit_buckets", rateLimitBuckets)
 	if ready != nil {
 		ready(listener.Addr())
 	}

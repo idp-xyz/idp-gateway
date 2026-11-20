@@ -33,6 +33,7 @@ type Service struct {
 	settings Settings
 	now      func() time.Time
 	random   io.Reader
+	breaker  *domain.CircuitBreaker
 }
 
 // Option 改变 Service 的默认依赖。给测试注入时钟和随机源用。
@@ -43,6 +44,11 @@ func WithClock(now func() time.Time) Option { return func(s *Service) { s.now = 
 
 // WithRandom 换掉随机源（默认 crypto/rand）：随机数和明文开头的 16 个随机字符都从它取。
 func WithRandom(random io.Reader) Option { return func(s *Service) { s.random = random } }
+
+// WithCircuitBreaker 装上被动熔断。nil 表示不启用：承运商的失败不会打开电路。
+func WithCircuitBreaker(breaker *domain.CircuitBreaker) Option {
+	return func(s *Service) { s.breaker = breaker }
+}
 
 // New 构造 Service。设置不合法时返回错误。
 func New(carrier ports.Carrier, settings Settings, options ...Option) (*Service, error) {
@@ -97,7 +103,7 @@ func (r Result) fail(f Failure) Result {
 }
 
 // Handle 依次做下面这些事，第一个不成的就答，后面的都不做，承运商也不会被联系：
-// 凭证、正文、构造请求、发送、读应答。
+// 凭证、正文、构造请求、熔断、发送、读应答。熔断打开时不发送。
 func (s *Service) Handle(ctx context.Context, call Call) Result {
 	// 第 5 步：凭证。恰好一个 Authorization 头。
 	if len(call.Authorization) != 1 {
@@ -129,7 +135,27 @@ func (s *Service) Handle(ctx context.Context, call Call) Result {
 		return result.fail(Internal)
 	}
 
-	// 第 8 步：发送，一次，不重试。
+	// 第 8 步：熔断，紧挨在发送之前。凭证、正文、加密已经做过：坏的 JSON 仍是 400，
+	// 不会在电路打开时被改成 503，也不会去动熔断器。
+	var probe bool
+	if s.breaker != nil {
+		allowed, halfOpenProbe := s.breaker.Allow(s.now())
+		if !allowed {
+			return result.fail(CarrierCircuitOpen)
+		}
+		probe = halfOpenProbe
+	}
+	// 半开的探测若在 Send 里 panic，收尾时记一次失败，避免探测标志永远占着。
+	resolved := false
+	if probe {
+		defer func() {
+			if !resolved {
+				s.breaker.RecordFailure(s.now())
+			}
+		}()
+	}
+
+	// 发送，一次，不重试。
 	response, err := s.carrier.Send(ctx, ports.CarrierRequest{
 		MsgType:    call.Operation.MsgType,
 		Lang:       s.settings.Lang,
@@ -141,27 +167,61 @@ func (s *Service) Handle(ctx context.Context, call Call) Result {
 		Ciphertext: ciphertext,
 	})
 
-	// 第 9 步：结局。
+	// 第 9 步：结局，并按下面的规则记熔断：
+	// 失败：传输错误（超时、不可达、应答过大，以及任何其它 error）、HTTP >= 500、
+	// HTTP 200 但信封读不成（承运商回了坏掉的 HTML 或解不开的正文）。
+	// 成功：HTTP 200 且信封读得成，哪怕 apiResultCode 不是 0 或业务 success 为 false。
+	// 那是健康承运商的应用层答复，不是故障。
+	// 中性：其它 HTTP 状态（含 4xx）。不增加连续失败，也不清零，只放掉在途探测。
 	switch {
 	case errors.Is(err, ports.ErrTimeout):
+		s.settleBreaker(-1, &resolved)
 		return result.fail(CarrierTimeout)
 	case errors.Is(err, ports.ErrAnswerTooLarge):
 		result.CarrierStatus = statusOK
+		s.settleBreaker(-1, &resolved)
 		return result.fail(CarrierAnswerUnreadable)
 	case err != nil:
+		s.settleBreaker(-1, &resolved)
 		return result.fail(CarrierUnreachable)
 	}
 	result.CarrierStatus = response.Status
+	if response.Status >= 500 {
+		s.settleBreaker(-1, &resolved)
+		return result.fail(CarrierStatus)
+	}
 	if response.Status != statusOK {
+		s.settleBreaker(0, &resolved)
 		return result.fail(CarrierStatus)
 	}
 	answer, err := domain.OpenAnswer(response.Body, credential.Key(), credential.AppKey())
 	result.APIResultCode, result.HasAPIResultCode = answer.Code, answer.CodeKnown
 	if err != nil {
+		s.settleBreaker(-1, &resolved)
 		return result.fail(CarrierAnswerUnreadable)
 	}
+	s.settleBreaker(1, &resolved)
 	result.Status, result.Body, result.Outcome = statusOK, answer.Body, answer.Outcome
 	return result
+}
+
+// settleBreaker 把这一次承运商交换的结局记到熔断器上。
+// kind 为 1 是成功，-1 是失败，其它是中性。resolved 被置上之后，探测的 defer 不再补记失败。
+func (s *Service) settleBreaker(kind int, resolved *bool) {
+	if s.breaker == nil {
+		return
+	}
+	switch kind {
+	case 1:
+		s.breaker.RecordSuccess()
+	case -1:
+		s.breaker.RecordFailure(s.now())
+	default:
+		s.breaker.RecordNeutral()
+	}
+	if resolved != nil {
+		*resolved = true
+	}
 }
 
 // nonce 是请求头 nonce：16 个随机字节写成 32 个小写十六进制字符。

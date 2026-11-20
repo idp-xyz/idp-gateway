@@ -7,6 +7,8 @@ import (
 	"errors"
 	"log/slog"
 	"time"
+
+	"go.idp.xyz/idp-gateway/internal/egressauthz/domain"
 )
 
 // ErrCredentialNotHeld 表示凭证来源里没有这个账户的凭证。
@@ -62,6 +64,12 @@ type RevocationLedger interface {
 	Restore(ctx context.Context, accountID string) (RevocationChange, error)
 	// Revoked 返回整张表（按账户排序）和当前代次。
 	Revoked(ctx context.Context) ([]RevokedAccount, uint64, error)
+}
+
+// RateLimiter 按 Provider 账户做进程内配额。allowed 为 false 时 retryAfterSeconds 至少为 1。
+// err 非 nil 表示这一跳的结果不可用：调用方必须失败关闭，既不能放行，也不能把它当成策略拒绝。
+type RateLimiter interface {
+	Allow(ctx context.Context, subject domain.RateLimitSubject) (allowed bool, retryAfterSeconds int, err error)
 }
 
 // Grants 回答某个调用方此刻有没有被授予某个 Provider 账户的使用权。授权数据不在本服务里。

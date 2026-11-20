@@ -183,6 +183,14 @@ func (h *Handler) extAuthz(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, denialBody{DecisionID: out.DecisionID, Result: resultIndeterminate, ReasonCode: out.Reason,
 			PolicyVersion: out.PolicyVersion, RevocationEpoch: out.RevocationEpoch})
 		h.record(r, PathExtAuthz, caller, http.StatusServiceUnavailable, resultIndeterminate, in, out, err)
+	case !out.Allowed && out.RateLimited:
+		// 配额拒绝。429 和 Retry-After 由网关原样转给调用方。这里不写 Authorization：
+		// 被限流的请求没有取过凭证，应答里也不许出现它。
+		w.Header().Set("Retry-After", strconv.Itoa(max(1, out.RetryAfter)))
+		w.Header().Set(headerDecisionID, out.DecisionID)
+		writeJSON(w, http.StatusTooManyRequests, denialBody{DecisionID: out.DecisionID, Result: resultDeny, ReasonCode: out.Reason,
+			PolicyVersion: out.PolicyVersion, RevocationEpoch: out.RevocationEpoch})
+		h.record(r, PathExtAuthz, caller, http.StatusTooManyRequests, resultDeny, in, out, nil)
 	case !out.Allowed:
 		w.Header().Set(headerDecisionID, out.DecisionID)
 		writeJSON(w, http.StatusForbidden, denialBody{DecisionID: out.DecisionID, Result: resultDeny, ReasonCode: out.Reason,
@@ -280,6 +288,8 @@ func (h *Handler) decision(w http.ResponseWriter, r *http.Request) {
 		RequestedAccount: *request.RequestedAccountID,
 	}
 	out, err := h.service.Decide(r.Context(), in)
+	// 配额拒绝在这个接口上仍是 200、result DENY、reason_code RATE_LIMITED。
+	// 契约 authz-decision.schema.json 不带 Retry-After；429 只出现在 ExtAuthZ。
 	result := resultDeny
 	switch {
 	case err != nil:

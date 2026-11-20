@@ -26,6 +26,8 @@ var (
 	CarrierUnreachable      = Failure{502, "carrier_unreachable", "The carrier could not be reached."}
 	CarrierStatus           = Failure{502, "carrier_status", "The carrier answered with an unexpected HTTP status."}
 	CarrierAnswerUnreadable = Failure{502, "carrier_answer_unreadable", "The carrier's answer could not be read."}
+	// CarrierCircuitOpen 是被动熔断器打开时的失败：不联系承运商。
+	CarrierCircuitOpen = Failure{503, "carrier_circuit_open", "The carrier circuit breaker is open."}
 )
 
 type failureBody struct {
