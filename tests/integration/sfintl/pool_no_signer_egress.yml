@@ -1,0 +1,5 @@
+# Control, laid over the others by pool.py --control no-signer-egress: the step that installs the signer's
+# egress rules does nothing. The gateway's own egress step is unchanged.
+services:
+  signer-egress:
+    entrypoint: ["/bin/true"]

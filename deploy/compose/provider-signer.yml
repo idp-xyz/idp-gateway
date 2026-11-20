@@ -1,0 +1,117 @@
+# provider-signer in the pool. An overlay: use it with compose.yml and gateway-authz.yml, which it does not change.
+#
+#   docker compose -f compose.yml -f gateway-authz.yml -f provider-signer.yml up -d
+#
+# (its variables are in provider-signer.env.example; put them in the same .env). The published configuration names the
+# signer as host: provider-signer:9444 and does not name the carrier. The carrier address is a flag of the signer.
+#
+# The signer has a network namespace of its own, not the gateway's (not service:netns). Two containers share it, the
+# same way the gateway and front share netns. `provider-signer` only holds the namespace: it is the service on the
+# project's default network, so that is the name the gateway resolves. `signer` is the process, joined to that
+# namespace after the rules are in; a container joined with network_mode: service: has no name of its own.
+#
+# signer-egress runs pin-egress.sh once in that namespace before the signer starts, on every up, and the signer
+# starts only when that step exited 0 (depends_on, as egress does for the gateway in compose.yml). Same script, same
+# image, same capabilities. CONFIG is a small file of `host: name:port` lines (block style, the only form the script
+# reads), one line for the carrier, given by SIGNER_EGRESS_CONFIG. LOOP_ALLOW is set to empty: the script's default
+# (127.0.0.1:8081) applies only when the variable is unset, so an empty value allows no loopback connection.
+#
+# There is no watcher. The carrier address is a start-time constant of the signer (--carrier-url), not a host a later
+# publication of the gateway configuration adds, so nothing after `once` can change what the signer is allowed to
+# open. What follows: the script resolves a name on this run and remembers it for the life of the namespace. A name
+# that does not resolve at that moment is not pinned, and with no watcher it is never retried, so the signer starts
+# and cannot reach the carrier until the next `up` (which runs `once` again) after the name resolves. A name whose
+# address changes later is not updated either; that is the same limit as the gateway's rules.
+#
+# gateway-authz's command is repeated here in full, plus --sf-openapi-apps and --sf-openapi-plain-http-host. Compose
+# replaces a command list; it does not append. An empty --sf-openapi-plain-http-host is the program's default (no
+# plain-HTTP exception): the flag is not required, and an empty value is not a host name it rejects.
+#
+# Not in this file: an egress rule for gateway-authz's own connection to the token endpoint; a watcher; systemd units;
+# gateway-control keep; production certificates.
+services:
+  # Holds the namespace and the DNS name provider-signer. Nothing listens here; the process is `signer`.
+  provider-signer:
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    image: ${FRONT_IMAGE:-public.ecr.aws/nginx/nginx-unprivileged:stable-alpine@sha256:c3fc8fa482be50ef709c6438eb1bc98d50dbfe5a9b48be90711b8814f4dfd701}
+    entrypoint: ["sleep", "infinity"]
+    user: "65534:65534"
+    stop_signal: SIGKILL   # sleep is pid 1 and does not handle SIGTERM
+
+  # The rules, before the signer, on every up. Same image and script as compose.yml's egress; this namespace instead of netns.
+  signer-egress:
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    security_opt: ["no-new-privileges:true"]
+    image: ${EGRESS_IMAGE:-docker@sha256:b36f28717b43f23f56c7c72e97eeba80aeb24fc3f4dbf9fa409b25b074bf1260}
+    network_mode: "service:provider-signer"
+    user: "0:0"
+    entrypoint: ["/bin/sh", "/opt/pin-egress.sh"]
+    command: ["once"]
+    environment:
+      CONFIG: /egress/hosts.yaml
+      # Set, and empty. Unset would allow 127.0.0.1:8081 (the script's default); empty allows no loopback connection.
+      LOOP_ALLOW: ""
+    volumes:
+      - ./pin-egress.sh:/opt/pin-egress.sh:ro
+      - "${SIGNER_EGRESS_CONFIG:?see provider-signer.env.example}:/egress/hosts.yaml:ro"
+    tmpfs:
+      - /tmp
+    depends_on:
+      provider-signer:
+        condition: service_started
+
+  signer:
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    image: ${FRONT_IMAGE:-public.ecr.aws/nginx/nginx-unprivileged:stable-alpine@sha256:c3fc8fa482be50ef709c6438eb1bc98d50dbfe5a9b48be90711b8814f4dfd701}
+    network_mode: "service:provider-signer"
+    entrypoint: ["/usr/local/bin/provider-signer"]
+    user: "${SIGNER_USER:?see provider-signer.env.example}"
+    command:
+      - --listen=0.0.0.0:9444
+      - --tls-cert=/signer/server.crt
+      - --tls-key=/signer/server.key
+      - --client-ca=/signer/client-ca.crt
+      - --gateway-identity=${SIGNER_GATEWAY_IDENTITY:?see provider-signer.env.example}
+      - --carrier-url=${SIGNER_CARRIER_URL:?see provider-signer.env.example}
+      # Empty means no plain-HTTP exception (the flag's default). The program accepts an empty value.
+      - --carrier-plain-http-host=${SIGNER_PLAIN_HTTP_HOST-}
+    volumes:
+      - "${SIGNER:?see provider-signer.env.example}:/usr/local/bin/provider-signer:ro"
+      - "${SIGNER_TLS_CERT:?see provider-signer.env.example}:/signer/server.crt:ro"
+      - "${SIGNER_TLS_KEY:?see provider-signer.env.example}:/signer/server.key:ro"
+      - "${SIGNER_CLIENT_CA:?see provider-signer.env.example}:/signer/client-ca.crt:ro"
+    depends_on:
+      provider-signer:
+        condition: service_started
+      signer-egress:
+        condition: service_completed_successfully
+    stop_grace_period: 5s
+
+  # The whole command of gateway-authz.yml, then the two arguments this carrier needs. Compose replaces the list.
+  gateway-authz:
+    command:
+      - --listen=0.0.0.0:9443
+      - --tls-cert=/authz/server.crt
+      - --tls-key=/authz/server.key
+      - --client-ca=/authz/gateway-ca.crt
+      - --gateway-identity=${GATEWAY_AUTHZ_GATEWAY_IDENTITY:?see gateway-authz.env.example}
+      - --policy=/authz/policy.json
+      - --developer-tokens=/authz/credentials/developer-tokens.json
+      - --gatekeeper-url=${GATEWAY_AUTHZ_PDP_URL:?see gateway-authz.env.example}
+      - --gatekeeper-name=${GATEWAY_AUTHZ_PDP_NAME:?see gateway-authz.env.example}
+      - --gatekeeper-token-file=/authz/pdp-token
+      - --gatekeeper-tls-cert=/authz/pdp-client.crt
+      - --gatekeeper-tls-key=/authz/pdp-client.key
+      - --gatekeeper-tls-ca=/authz/pdp-ca.crt
+      - --sf-openapi-apps=/authz/credentials/sfintl.apps.json
+      # Empty means no plain-HTTP exception. The flag requires --sf-openapi-apps only when the value is not empty.
+      - --sf-openapi-plain-http-host=${GATEWAY_AUTHZ_SF_PLAIN_HTTP_HOST-}

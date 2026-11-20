@@ -1,0 +1,52 @@
+# Laid over deploy/compose/compose.yml, gateway-authz.yml and provider-signer.yml by pool.py. Those files are not
+# changed; this adds what the test needs around them.
+#
+# sfintl-standin: the carrier's stand-in (profile "standin": not started when the upstream is the real sandbox).
+#            The signer's CONFIG names sfintl-standin:8080, so the signer's egress rules pin the stand-in. The
+#            published gateway configuration does not name it.
+# outsider:  a listener that nothing pins. From a namespace whose rules are in force it must not be reachable.
+# provider-signer: the namespace holder. Publishing 9444 on the loopback lets SF-15 call the signer from the host;
+#            the deploy overlay does not publish it. The rules do not apply to a connection that comes in.
+# gateway-authz joins the network of the local Gatekeeper stack (external, made by tests/integration/gatekeeper/stack.sh)
+#            and finds the PDP's mutual-TLS front, pdp-mtls, by its service name.
+services:
+  sfintl-standin:
+    profiles: ["standin"]
+    # The tools image has no cryptography, which mock_sfintl.py imports. pool.py builds this image from that one.
+    image: ${STANDIN_IMAGE:?}
+    command: ["python", "-u", "/scripts/mock.py", "--host", "0.0.0.0", "--port", "8080", "--state", "/state/state.json"]
+    user: "${GATEWAY_USER:?}"
+    ports:
+      - "127.0.0.1:${MOCK_HOST_PORT:?}:8080"
+    volumes:
+      - "${MOCK_SCRIPT:?}:/scripts/mock.py:ro"
+      - "${MOCK_STATE:?}:/state/state.json:ro"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 2s
+
+  outsider:
+    image: ${TOOLS_IMAGE:?}
+    command: ["python", "-m", "http.server", "8000", "--bind", "0.0.0.0", "--directory", "/tmp"]
+    user: "65534:65534"
+    tmpfs:
+      - /tmp
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 2s
+
+  provider-signer:
+    ports:
+      - "127.0.0.1:${SIGNER_HOST_PORT:?}:9444"
+
+  gateway-authz:
+    networks:
+      - default
+      - gatekeeper
+
+networks:
+  gatekeeper:
+    name: idp-gateway-gk_default
+    external: true

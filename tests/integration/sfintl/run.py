@@ -599,7 +599,8 @@ def remember(order_no: str, waybill: str | None):
 # What differs when the gateway runs in the pool: where requests go, where records, decisions and logs are read.
 HOOKS = {'gateway_port': gk.PORTS['gateway'], 'mock_port': gk.PORTS['provider'], 'signer_port': SIGNER_PORT,
          'decisions': gk.decisions, 'signer_calls': None, 'gateway_log': None, 'skip_sf09': None, 'peers': None, 'logs': None,
-         'second_authorization_reaches_the_gateway': True, 'skip_extra': None}
+         'second_authorization_reaches_the_gateway': True, 'skip_extra': None, 'authz_identity': None,
+         'oversized_body_stopped_by_front': False}
 MOCK_SECRET = ''
 
 
@@ -705,6 +706,10 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
         return document
 
     def authz_process():
+        # The pool sets HOOKS['authz_identity']; the rig has no such hook and uses the local process.
+        reader = HOOKS.get('authz_identity')
+        if reader:
+            return reader()
         entry = next((p for p in gk.PROCS if p[0] == 'gateway-authz'), None)
         return (entry[1].pid, entry[1].poll() is None) if entry else (None, False)
 
@@ -1042,7 +1047,13 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
     who = 'provider-signer' if is_signer(answer, 'request_too_large') else 'not the signer\'s JSON'
     r.note('body over 1 MiB', {'status': answer['status'], 'who': who, 'signer_error': envelope(answer).get('error')})
     r.check(f'body over 1 MiB: refused ({answer["status"]})', answer['status'] is not None and answer['status'] >= 400)
-    r.check('body over 1 MiB: the signer\'s 413 request_too_large, as written', is_signer(answer, 'request_too_large'))
+    if HOOKS.get('oversized_body_stopped_by_front'):
+        # The pool's front is nginx with no client_max_body_size (front.nginx.conf). Its default is 1m, and this body is larger, so front answers before the signer.
+        server = [value for key, value in answer['headers'] if key == 'server']
+        r.check('body over 1 MiB: front answers 413 and the body is not the signer\'s JSON',
+                answer['status'] == 413 and not is_signer(answer, 'request_too_large') and any('nginx' in value.lower() for value in server))
+    else:
+        r.check('body over 1 MiB: the signer\'s 413 request_too_large, as written', is_signer(answer, 'request_too_large'))
     signer_stopped('body over 1 MiB: nothing reached the carrier', smark, True)
     standin_quiet('body over 1 MiB: the carrier got no dispatch')
 

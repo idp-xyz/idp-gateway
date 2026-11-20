@@ -335,6 +335,25 @@ docker compose -f compose.yml -f gateway-authz.yml up -d
 - **到 PDP**：地址不是回环，所以 `--gatekeeper-tls-cert`、`-key`、`-ca` 和 `--gatekeeper-name` 四个都要给，缺一个它不启动（2.3 的规则）。
 - **还没有的**：撤销（`--revocations`）没有接；看守和开机的两个单元跑的是只有 `compose.yml` 的命令，要带上叠加文件得改那两个单元；`.env` 里除 `docker compose` 外还有看守读，上面几项照它的写法。这个叠加文件和万邦的配置一起，在 [`tests/integration/wanbexpress/pool.py`](../../tests/integration/wanbexpress/README.md) 里跑过，没有装到别的机器上。
 
+## provider-signer（叠加文件）
+
+顺丰国际的签名适配器。`provider-signer.yml` 和 `compose.yml`、`gateway-authz.yml` 一起用，不改那两个文件：
+
+```bash
+docker compose -f compose.yml -f gateway-authz.yml -f provider-signer.yml up -d
+```
+
+发布上去的配置里，后端是 `host: provider-signer:9444`，配置里不写承运商的地址。承运商的地址是适配器的启动参数。
+
+- **自己的网络命名空间，不在 `netns` 里。** 项目默认网络上的服务叫 `provider-signer`，只占着这个命名空间，所以网关按这个名字找到它。跑程序的是另一个服务 `signer`，用 `network_mode: service:provider-signer` 接进同一个命名空间；这样接进去的容器没有自己的名字。
+- **出口规则在它启动之前装上，每次 `up` 都装。** `signer-egress` 跑的是同一份 `pin-egress.sh`、同一个镜像，`once`，退出码是 0 之后 `signer` 才启动（`depends_on`，和 `compose.yml` 里网关等 `egress` 一样）。`CONFIG` 是一份小文件，一行 `host: 名字:端口`，指承运商，路径是变量 `SIGNER_EGRESS_CONFIG`。`LOOP_ALLOW` 设成空：脚本只在这个变量没设的时候才放行 `127.0.0.1:8081`，设了空值就不放行任何回环连接。
+- **没有常驻的那一步。** 承运商的地址是适配器的启动参数，不是后来发布的网关配置里才多出来的名字，所以 `once` 之后没有什么要再钉。名字在 `once` 那一下解析不了，就不会被钉上，也没有下一次再试，适配器照样启动，但连不上承运商，要等下一次 `up`（会再跑一遍 `once`）而且那时候名字解析得了。名字后来换了地址，也不会更新；这和网关那边的规则是同一个限制。
+- **加固照 `gateway-authz`。** `signer`：镜像按摘要引用，只是个壳；跑的是本机上的 `provider-signer`，挂进去（静态链接：`CGO_ENABLED=0 go build -trimpath -o provider-signer ./cmd/provider-signer`）；`read_only`、`cap_drop: ALL`、`no-new-privileges`、不是 root、`restart: "no"`。读的文件都是只读挂进去的。占着命名空间的那个容器也是这样，自己什么都不跑。
+- **`gateway-authz` 的启动参数。** compose 合并文件时，后一个文件里的 `command` 整份换掉前一个，不会往后面加。所以这里把 `gateway-authz.yml` 的 `command` 整份写了一遍，末尾多两个：`--sf-openapi-apps=/authz/credentials/sfintl.apps.json` 和 `--sf-openapi-plain-http-host`。后一个空着就是没有明文例外（程序接受空值，空值不是一个主机名）。凭证目录还是 `gateway-authz.yml` 挂的那一个，里面要有 `sfintl.apps.json`，也还要有 `developer-tokens.json`（原来的参数还在；这个承运商不用开发者令牌时，文件内容写 `{}`）。两个文件权限 `0600`。应用文件被改名换掉之后 `gateway-authz` 会重读。
+- **变量**写在 [`provider-signer.env.example`](provider-signer.env.example)，抄进同一个 `.env`。必填的缺了，`docker compose` 会说是哪一个：`SIGNER`（二进制）、`SIGNER_USER`、`SIGNER_TLS_CERT`、`SIGNER_TLS_KEY`、`SIGNER_CLIENT_CA`（签发网关证书的 CA）、`SIGNER_GATEWAY_IDENTITY`、`SIGNER_CARRIER_URL`、`SIGNER_EGRESS_CONFIG`（上面那份小文件）。`SIGNER_PLAIN_HTTP_HOST` 和 `GATEWAY_AUTHZ_SF_PLAIN_HTTP_HOST` 可以空着。
+- **明文。** `--carrier-plain-http-host` 空着，适配器只允许回环地址字面量上的明文 `http`。沙箱和替身的地址不是回环，要把主机名写在这个变量里，`gateway-authz` 的那个变量写同一个主机名。
+- **还没有的**：`gateway-authz` 自己去令牌端点的那条连接没有出口规则；systemd 单元；看守（`gateway-control keep`）带上这个叠加文件；生产证书；别的机器。这个叠加文件和顺丰国际的配置一起，在 `tests/integration/sfintl/pool.py` 里跑过。
+
 ## 停
 
 看守在跑时先停它，不然停下的容器会被它起回来。装了两个单元时：`systemctl stop idp-gateway-pool.service`，它先停看守，再跑 `docker compose stop`。
