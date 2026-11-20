@@ -1,0 +1,1385 @@
+{
+ "kind": "pool: deploy/compose with gateway-authz.yml and provider-signer.yml, the configuration published by gateway-control, callers through front, the egress rules in force in the gateway's namespace and in the signer's; the PDP is the local Gatekeeper stack",
+ "upstream_kind": "stand-in",
+ "operator_and_approver": "Not recorded. The repository owner decided on 2026-11-19 (development plan 1.6) that this technical software has no operator and approver kept apart: this file records what was run, on which commits and images, and what was seen. It is a record of verification, not a gate decision.",
+ "agentgateway": {
+  "version": "1.7.0",
+  "image": "cr.agentgateway.dev/agentgateway@sha256:60216aafb03d37f94e952ff3d51d2f630a65b10ecaebdc0a864882f92610c45b"
+ },
+ "gatekeeper_commit": "f36dc06",
+ "repository": {
+  "commit": "1a144d0",
+  "uncommitted_files": 0
+ },
+ "registry_sha256": "f1f4d438f82d25140e286b79865ea01ea12be3e6a74dca9f0a1c7dd474bd0e4d",
+ "registry_note": "the example register; each run fills its placeholders with that run's tenant and client ids, so the filled copy differs from run to run",
+ "gateway_configuration_sha256": "2f9ee3c8a792b533df77197ec87d393b978883dfd4e5d0e2262b8cf54967d70c",
+ "environment": [
+  "TEST"
+ ],
+ "started_at_utc": "2026-11-20T07:41:46+00:00",
+ "finished_at_utc": "2026-11-20T07:43:23+00:00",
+ "clock": {
+  "carrier_response_date": "Fri, 20 Nov 2026 07:41:47 GMT",
+  "offset_seconds": -0.7,
+  "resolution_seconds": 1,
+  "taken_from": "the Date header of the first query (SF-01), as it reached the caller"
+ },
+ "dataset": {
+  "reference_prefix": "IDPGW-20261120-",
+  "orders_created_and_cancelled": [
+   "SF6043000100001",
+   "SF6043000100002",
+   "SF6043000100003",
+   "SF6043000100004",
+   "SF6043000100005",
+   "SF6043000100006",
+   "SF6043000100007",
+   "SF6043000100008",
+   "SF6043000100009"
+  ],
+  "orders_left_uncancelled": []
+ },
+ "upstream": {
+  "kind": "stand-in",
+  "name": "sfintl-standin:8080",
+  "signer": "provider-signer:9444"
+ },
+ "gateway_proxy_variables": {
+  "in_the_containers": {
+   "agentgateway": [],
+   "front": [],
+   "netns": [],
+   "gateway-authz": [],
+   "provider-signer": [],
+   "signer": []
+  },
+  "present_in_the_containers": false
+ },
+ "cases": [
+  {
+   "id": "SF-01",
+   "title": "query, create, query, cancel, query: the blue tenant's real Gatekeeper token, through the gateway",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "query of an order number that does not exist: HTTP 200, apiResultCode 0, wrongData status 4001",
+     "result": "pass"
+    },
+    {
+     "check": "query: gateway-authz decided ACTIVE_ACCOUNT_GRANT for agent-numbers.query",
+     "result": "pass"
+    },
+    {
+     "check": "create: HTTP 200, apiResultCode 0, success true",
+     "result": "pass"
+    },
+    {
+     "check": "create: the envelope has exactly apiResultCode, apiResultData, apiTimestamp",
+     "result": "pass"
+    },
+    {
+     "check": "create: a sfWaybillNo and our customerOrderNo, and no business code",
+     "result": "pass"
+    },
+    {
+     "check": "create: gateway-authz decided ACTIVE_ACCOUNT_GRANT for orders.create",
+     "result": "pass"
+    },
+    {
+     "check": "no Set-Cookie and no X-Mock-Provider from the carrier reach the caller (the stand-in sets both)",
+     "result": "pass"
+    },
+    {
+     "check": "the create's access-log line carries provider_reference_id = our customerOrderNo",
+     "result": "pass"
+    },
+    {
+     "check": "the create's access-log line carries provider_request_id = the sfWaybillNo",
+     "result": "pass"
+    },
+    {
+     "check": "query of the new order: HTTP 200, apiResultCode 0, wrongData status 4002",
+     "result": "pass"
+    },
+    {
+     "check": "the second query: gateway-authz decided ACTIVE_ACCOUNT_GRANT for agent-numbers.query",
+     "result": "pass"
+    },
+    {
+     "check": "cancel: HTTP 200, apiResultCode 0, success true, code 200",
+     "result": "pass"
+    },
+    {
+     "check": "cancel: gateway-authz decided ACTIVE_ACCOUNT_GRANT for orders.cancel",
+     "result": "pass"
+    },
+    {
+     "check": "query after the cancel: HTTP 200, apiResultCode 0, wrongData status 4001",
+     "result": "pass"
+    },
+    {
+     "check": "exactly one token request was made for the blue app up to here (the rest were served from the cache)",
+     "result": "pass"
+    }
+   ],
+   "notes": {
+    "access log": {
+     "lines_with_the_order_number": 1,
+     "lines_with_provider_reference_id": 1,
+     "fields": [
+      {
+       "route": "default/sfintl-orders-create",
+       "http.status": "200",
+       "provider_reference_id": "IDPGW-20261120-dda3035dc5f4",
+       "provider_request_id": "SF6043000100001"
+      }
+     ]
+    },
+    "cancel attempts": 1
+   }
+  },
+  {
+   "id": "SF-02",
+   "title": "the same create again while the order exists: success, code 123052, the same waybill; a cancel that is too early fails and the next one works",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "the first create succeeded and answered a waybill",
+     "result": "pass"
+    },
+    {
+     "check": "the same create again: HTTP 200, apiResultCode 0, success true, code 123052",
+     "result": "pass"
+    },
+    {
+     "check": "the same create again: the waybill number is the first one",
+     "result": "pass"
+    },
+    {
+     "check": "fault cancel-not-yet: HTTP 200, code 500, success false, unchanged (a business answer, not a signer error)",
+     "result": "pass"
+    },
+    {
+     "check": "fault cancel-not-yet: the order still exists",
+     "result": "pass"
+    },
+    {
+     "check": "the cancel again succeeds: success true, code 200",
+     "result": "pass"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "SF-03",
+   "title": "what the carrier receives (stand-in only): the caller's bytes unchanged, the blue app's own credential, none of the caller's headers",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "three creates answered 200 and the carrier received three dispatches",
+     "result": "pass"
+    },
+    {
+     "check": "each dispatch was accepted (refused is null) and msgType is IECS_CREATE_ORDER",
+     "result": "pass"
+    },
+    {
+     "check": "each target is exactly /openapi/api/dispatch",
+     "result": "pass"
+    },
+    {
+     "check": "plaintext_sha256 equals the SHA-256 of the exact bytes the caller sent",
+     "result": "pass"
+    },
+    {
+     "check": "appKey is the blue app's, compared and not printed",
+     "result": "pass"
+    },
+    {
+     "check": "token is the token the stand-in issued to the blue app (the one SF-01's create carried), compared and not printed",
+     "result": "pass"
+    },
+    {
+     "check": "three different nonces",
+     "result": "pass"
+    },
+    {
+     "check": "none of the caller's headers arrived (cookie, forwarding headers, x-evil-probe, x-provider-account)",
+     "result": "pass"
+    },
+    {
+     "check": "no x-idp-* header and no authorization header at all",
+     "result": "pass"
+    },
+    {
+     "check": "the caller's Gatekeeper token and the planted credential are nowhere in the records",
+     "result": "pass"
+    },
+    {
+     "check": "no new token request (the token is cached)",
+     "result": "pass"
+    },
+    {
+     "check": "no Set-Cookie and no X-Mock-Provider reach the caller",
+     "result": "pass"
+    }
+   ],
+   "notes": {
+    "header names the carrier saw": [
+     "accept-encoding",
+     "appkey",
+     "content-length",
+     "content-type",
+     "host",
+     "lang",
+     "msgtype",
+     "nonce",
+     "signature",
+     "timestamp",
+     "token",
+     "user-agent"
+    ]
+   }
+  },
+  {
+   "id": "SF-04",
+   "title": "no token, a token for another audience, a forged signature, on each of the three paths: 401, and nothing is asked downstream",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "no token /orders: 401",
+     "result": "pass"
+    },
+    {
+     "check": "no token /orders: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "no token /orders: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "no token /orders: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
+     "result": "pass"
+    },
+    {
+     "check": "no token /order-cancellations: 401",
+     "result": "pass"
+    },
+    {
+     "check": "no token /order-cancellations: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "no token /order-cancellations: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "no token /order-cancellations: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
+     "result": "pass"
+    },
+    {
+     "check": "no token /agent-number-queries: 401",
+     "result": "pass"
+    },
+    {
+     "check": "no token /agent-number-queries: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "no token /agent-number-queries: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "no token /agent-number-queries: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /orders: 401",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /orders: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /orders: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /orders: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /order-cancellations: 401",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /order-cancellations: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /order-cancellations: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /order-cancellations: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /agent-number-queries: 401",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /agent-number-queries: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /agent-number-queries: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /agent-number-queries: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /orders: 401",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /orders: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /orders: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /orders: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /order-cancellations: 401",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /order-cancellations: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /order-cancellations: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /order-cancellations: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /agent-number-queries: 401",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /agent-number-queries: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /agent-number-queries: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /agent-number-queries: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
+     "result": "pass"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "SF-05",
+   "title": "tenants: green gets the green app; green cannot cancel blue's order (the stand-in's assumption); blue asking for green's account is refused",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "a blue order exists to try against",
+     "result": "pass"
+    },
+    {
+     "check": "green: HTTP 200 and the dispatch carries the green app's key",
+     "result": "pass"
+    },
+    {
+     "check": "green: the dispatch carries the token the stand-in issued to the green app (accepted, and not the blue app's), compared and not printed",
+     "result": "pass"
+    },
+    {
+     "check": "green cannot cancel blue's order: business success is false (order ownership per app is the stand-in's assumption)",
+     "result": "pass"
+    },
+    {
+     "check": "blue's order still exists after green's cancel",
+     "result": "pass"
+    },
+    {
+     "check": "blue then cancels that order",
+     "result": "pass"
+    },
+    {
+     "check": "blue asking for the green account: 403",
+     "result": "pass"
+    },
+    {
+     "check": "the reason is ACCOUNT_NOT_GRANTED",
+     "result": "pass"
+    },
+    {
+     "check": "blue asking for the green account: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "blue asking for the green account: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "SF-06",
+   "title": "a client the register knows but Gatekeeper has no grant for: 403, the signer is not called",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "403",
+     "result": "pass"
+    },
+    {
+     "check": "the reason is ACCOUNT_NOT_GRANTED",
+     "result": "pass"
+    },
+    {
+     "check": "the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "SF-07",
+   "title": "a method or a path that is not registered does not get to the signer or the carrier",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "GET /orders: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "GET /orders: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "GET /orders: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /orders: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /order-cancellations: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "GET /order-cancellations: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "GET /order-cancellations: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /order-cancellations: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /agent-number-queries: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "GET /agent-number-queries: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "GET /agent-number-queries: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /agent-number-queries: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /orders: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /orders: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /orders: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /orders: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /order-cancellations: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /order-cancellations: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /order-cancellations: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /order-cancellations: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /agent-number-queries: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /agent-number-queries: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /agent-number-queries: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /agent-number-queries: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /orders: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /orders: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /orders: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /orders: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /order-cancellations: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /order-cancellations: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /order-cancellations: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /order-cancellations: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /agent-number-queries: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /agent-number-queries: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /agent-number-queries: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /agent-number-queries: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /orders: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /orders: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /orders: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /orders: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /order-cancellations: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /order-cancellations: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /order-cancellations: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /order-cancellations: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /agent-number-queries: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /agent-number-queries: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /agent-number-queries: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /agent-number-queries: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders/: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders/: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders/: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders/X: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders/X: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders/X: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders-extra: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders-extra: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders-extra: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "/order-cancellations/1: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "/order-cancellations/1: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/order-cancellations/1: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "/agent-number-queries/x: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "/agent-number-queries/x: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/agent-number-queries/x: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders/../orders: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders/../orders: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders/../orders: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders/%2e%2e: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders/%2e%2e: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders/%2e%2e: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders%2fX: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders%2fX: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders%2fX: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "/%252e: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "/%252e: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/%252e: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders;x=1: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders;x=1: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders;x=1: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders%00: refused (400)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders%00: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/orders%00: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "//orders: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "//orders: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "//orders: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "/ORDERS: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "/ORDERS: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/ORDERS: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "/sfintl/v1/orders: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "/sfintl/v1/orders: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/sfintl/v1/orders: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "/providers/wanbexpress/v1/parcels: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "/providers/wanbexpress/v1/parcels: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/providers/wanbexpress/v1/parcels: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "/providers/sfintl/v2/orders: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "/providers/sfintl/v2/orders: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/providers/sfintl/v2/orders: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "query string on an allowed path: refused (400)",
+     "result": "pass"
+    },
+    {
+     "check": "query string: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "query string: nothing reached the carrier (judged by the signer's log: refused before the carrier (query_not_allowed))",
+     "result": "pass"
+    }
+   ],
+   "notes": {
+    "who refused the query string": "the signer, 400 query_not_allowed (HTTP 400 to the caller)"
+   }
+  },
+  {
+   "id": "SF-08",
+   "title": "the signer's own refusals, through the gateway: the caller gets the signer's JSON, and the carrier is not asked",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "Content-Type text/plain: the signer's 415 unsupported_media_type, as written",
+     "result": "pass"
+    },
+    {
+     "check": "Content-Type text/plain: nothing reached the carrier (judged by the signer's log: refused before the carrier (unsupported_media_type))",
+     "result": "pass"
+    },
+    {
+     "check": "Content-Type text/plain: the carrier got no dispatch (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "a JSON array: the signer's 400 body_not_json_object, as written",
+     "result": "pass"
+    },
+    {
+     "check": "a JSON array: nothing reached the carrier (judged by the signer's log: refused before the carrier (body_not_json_object))",
+     "result": "pass"
+    },
+    {
+     "check": "a JSON array: the carrier got no dispatch (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "two JSON objects: the signer's 400 body_not_json_object, as written",
+     "result": "pass"
+    },
+    {
+     "check": "two JSON objects: nothing reached the carrier (judged by the signer's log: refused before the carrier (body_not_json_object))",
+     "result": "pass"
+    },
+    {
+     "check": "two JSON objects: the carrier got no dispatch (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "an empty body: the signer's 400 body_not_json_object, as written",
+     "result": "pass"
+    },
+    {
+     "check": "an empty body: nothing reached the carrier (judged by the signer's log: refused before the carrier (body_not_json_object))",
+     "result": "pass"
+    },
+    {
+     "check": "an empty body: the carrier got no dispatch (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "a body that is not JSON: the signer's 400 body_not_json_object, as written",
+     "result": "pass"
+    },
+    {
+     "check": "a body that is not JSON: nothing reached the carrier (judged by the signer's log: refused before the carrier (body_not_json_object))",
+     "result": "pass"
+    },
+    {
+     "check": "a body that is not JSON: the carrier got no dispatch (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "body over 1 MiB: refused (413)",
+     "result": "pass"
+    },
+    {
+     "check": "body over 1 MiB: front answers 413 and the body is not the signer's JSON",
+     "result": "pass"
+    },
+    {
+     "check": "body over 1 MiB: nothing reached the carrier (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "body over 1 MiB: the carrier got no dispatch (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    }
+   ],
+   "notes": {
+    "body over 1 MiB": {
+     "status": 413,
+     "who": "not the signer's JSON",
+     "signer_error": null
+    }
+   }
+  },
+  {
+   "id": "SF-09",
+   "title": "gateway-authz allows and releases no credential: the gateway's backend rule refuses, so the signer is not called; a caller's own Authorization does not take its place",
+   "result": "skipped",
+   "checks": [
+    {
+     "check": "every check of this case",
+     "result": "skipped",
+     "reason": "the pool runs the product build of gateway-authz; SF-09 swaps in the acceptance build"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "SF-10",
+   "title": "the logs of the gateway, gateway-authz and provider-signer, this run's output and the result file hold none of this run's secrets",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "gateway log: none of the 20 secrets of this run, and no value of the carrier's authorization scheme",
+     "result": "pass"
+    },
+    {
+     "check": "gateway-authz log: none of the 20 secrets of this run, and no value of the carrier's authorization scheme",
+     "result": "pass"
+    },
+    {
+     "check": "provider-signer log: none of the 20 secrets of this run, and no value of the carrier's authorization scheme",
+     "result": "pass"
+    },
+    {
+     "check": "standard output: none of the 20 secrets of this run, and no value of the carrier's authorization scheme",
+     "result": "pass"
+    },
+    {
+     "check": "result file: none of the 20 secrets of this run, and no value of the carrier's authorization scheme",
+     "result": "pass"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "SF-11",
+   "title": "the egress rules: the signer's namespace can open the carrier and nothing else; the gateway's namespace can open the signer and gateway-authz, and cannot open the carrier",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "the stand-in's name is pinned, on its port, to the address the stand-in has",
+     "result": "pass"
+    },
+    {
+     "check": "from the signer's namespace the carrier's pinned address and port can be connected to",
+     "result": "pass"
+    },
+    {
+     "check": "from the signer's namespace anything else (another container, another port, IPv6 loopback) is refused by the rule",
+     "result": "pass"
+    },
+    {
+     "check": "the signer's chain holds the pin for the carrier's name:port",
+     "result": "pass"
+    },
+    {
+     "check": "gateway-authz is pinned, on 9443, to the address it has",
+     "result": "pass"
+    },
+    {
+     "check": "provider-signer is pinned, on 9444, to the address the signer's namespace has",
+     "result": "pass"
+    },
+    {
+     "check": "the carrier's name:port is not pinned in the gateway's namespace (the published configuration does not name it)",
+     "result": "pass"
+    },
+    {
+     "check": "from the gateway's namespace provider-signer:9444, gateway-authz:9443 and loopback 8081 can be connected to",
+     "result": "pass"
+    },
+    {
+     "check": "from the gateway's namespace the carrier's address and port are refused by the rule",
+     "result": "pass"
+    },
+    {
+     "check": "from the gateway's namespace IPv6 loopback is refused by the rule",
+     "result": "pass"
+    }
+   ],
+   "notes": {
+    "pinned in the signer's namespace": {
+     "sfintl-standin:8080": [
+      "192.168.48.2"
+     ]
+    },
+    "pinned in the gateway's namespace": {
+     "127.0.0.1:15000": [
+      "127.0.0.1"
+     ],
+     "gateway-authz:9443": [
+      "192.168.48.5"
+     ],
+     "provider-signer:9444": [
+      "192.168.48.3"
+     ]
+    },
+    "signer namespace rules (iptables -S IDP_EGRESS, then ip6tables)": {
+     "ipv4": [
+      "-N IDP_EGRESS",
+      "-A IDP_EGRESS -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT",
+      "-A IDP_EGRESS -p udp -m conntrack --ctorigdst 127.0.0.11 --ctorigdstport 53 -j ACCEPT",
+      "-A IDP_EGRESS -p tcp -m conntrack --ctorigdst 127.0.0.11 --ctorigdstport 53 -j ACCEPT",
+      "-A IDP_EGRESS -d 192.168.48.2/32 -p tcp -m tcp --dport 8080 -m comment --comment \"pin:sfintl-standin:8080\" -j ACCEPT",
+      "-A IDP_EGRESS -j REJECT --reject-with icmp-admin-prohibited"
+     ],
+     "ipv6": [
+      "-N IDP_EGRESS",
+      "-A IDP_EGRESS -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT",
+      "-A IDP_EGRESS -j REJECT --reject-with icmp6-adm-prohibited"
+     ],
+     "ipv4_exit": 0,
+     "ipv6_exit": 0
+    },
+    "gateway namespace rules (iptables -S IDP_EGRESS, then ip6tables)": {
+     "ipv4": [
+      "-N IDP_EGRESS",
+      "-A IDP_EGRESS -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT",
+      "-A IDP_EGRESS -p udp -m conntrack --ctorigdst 127.0.0.11 --ctorigdstport 53 -j ACCEPT",
+      "-A IDP_EGRESS -p tcp -m conntrack --ctorigdst 127.0.0.11 --ctorigdstport 53 -j ACCEPT",
+      "-A IDP_EGRESS -d 127.0.0.1/32 -p tcp -m tcp --dport 8081 -j ACCEPT",
+      "-A IDP_EGRESS -d 127.0.0.1/32 -p tcp -m tcp --dport 15000 -m comment --comment \"pin:127.0.0.1:15000\" -j ACCEPT",
+      "-A IDP_EGRESS -d 192.168.48.5/32 -p tcp -m tcp --dport 9443 -m comment --comment \"pin:gateway-authz:9443\" -j ACCEPT",
+      "-A IDP_EGRESS -d 192.168.48.3/32 -p tcp -m tcp --dport 9444 -m comment --comment \"pin:provider-signer:9444\" -j ACCEPT",
+      "-A IDP_EGRESS -j REJECT --reject-with icmp-admin-prohibited"
+     ],
+     "ipv6": [
+      "-N IDP_EGRESS",
+      "-A IDP_EGRESS -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT",
+      "-A IDP_EGRESS -j REJECT --reject-with icmp6-adm-prohibited"
+     ],
+     "ipv4_exit": 0,
+     "ipv6_exit": 0
+    },
+    "gateway-authz's namespace has no egress rules (iptables -S; not a check)": "-P INPUT ACCEPT\n-P FORWARD ACCEPT\n-P OUTPUT ACCEPT\n",
+    "connect() from the signer's namespace (0 connected, 113 refused by the rule, 13 refused on IPv6)": {
+     "192.168.48.2:8080": 0,
+     "192.168.48.6:8000": 113,
+     "192.168.48.2:8001": 113,
+     "192.168.48.5:9444": 113,
+     "[::1]:9": 13
+    },
+    "connect() from the gateway's namespace (0 connected, 113 refused by the rule, 13 refused on IPv6)": {
+     "192.168.48.3:9444": 0,
+     "192.168.48.5:9443": 0,
+     "127.0.0.1:8081": 0,
+     "192.168.48.2:8080": 113,
+     "192.168.48.6:8000": 113,
+     "[::1]:9": 13
+    }
+   }
+  },
+  {
+   "id": "SF-12",
+   "title": "revocation through gateway-control: a read-only query is refused, the signer is not called, green is not touched; restored, blue is served again",
+   "result": "skipped",
+   "checks": [
+    {
+     "check": "every check of this case",
+     "result": "skipped",
+     "reason": "the pool starts gateway-authz with gateway-authz.yml's command plus --sf-openapi-apps and --sf-openapi-plain-http-host only, so --revocations is not passed and gateway-control has nothing to revoke through"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "SF-13",
+   "title": "the token and the apps file (stand-in only): a voided token keeps failing until key_version changes; a token is replaced before it is used expired; a file that does not load changes nothing",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "after the token is voided: HTTP 200 and the carrier's apiResultCode 500 is passed through (apiErrorMsg kept, apiResultData null)",
+     "result": "pass"
+    },
+    {
+     "check": "key_version changed: the next request is served (HTTP 200, apiResultCode 0)",
+     "result": "pass"
+    },
+    {
+     "check": "the stand-in saw exactly one new token request, and it is the blue app's",
+     "result": "pass"
+    },
+    {
+     "check": "the green app's token was not fetched again",
+     "result": "pass"
+    },
+    {
+     "check": "gateway-authz is the same process after the file is replaced",
+     "result": "pass"
+    },
+    {
+     "check": "a 5-second token is fetched and the request is served",
+     "result": "pass"
+    },
+    {
+     "check": "after the token is past its life: the request is served and the dispatch was not refused",
+     "result": "pass"
+    },
+    {
+     "check": "that dispatch carries a new token (one more token request; compared, not printed)",
+     "result": "pass"
+    },
+    {
+     "check": "the lifetime is back to 7200 and key_version is back, and a request is served",
+     "result": "pass"
+    },
+    {
+     "check": "gateway-authz is the same process throughout",
+     "result": "pass"
+    },
+    {
+     "check": "a file that does not load: the next request is still served with the last file that loaded",
+     "result": "pass"
+    },
+    {
+     "check": "the first file is put back and a request is served",
+     "result": "pass"
+    }
+   ],
+   "notes": {
+    "further requests after the voided token, apiResultCode": [
+     500,
+     500,
+     500
+    ]
+   }
+  },
+  {
+   "id": "SF-14",
+   "title": "a create whose result is unknown, and a carrier that misbehaves (stand-in only): one dispatch, no replay, the signer's own error",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "slow: the caller gets the signer's own 504 carrier_timeout after about the signer's 8s (not the gateway's 9s)",
+     "result": "pass"
+    },
+    {
+     "check": "slow: the caller's answer has no Set-Cookie and no X-Mock-Provider",
+     "result": "pass"
+    },
+    {
+     "check": "slow: the carrier received exactly one create dispatch (no replay)",
+     "result": "pass"
+    },
+    {
+     "check": "slow: the order exists",
+     "result": "pass"
+    },
+    {
+     "check": "slow: the same create again answers 123052 with that order's waybill",
+     "result": "pass"
+    },
+    {
+     "check": "slow: two create dispatches in all",
+     "result": "pass"
+    },
+    {
+     "check": "slow: the order is cancelled",
+     "result": "pass"
+    },
+    {
+     "check": "cut: the caller gets a 502 from the signer",
+     "result": "pass"
+    },
+    {
+     "check": "cut: the caller's answer has no Set-Cookie and no X-Mock-Provider",
+     "result": "pass"
+    },
+    {
+     "check": "cut: the carrier received exactly one create dispatch (no replay)",
+     "result": "pass"
+    },
+    {
+     "check": "cut: the order exists",
+     "result": "pass"
+    },
+    {
+     "check": "cut: the same create again answers 123052 with that order's waybill",
+     "result": "pass"
+    },
+    {
+     "check": "cut: two create dispatches in all",
+     "result": "pass"
+    },
+    {
+     "check": "cut: the order is cancelled",
+     "result": "pass"
+    },
+    {
+     "check": "status 503: 502 carrier_status with carrier_status 503",
+     "result": "pass"
+    },
+    {
+     "check": "status 503: no Set-Cookie and no X-Mock-Provider",
+     "result": "pass"
+    },
+    {
+     "check": "status 503: the order was not created",
+     "result": "pass"
+    },
+    {
+     "check": "garbage: 502 carrier_answer_unreadable",
+     "result": "pass"
+    },
+    {
+     "check": "garbage: no Set-Cookie and no X-Mock-Provider",
+     "result": "pass"
+    },
+    {
+     "check": "garbage: the order was not created",
+     "result": "pass"
+    },
+    {
+     "check": "undecryptable: 502 carrier_answer_unreadable",
+     "result": "pass"
+    },
+    {
+     "check": "undecryptable: no Set-Cookie and no X-Mock-Provider",
+     "result": "pass"
+    },
+    {
+     "check": "undecryptable: the order exists",
+     "result": "pass"
+    },
+    {
+     "check": "undecryptable: the order is cancelled",
+     "result": "pass"
+    }
+   ],
+   "notes": {
+    "slow: what the caller got": {
+     "status": 504,
+     "error": "carrier_timeout",
+     "seconds": 8.008
+    },
+    "cut: what the caller got": {
+     "status": 502,
+     "error": "carrier_unreachable",
+     "seconds": 0.007
+    },
+    "status 503: what the caller got": {
+     "status": 502,
+     "error": "carrier_status",
+     "carrier_status": 503
+    }
+   }
+  },
+  {
+   "id": "SF-15",
+   "title": "the hop to the signer, called directly: only the gateway's certificate is served, and a credential is required",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "no client certificate: the handshake or the request fails",
+     "result": "pass"
+    },
+    {
+     "check": "no client certificate: nothing reached the carrier (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "no client certificate: the carrier got no dispatch (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "the rogue-gateway certificate (another CA): the handshake or the request fails",
+     "result": "pass"
+    },
+    {
+     "check": "the rogue-gateway certificate (another CA): nothing reached the carrier (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "the rogue-gateway certificate (another CA): the carrier got no dispatch (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "the business-app certificate (right CA, another identity): 403 caller_not_allowed, as written",
+     "result": "pass"
+    },
+    {
+     "check": "the business-app certificate (right CA, another identity): nothing reached the carrier (judged by the signer's log: refused before the carrier (caller_not_allowed))",
+     "result": "pass"
+    },
+    {
+     "check": "the business-app certificate (right CA, another identity): the carrier got no dispatch (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    },
+    {
+     "check": "the gateway certificate and no Authorization: 403 credential_malformed, as written",
+     "result": "pass"
+    },
+    {
+     "check": "the gateway certificate and no Authorization: nothing reached the carrier (judged by the signer's log: refused before the carrier (credential_malformed))",
+     "result": "pass"
+    },
+    {
+     "check": "the gateway certificate and no Authorization: the carrier got no dispatch (judged by the stand-in's records: no dispatch)",
+     "result": "pass"
+    }
+   ],
+   "notes": {}
+  }
+ ],
+ "summary": {
+  "cases": 15,
+  "cases_failed": 0,
+  "cases_skipped": 2,
+  "checks": 266,
+  "checks_passed": 264,
+  "checks_failed": 0,
+  "checks_skipped": 2
+ }
+}
