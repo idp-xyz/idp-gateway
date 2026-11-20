@@ -5,10 +5,13 @@
 // Gatekeeper 的 PDP 确认一遍（--gatekeeper-url），不配置时只看登记表。这一跳出示工作负载证书
 // （--gatekeeper-tls-*、--gatekeeper-name，四个一起给）；PDP 不在回环地址上时必须给。
 //
-// 凭证文件有三种，至少给一种（见 docs/adr/ADR-0011.md）：--credentials 是固定的 Bearer
-// 令牌；--developer-tokens 是账号加开发者令牌，认证头里的随机数每个请求现做；--oauth-clients
-// 是 OAuth2 客户端凭证，向令牌端点取访问令牌，--oauth-timeout 是取一次的超时。一个凭证句柄
-// 只能出现在其中一个文件里。
+// 凭证文件有四种，至少给一种（见 docs/adr/ADR-0011.md 和 docs/adr/ADR-0014.md）：--credentials
+// 是固定的 Bearer 令牌；--developer-tokens 是账号加开发者令牌，认证头里的随机数每个请求现做；
+// --oauth-clients 是 OAuth2 客户端凭证，向令牌端点取访问令牌，--oauth-timeout 是取一次的超时；
+// --sf-openapi-apps 是顺丰国际开放平台的应用（appKey、应用密钥、AES 密钥），向承运商取访问令牌，
+// 放行时交出 Sf-OpenApi appKey;令牌;AES密钥，由另一个签名适配器拆开使用，--sf-openapi-timeout 是
+// 取一次的超时，--sf-openapi-plain-http-host 只为承运商没有 TLS 的沙箱放开一个主机名的明文 http。
+// 一个凭证句柄只能出现在其中一个文件里。
 //
 // 撤销（见 docs/adr/ADR-0012.md）：--revocations 给出保存撤销表的文件，--revoker-identity
 // 给出唯一能改它的工作负载身份，两个要一起给。都不给时撤销表在内存里、永远是空的，也没有
@@ -38,6 +41,7 @@ import (
 	"go.idp.xyz/idp-gateway/internal/egressauthz/adapters/httpapi"
 	"go.idp.xyz/idp-gateway/internal/egressauthz/adapters/memory"
 	"go.idp.xyz/idp-gateway/internal/egressauthz/adapters/oauthclient"
+	"go.idp.xyz/idp-gateway/internal/egressauthz/adapters/sfopenapi"
 	"go.idp.xyz/idp-gateway/internal/egressauthz/application"
 	"go.idp.xyz/idp-gateway/internal/egressauthz/ports"
 	"go.idp.xyz/idp-gateway/internal/platform/workloadtls"
@@ -57,25 +61,28 @@ func main() {
 }
 
 type options struct {
-	listen          string
-	tlsCert         string
-	tlsKey          string
-	clientCA        string
-	policy          string
-	credentials     string
-	developerTokens string
-	oauthClients    string
-	oauthTimeout    time.Duration
-	gatewayIdentity string
-	brokerIdentity  string
-	revocations     string
-	revokerIdentity string
-	gatekeeperURL   string
-	gatekeeperToken string
-	gatekeeperCert  string
-	gatekeeperKey   string
-	gatekeeperCA    string
-	gatekeeperName  string
+	listen                 string
+	tlsCert                string
+	tlsKey                 string
+	clientCA               string
+	policy                 string
+	credentials            string
+	developerTokens        string
+	oauthClients           string
+	oauthTimeout           time.Duration
+	sfOpenAPIApps          string
+	sfOpenAPITimeout       time.Duration
+	sfOpenAPIPlainHTTPHost string
+	gatewayIdentity        string
+	brokerIdentity         string
+	revocations            string
+	revokerIdentity        string
+	gatekeeperURL          string
+	gatekeeperToken        string
+	gatekeeperCert         string
+	gatekeeperKey          string
+	gatekeeperCA           string
+	gatekeeperName         string
 }
 
 func parse(args []string, output io.Writer) (options, error) {
@@ -100,6 +107,11 @@ func parse(args []string, output io.Writer) (options, error) {
 	add(&o.oauthClients, "oauth-clients", "OAuth2 客户端凭证文件（JSON：凭证句柄 -> {token_endpoint, client_id, client_secret, key_version, scope, audience}），"+
 		"权限须为 0600 或更严；向令牌端点取访问令牌，按账户缓存；文件被换掉之后重读", false)
 	flags.DurationVar(&o.oauthTimeout, "oauth-timeout", oauthclient.DefaultTimeout, "向令牌端点取一次令牌的超时，必须大于 0；要留在网关等 PDP 的时限之内")
+	add(&o.sfOpenAPIApps, "sf-openapi-apps", "顺丰国际开放平台应用文件（JSON：凭证句柄 -> {token_endpoint, app_key, app_secret, encoding_aes_key, key_version}），"+
+		"权限须为 0600 或更严；向承运商取访问令牌，按句柄缓存；放行时交出 Sf-OpenApi appKey;令牌;AES密钥；文件被换掉之后重读", false)
+	flags.DurationVar(&o.sfOpenAPITimeout, "sf-openapi-timeout", sfopenapi.DefaultTimeout, "向承运商令牌端点取一次令牌的超时，必须大于 0；要留在网关等 PDP 的时限之内")
+	add(&o.sfOpenAPIPlainHTTPHost, "sf-openapi-plain-http-host", "唯一允许明文 http 令牌端点的主机名（只写主机名，不带协议、端口和路径），"+
+		"给承运商没有 TLS 的沙箱用；默认没有这个例外；要和 --sf-openapi-apps 一起给", false)
 	add(&o.gatewayIdentity, "gateway-identity", "网关工作负载的身份（证书里的 URI）：可以要判定和凭证", true)
 	add(&o.brokerIdentity, "broker-identity", "本地 Broker 工作负载的身份：只能要判定；不设则没有这样的调用方", false)
 	add(&o.revocations, "revocations", "撤销文件（JSON：代次和被撤销的账户），权限须为 0600 或更严；启动时读，读不成就不启动；"+
@@ -124,14 +136,25 @@ func parse(args []string, output io.Writer) (options, error) {
 			missing = append(missing, "--"+f.Name)
 		}
 	})
-	if o.credentials == "" && o.developerTokens == "" && o.oauthClients == "" {
-		missing = append(missing, "--credentials or --developer-tokens or --oauth-clients")
+	if o.credentials == "" && o.developerTokens == "" && o.oauthClients == "" && o.sfOpenAPIApps == "" {
+		missing = append(missing, "--credentials or --developer-tokens or --oauth-clients or --sf-openapi-apps")
 	}
 	if len(missing) > 0 {
 		return o, errors.New("missing required flags: " + strings.Join(missing, ", "))
 	}
 	if o.oauthTimeout <= 0 {
 		return o, errors.New("--oauth-timeout must be greater than zero")
+	}
+	if o.sfOpenAPITimeout <= 0 {
+		return o, errors.New("--sf-openapi-timeout must be greater than zero")
+	}
+	if o.sfOpenAPIPlainHTTPHost != "" {
+		if o.sfOpenAPIApps == "" {
+			return o, errors.New("--sf-openapi-plain-http-host needs --sf-openapi-apps")
+		}
+		if !bareHostName(o.sfOpenAPIPlainHTTPHost) {
+			return o, errors.New("--sf-openapi-plain-http-host must be a bare host name: visible ASCII, none of / : @ ? #")
+		}
 	}
 	if o.brokerIdentity == o.gatewayIdentity {
 		return o, errors.New("--broker-identity must differ from --gateway-identity: the broker may not ask for credentials")
@@ -151,6 +174,20 @@ func parse(args []string, output io.Writer) (options, error) {
 			"who asks for credentials may not be who lifts a revocation")
 	}
 	return o, nil
+}
+
+// bareHostName 报告 host 是不是一个只有主机名的值：非空，全是可见 ASCII，不含 / : @ ? #
+// （没有协议、端口、用户信息、路径、查询串和片段）。
+func bareHostName(host string) bool {
+	if host == "" || strings.ContainsAny(host, "/:@?#") {
+		return false
+	}
+	for i := 0; i < len(host); i++ {
+		if host[i] < 0x21 || host[i] > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 // checkGatekeeperTLS 核对到 PDP 的那一跳：客户端证书的四个参数一起给或一起不给；PDP 不在本机回环地址上时
@@ -197,18 +234,20 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 	if err != nil {
 		return err
 	}
-	// 凭证来源：三种文件，给了哪种就装哪种。一个句柄只能在一个文件里：后装的来源启动时查先装的，
-	// 先装的两种在重读时也查后装的（它们互相问，各自不拿锁等对方，见 Holds）。
+	// 凭证来源：四种文件，给了哪种就装哪种。一个句柄只能在一个文件里：后装的来源启动时查先装的，
+	// 先装的在重读时也查后装的（它们互相问，各自不拿锁等对方，见 Holds）。
 	var credentials credentialSources
-	var bearerTokens, developerTokens, oauthClients int
+	var bearerTokens, developerTokens, oauthClients, sfOpenAPIApps int
 	var bearer *filestore.Credentials
 	var developer *filestore.DeveloperTokens
 	var oauth *oauthclient.Client
+	var sfApps *sfopenapi.Client
 	heldElsewhere := func(except string) func(handle string) bool {
 		return func(handle string) bool {
 			return (except != "bearer" && bearer != nil && bearer.Holds(handle)) ||
 				(except != "developer" && developer != nil && developer.Holds(handle)) ||
-				(except != "oauth" && oauth != nil && oauth.Holds(handle))
+				(except != "oauth" && oauth != nil && oauth.Holds(handle)) ||
+				(except != "sfopenapi" && sfApps != nil && sfApps.Holds(handle))
 		}
 	}
 	if o.credentials != "" {
@@ -232,6 +271,14 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 			return err
 		}
 		credentials, oauthClients = append(credentials, oauth), oauth.Len()
+	}
+	if o.sfOpenAPIApps != "" {
+		sfApps, err = sfopenapi.Load(sfopenapi.Config{Path: o.sfOpenAPIApps, Timeout: o.sfOpenAPITimeout,
+			PlainHTTPHost: o.sfOpenAPIPlainHTTPHost, Reserved: heldElsewhere("sfopenapi"), Logger: logger})
+		if err != nil {
+			return err
+		}
+		credentials, sfOpenAPIApps = append(credentials, sfApps), sfApps.Len()
 	}
 	tlsConfig, err := workloadtls.ServerConfig(o.tlsCert, o.tlsKey, o.clientCA)
 	if err != nil {
@@ -306,6 +353,7 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 	logger.Info("gateway-authz listening", "addr", listener.Addr().String(), "build", buildFlavor,
 		"policy_version", policy.Version, "operations", len(policy.Operations),
 		"credentials", bearerTokens, "developer_tokens", developerTokens, "oauth_clients", oauthClients,
+		"sf_openapi_apps", sfOpenAPIApps, "sf_openapi_plain_http_host", o.sfOpenAPIPlainHTTPHost,
 		"revocations", revocationStore, "revoked_accounts", revokedAccounts, "revocation_epoch", revocationEpoch,
 		"gateway_identity", o.gatewayIdentity, "broker_identity", o.brokerIdentity, "revoker_identity", o.revokerIdentity,
 		"grants", grantSource, "gatekeeper_mtls", pdpTLS != nil)

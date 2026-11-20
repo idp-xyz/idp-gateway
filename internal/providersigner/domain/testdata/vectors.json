@@ -1,0 +1,43 @@
+{
+  "encoding_aes_key": "MDEyMzQ1Njc4OTo7PD0+P0BBQkNERUZHSElKS0xNTk8",
+  "app_key": "idpgw-test-app-key-0001",
+  "token": "auth_idpgw-test-token-0001",
+  "cases": [
+    {
+      "name": "short body",
+      "random16": "ABCDEFGHIJKLMNOP",
+      "body_base64": "eyJjdXN0b21lck9yZGVyTm8iOiJJRFBHVy1WRUNUT1ItMSJ9",
+      "ciphertext": "BetUYY1MbNA/+uHRP9zx4I5O9XuPKLaUy2+7S2tt524j/Bvxz9qfHseRJ7KeNzZHkSijGfIQyJYssAWyOehvk+7EkkVPIZ730rrwhJ3LF7WgrOQNmAiiYlndbX0nhzq+",
+      "timestamp": "1763611200000",
+      "nonce": "000102030405060708090a0b0c0d0e0f",
+      "signature": "93459400905299c0510e4bbc88aab1b18c50df6ba9b006edbfd48bb0463b286e"
+    },
+    {
+      "name": "plaintext is a whole number of 32-byte blocks",
+      "random16": "abcdefghijklmnop",
+      "body_base64": "eyJhIjoieHh4eHh4eHh4eHh4eCJ9",
+      "ciphertext": "DKfVFxjVXf1OA+Kla9VUKY3V41NOrmpz2jpiZAERotEWUuXzcEGsnVNaKxBbxzYulTt6g+kTa9GdT5I0WocNfRxr3uMEsvgtsykrLNb8bb54Dsdn5Wqk58ycBjRsQP4m",
+      "timestamp": "1763611200000",
+      "nonce": "000102030405060708090a0b0c0d0e0f",
+      "signature": "2110320a07d438b116aaf90bff917adf529165fe661a489ce4c5ff0153841efb"
+    },
+    {
+      "name": "body with non-ASCII text",
+      "random16": "0123456789abcdef",
+      "body_base64": "eyJjb25zaWduZWUiOiLpobrkuLDlm73pmYUiLCJuIjoxfQ==",
+      "ciphertext": "YoKayEOYs+JGNNcJTC3qAhMQ7R+FsmBH3TGzG3okauBMZx5GujooyWGfiZ/pJl62O2TFd1PGwIWZ68lSUvCGFoecBZMhFM9y/2lGuHst9Sw0q98OTi4iwMOzi9NTeyUY",
+      "timestamp": "1763611200000",
+      "nonce": "000102030405060708090a0b0c0d0e0f",
+      "signature": "24379a457d2584f4f886baab9292ed290eb30bd05270fe7d6abf1fc2dea2fd65"
+    },
+    {
+      "name": "empty object",
+      "random16": "ZZZZZZZZZZZZZZZZ",
+      "body_base64": "e30=",
+      "ciphertext": "cTPaGw8/6K65xSujANLaGMkdyBue+jhKHE7Sn8NTQ+h3rBLdOECHzgbmTUQL7lDK+fBjiR7w00pnPkVUNG0aaw==",
+      "timestamp": "1763611200000",
+      "nonce": "000102030405060708090a0b0c0d0e0f",
+      "signature": "e5905ded11d23db88b5451107a806251334eedf3fb9ceaa6017e62c95ccf0b36"
+    }
+  ]
+}
