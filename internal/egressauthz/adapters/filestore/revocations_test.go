@@ -3,6 +3,7 @@ package filestore
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -367,5 +368,323 @@ func TestRevocationsAreReadWhileTheyChange(t *testing.T) {
 	}
 	if written, epoch := onDisk(t, path); names(written) != "account-green" || epoch != 1+2*changes {
 		t.Fatalf("最后文件里的表：%s，代次 %d", names(written), epoch)
+	}
+}
+
+// 两个账本打开同一份文件。前一个写完之后，后一个自己不封、不撤销，下一次读就看得见。
+func TestAnotherLedgerSeesARevokeAndABan(t *testing.T) {
+	ctx := context.Background()
+	path := writeFile(t, nothingRevoked, 0o600)
+	first := loadRevocations(t, path)
+	second := loadRevocations(t, path)
+	first.now = func() time.Time { return time.Date(2026, 11, 21, 2, 3, 4, 0, time.UTC) }
+
+	if _, err := first.Revoke(ctx, "account-blue", "spiffe://idp.test/revoker", "key leaked"); err != nil {
+		t.Fatal(err)
+	}
+	revoked, banned, epoch, err := second.View(ctx, "account-blue", "tracking.get")
+	if err != nil || !revoked || banned || epoch != 1 {
+		t.Fatalf("另一个进程的下一次判定：revoked=%v banned=%v epoch=%d err=%v", revoked, banned, epoch, err)
+	}
+	accounts, epoch, err := second.Revoked(ctx)
+	if err != nil || names(accounts) != "account-blue" || accounts[0].Reason != "key leaked" || epoch != 1 {
+		t.Fatalf("另一个进程的撤销表：%s，代次 %d，%v", names(accounts), epoch, err)
+	}
+
+	if _, err := first.Ban(ctx, "tracking.get", "spiffe://idp.test/revoker", "abuse"); err != nil {
+		t.Fatal(err)
+	}
+	revoked, banned, epoch, err = second.View(ctx, "account-blue", "tracking.get")
+	if err != nil || !revoked || !banned || epoch != 2 {
+		t.Fatalf("封禁之后：revoked=%v banned=%v epoch=%d err=%v", revoked, banned, epoch, err)
+	}
+	operations, epoch, err := second.Banned(ctx)
+	if err != nil || len(operations) != 1 || operations[0].OperationID != "tracking.get" || operations[0].Reason != "abuse" || epoch != 2 {
+		t.Fatalf("另一个进程的封禁表：%+v，代次 %d，%v", operations, epoch, err)
+	}
+	if _, banned, _, err := second.View(ctx, "account-blue", "labels.print"); err != nil || banned {
+		t.Fatalf("没被封的操作：banned=%v err=%v", banned, err)
+	}
+
+	// 没有 banned_operations 的旧文件换上来，仍然能读，封禁表是空的。
+	replaceFile(t, path, `{"epoch": 7, "revoked_accounts": {"account-old": {"at": "2026-11-01T00:00:00Z", "by": "x", "reason": "left"}}}`, 0o600)
+	revoked, banned, epoch, err = second.View(ctx, "account-old", "tracking.get")
+	if err != nil || !revoked || banned || epoch != 7 {
+		t.Fatalf("旧文件：revoked=%v banned=%v epoch=%d err=%v", revoked, banned, epoch, err)
+	}
+	if revoked, _, _, err := second.View(ctx, "account-blue", "tracking.get"); err != nil || revoked {
+		t.Fatalf("旧文件还留着换掉之前的账户：%v %v", revoked, err)
+	}
+}
+
+// 内存里有没写下去的撤销时，磁盘上更旧或是空的那一份不能把它盖掉。
+func TestUnwrittenRevokeIsNotReplacedByTheFile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root 写得进只读的目录，这条测试在它手里看不出什么")
+	}
+	ctx := context.Background()
+	path := writeFile(t, nothingRevoked, 0o600)
+	directory := filepath.Dir(path)
+	ledger := loadRevocations(t, path)
+	if err := os.Chmod(directory, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(directory, 0o700) })
+
+	if _, err := ledger.Revoke(ctx, "account-blue", "spiffe://idp.test/revoker", "key leaked"); !errors.Is(err, ports.ErrRevocationNotWritten) {
+		t.Fatal(err)
+	}
+	if revoked, _, epoch, err := ledger.View(ctx, "account-blue", "tracking.get"); err != nil || !revoked || epoch != 1 {
+		t.Fatalf("空文件把没写下去的撤销盖掉了：revoked=%v epoch=%d err=%v", revoked, epoch, err)
+	}
+	if written, epoch := onDisk(t, path); len(written) != 0 || epoch != 0 {
+		t.Fatalf("文件不该有这次撤销：%s，代次 %d", names(written), epoch)
+	}
+
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	replaceFile(t, path, `{"epoch": 0, "revoked_accounts": {"account-old": {"at": "2026-11-01T00:00:00Z", "by": "x", "reason": "old"}}}`, 0o600)
+	revoked, _, epoch, err := ledger.View(ctx, "account-blue", "tracking.get")
+	if err != nil || !revoked || epoch != 1 {
+		t.Fatalf("更旧的文件把撤销盖掉了：revoked=%v epoch=%d err=%v", revoked, epoch, err)
+	}
+	if revoked, _, _, err := ledger.View(ctx, "account-old", "tracking.get"); err != nil || revoked {
+		t.Fatalf("更旧的文件被读进了内存：%v %v", revoked, err)
+	}
+
+	if err := os.Chmod(directory, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ledger.Ban(ctx, "tracking.get", "spiffe://idp.test/revoker", "abuse"); !errors.Is(err, ports.ErrRevocationNotWritten) {
+		t.Fatal(err)
+	}
+	revoked, banned, epoch, err := ledger.View(ctx, "account-blue", "tracking.get")
+	if err != nil || !revoked || !banned || epoch != 2 {
+		t.Fatalf("没写下去的封禁：revoked=%v banned=%v epoch=%d err=%v", revoked, banned, epoch, err)
+	}
+}
+
+// 重读读不成时留下原来的表，这一次读返回错误，不把表清掉。
+func TestAFailedReloadKeepsThePreviousTable(t *testing.T) {
+	ctx := context.Background()
+	const original = `{"epoch": 2, "revoked_accounts": {"account-blue": {"at": "2026-11-18T05:00:00Z", "by": "x", "reason": "y"}}}`
+	path := writeFile(t, original, 0o600)
+	ledger := loadRevocations(t, path)
+
+	replaceFile(t, path, `{`, 0o600)
+	if _, _, _, err := ledger.View(ctx, "account-blue", "tracking.get"); err == nil {
+		t.Fatal("读不懂的文件被当成读成了")
+	}
+	if _, ok := ledger.revoked["account-blue"]; !ok || ledger.epoch != 2 {
+		t.Fatalf("读不懂的重读把表清了：%v 代次 %d", ledger.revoked, ledger.epoch)
+	}
+	if _, _, _, err := ledger.View(ctx, "account-blue", "tracking.get"); err == nil {
+		t.Fatal("同一份坏文件第二次被当成读成了")
+	}
+	if _, ok := ledger.revoked["account-blue"]; !ok || ledger.epoch != 2 {
+		t.Fatal("第二次把表清了")
+	}
+
+	replaceFile(t, path, original, 0o644)
+	if _, _, _, err := ledger.View(ctx, "account-blue", "tracking.get"); err == nil || !strings.Contains(err.Error(), "readable by others") {
+		t.Fatalf("别人能读的文件：%v", err)
+	}
+	if _, _, err := ledger.Revoked(ctx); err == nil {
+		t.Fatal("Revoked 在重读失败时没有返回错误")
+	}
+	if _, _, err := ledger.Banned(ctx); err == nil {
+		t.Fatal("Banned 在重读失败时没有返回错误")
+	}
+	if _, ok := ledger.revoked["account-blue"]; !ok || ledger.epoch != 2 {
+		t.Fatal("权限不对的重读把表清了")
+	}
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := ledger.View(ctx, "account-blue", "tracking.get"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("文件不在了：%v", err)
+	}
+	if _, ok := ledger.revoked["account-blue"]; !ok || ledger.epoch != 2 {
+		t.Fatal("文件不在了就把表清了")
+	}
+
+	replaceFile(t, path, `{"epoch": 3, "revoked_accounts": {"account-blue": {"at": "2026-11-18T05:00:00Z", "by": "x", "reason": "y"}}, "banned_operations": {"tracking.get": {"at": "2026-11-21T00:00:00Z", "by": "x", "reason": "abuse"}}}`, 0o600)
+	revoked, banned, epoch, err := ledger.View(ctx, "account-blue", "tracking.get")
+	if err != nil || !revoked || !banned || epoch != 3 {
+		t.Fatalf("好文件换回来：revoked=%v banned=%v epoch=%d err=%v", revoked, banned, epoch, err)
+	}
+}
+
+// 身份、修改时间和大小都没变时不重读。就地改写变了大小和修改时间，下一次读看得见。
+func TestAnUnchangedRevocationFileIsNotReread(t *testing.T) {
+	ctx := context.Background()
+	const original = `{"epoch": 1, "revoked_accounts": {"account-blue": {"at": "2026-11-18T05:00:00Z", "by": "x", "reason": "y"}}}`
+	path := writeFile(t, original, 0o600)
+	ledger := loadRevocations(t, path)
+	before := fileInfo(t, path)
+
+	mutated := strings.ReplaceAll(original, "account-blue", "account-red1")
+	if len(mutated) != len(original) {
+		t.Fatalf("就地替换改变了长度：%d %d", len(mutated), len(original))
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = file.Write([]byte(mutated))
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, before.ModTime(), before.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if !sameFile(before, fileInfo(t, path)) {
+		t.Fatal("身份、修改时间或大小变了，无法证明没重读")
+	}
+	revoked, _, epoch, err := ledger.View(ctx, "account-blue", "tracking.get")
+	if err != nil || !revoked || epoch != 1 {
+		t.Fatalf("没变的文件被重读了：revoked=%v epoch=%d err=%v", revoked, epoch, err)
+	}
+	if revoked, _, _, err := ledger.View(ctx, "account-red1", "tracking.get"); err != nil || revoked {
+		t.Fatalf("没变的文件读出了新账户：%v %v", revoked, err)
+	}
+
+	const rewritten = `{"epoch": 2, "revoked_accounts": {"account-red": {"at": "2026-11-18T05:00:00Z", "by": "x", "reason": "y"}}}`
+	inplace := fileInfo(t, path)
+	file, err = os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = file.Write([]byte(rewritten))
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := fileInfo(t, path)
+	if !os.SameFile(inplace, after) {
+		t.Fatal("就地改写换成了另一个文件")
+	}
+	if sameFile(inplace, after) {
+		t.Fatal("就地改写没有改变大小或修改时间")
+	}
+	revoked, _, epoch, err = ledger.View(ctx, "account-red", "tracking.get")
+	if err != nil || !revoked || epoch != 2 {
+		t.Fatalf("就地改写没有被看见：revoked=%v epoch=%d err=%v", revoked, epoch, err)
+	}
+	if revoked, _, _, err := ledger.View(ctx, "account-blue", "tracking.get"); err != nil || revoked {
+		t.Fatalf("就地改写之后旧账户还在：%v %v", revoked, err)
+	}
+}
+
+// 权限变了也要重读。就地 chmod 不换 inode，修改时间也不一定变。
+func TestARevocationFileThatBecomesReadableByOthersIsReread(t *testing.T) {
+	ctx := context.Background()
+	path := writeFile(t, `{"epoch": 1, "revoked_accounts": {"account-blue": {"at": "2026-11-18T05:00:00Z", "by": "x", "reason": "y"}}}`, 0o600)
+	ledger := loadRevocations(t, path)
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := ledger.View(ctx, "account-blue", "tracking.get"); err == nil || !strings.Contains(err.Error(), "readable by others") {
+		t.Fatalf("别人能读的文件：%v", err)
+	}
+	if _, ok := ledger.revoked["account-blue"]; !ok || ledger.epoch != 1 {
+		t.Fatal("权限不对的重读把表清了")
+	}
+}
+
+// 两个进程先后各撤销一个账户。后写的那一份必须还留着先写的账户。
+func TestTwoLedgersDoNotDropEachOthersRevokes(t *testing.T) {
+	ctx := context.Background()
+	path := writeFile(t, nothingRevoked, 0o600)
+	first := loadRevocations(t, path)
+	second := loadRevocations(t, path)
+
+	if _, err := first.Revoke(ctx, "account-blue", "spiffe://idp.test/revoker", "one"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.Revoke(ctx, "account-red", "spiffe://idp.test/revoker", "two"); err != nil {
+		t.Fatal(err)
+	}
+	if written, epoch := onDisk(t, path); names(written) != "account-blue,account-red" || epoch != 2 {
+		t.Fatalf("两份撤销：%s，代次 %d", names(written), epoch)
+	}
+	if mode := fileInfo(t, path+".lock").Mode().Perm(); mode != 0o600 {
+		t.Fatalf("锁文件权限是 %04o", mode)
+	}
+	revoked, _, epoch, err := first.View(ctx, "account-red", "tracking.get")
+	if err != nil || !revoked || epoch != 2 {
+		t.Fatalf("先写的进程看见后写的：revoked=%v epoch=%d err=%v", revoked, epoch, err)
+	}
+
+	change, err := second.Restore(ctx, "account-blue")
+	if err != nil || change != (ports.RevocationChange{Changed: true, Epoch: 3}) {
+		t.Fatalf("另一个进程恢复：%+v %v", change, err)
+	}
+	if written, epoch := onDisk(t, path); names(written) != "account-red" || epoch != 3 {
+		t.Fatalf("恢复之后：%s，代次 %d", names(written), epoch)
+	}
+	if revoked, _, _, err := first.View(ctx, "account-blue", "tracking.get"); err != nil || revoked {
+		t.Fatalf("先写的进程还留着已经恢复的账户：%v %v", revoked, err)
+	}
+}
+
+// 两个进程先后各封禁一个操作，后写的不会把先写的封禁拿掉。解除也只拿掉那一个。
+func TestTwoLedgersDoNotDropEachOthersBans(t *testing.T) {
+	ctx := context.Background()
+	path := writeFile(t, nothingRevoked, 0o600)
+	first := loadRevocations(t, path)
+	second := loadRevocations(t, path)
+
+	if _, err := first.Ban(ctx, "tracking.get", "spiffe://idp.test/revoker", "one"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.Ban(ctx, "labels.print", "spiffe://idp.test/revoker", "two"); err != nil {
+		t.Fatal(err)
+	}
+	operations, epoch, err := first.Banned(ctx)
+	if err != nil || epoch != 2 || len(operations) != 2 || operations[0].OperationID != "labels.print" || operations[1].OperationID != "tracking.get" {
+		t.Fatalf("两份封禁：%+v，代次 %d，%v", operations, epoch, err)
+	}
+	change, err := second.Lift(ctx, "tracking.get")
+	if err != nil || change != (ports.BanChange{Changed: true, Epoch: 3}) {
+		t.Fatalf("另一个进程解除：%+v %v", change, err)
+	}
+	operations, epoch, err = first.Banned(ctx)
+	if err != nil || epoch != 3 || len(operations) != 1 || operations[0].OperationID != "labels.print" {
+		t.Fatalf("解除之后：%+v，代次 %d，%v", operations, epoch, err)
+	}
+}
+
+// 内存里还有没写下去的撤销时，下一次写要把磁盘上其他进程多出来的条目补上，同时留下这份内存。
+func TestAnUnwrittenRevokeIsKeptWhenTheOtherLedgerWrites(t *testing.T) {
+	ctx := context.Background()
+	path := writeFile(t, nothingRevoked, 0o600)
+	first := loadRevocations(t, path)
+	second := loadRevocations(t, path)
+	if _, err := first.Revoke(ctx, "account-blue", "spiffe://idp.test/revoker", "written"); err != nil {
+		t.Fatal(err)
+	}
+	first.mu.Lock()
+	kept := maps.Clone(first.revoked)
+	kept["account-keep"] = revocation{at: time.Date(2026, 11, 21, 0, 0, 0, 0, time.UTC), by: "x", reason: "keep"}
+	first.revoked = kept
+	first.unwritten = true
+	first.mu.Unlock()
+
+	if _, err := second.Revoke(ctx, "account-red", "spiffe://idp.test/revoker", "other"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Revoke(ctx, "account-green", "spiffe://idp.test/revoker", "again"); err != nil {
+		t.Fatal(err)
+	}
+	if written, epoch := onDisk(t, path); names(written) != "account-blue,account-green,account-keep,account-red" || epoch != 3 {
+		t.Fatalf("并进去的表：%s，代次 %d", names(written), epoch)
 	}
 }
