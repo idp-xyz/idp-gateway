@@ -1,7 +1,7 @@
 # 开发计划 — 出站网关，到真实第三方沙箱为止
 
 > **状态**：草案 · **日期** 2026-11-17  
-> 范围和先后是仓库所有者在 2026-11-17 定的，执笔的是 AI 编码助手。这份计划本身不改变任何验收用例、缺口或门禁的 `NOT_RUN`，也不改变哪一篇 ADR 的 Proposed。2026-11-19 仓库所有者定：项目不用角色分离和具名批准，由仓库所有者决定，验证看证据（[governance/README.md](governance/README.md)）。
+> 范围和先后是仓库所有者在 2026-11-17 定的，执笔的是 AI 编码助手。这份计划本身不改变任何验收用例、缺口或门禁的 `NOT_RUN`。2026-11-21 仓库所有者把 ADR-0010 至 ADR-0017 定为 Accepted，那不是这份计划改的；ADR-0001 至 ADR-0008 仍是 Proposed。2026-11-19 仓库所有者定：项目不用角色分离和具名批准，由仓库所有者决定，验证看证据（[governance/README.md](governance/README.md)）。
 
 ## 这份计划管什么
 
@@ -13,10 +13,10 @@
 ## 现在在哪
 
 - 阶段 P1 的内容跑过了：黑盒套件在锁定的 agentgateway 1.7.0 上 96/97，令牌是套件自己签的，Provider 是替身（[报告](../tests/acceptance/blackbox/README.md)）；另有与本机起的一套真实 Gatekeeper 的联调，Provider 同样是替身（[报告](../tests/integration/gatekeeper/README.md)）。两者都不是验收证据。
-- 请求路径：`cmd/gateway-authz` 按请求判定并发放凭证。登记表和凭证来自文件，是占位（[ADR-0009](adr/ADR-0009.md)）；撤销表原先只在内存里，2026-11-18 起落在一个文件里，由一个工作负载身份经接口改（[ADR-0012](adr/ADR-0012.md)）。凭证从哪里来的提案是 [ADR-0011](adr/ADR-0011.md)；仓库所有者在 2026-11-18 同意照它动手，它仍是 Proposed。它的第一步（固定令牌加每个请求一个随机数）已经有了实现，只对着替身验证过。黑盒的评审配置只放行登记过的请求头；问不到 PDP 时调用方得到 503，策略拒绝仍是 403（2.4）。
+- 请求路径：`cmd/gateway-authz` 按请求判定并发放凭证。登记表和凭证来自文件，是占位（[ADR-0009](adr/ADR-0009.md)）；撤销表原先只在内存里，2026-11-18 起落在一个文件里，由一个工作负载身份经接口改（[ADR-0012](adr/ADR-0012.md)）。凭证从哪里来的提案是 [ADR-0011](adr/ADR-0011.md)；仓库所有者在 2026-11-18 同意照它动手。2026-11-21 仓库所有者把这篇定为 Accepted。它的第一步（固定令牌加每个请求一个随机数）已经有了实现，只对着替身验证过。黑盒的评审配置只放行登记过的请求头；问不到 PDP 时调用方得到 503，策略拒绝仍是 403（2.4）。
 - 控制面：`cmd/gateway-control` 管单机上的一个池：发布、对账、启动的先后、看守和告警用的指标（[ADR-0010](adr/ADR-0010.md)）。2026-11-20 又有 `sync-jwks` 和 `compile`（4.4、4.3）。
 - 正式的记录：95 条验收用例、15 项缺口、六个门禁全部是 `NOT_RUN`。
-- **先后的调整（2026-11-19，仓库所有者定）**：先走到真实的承运商。接下来依次是 2.3（只做到 PDP 的 mTLS）和 3.2；控制面其余各项、已有功能的细处，留到 P2 之后或者上线之后再迭代。原因：最大的几个未知数（真实承运商怎么回应、真机上的部署、Gatekeeper 团队的确认）一个都还没有碰过，而单机池这一侧已经做得比它们细得多。这是当天调整先后时的理由。万邦的沙箱后来在 3.2 连过；顺丰国际的配置在 2026-11-20 经网关对着真实沙箱跑过（1.1）。同日做了面单（1.1、2.6）、JWKS 同步（4.4）、出站编译（4.3）和一部分流量治理（第 5 节）。对应的 ADR 仍是 Proposed。真的重启一台机器，和 Gatekeeper 团队的确认，仍没有碰过。
+- **先后的调整（2026-11-19，仓库所有者定）**：先走到真实的承运商。接下来依次是 2.3（只做到 PDP 的 mTLS）和 3.2；控制面其余各项、已有功能的细处，留到 P2 之后或者上线之后再迭代。原因：最大的几个未知数（真实承运商怎么回应、真机上的部署、Gatekeeper 团队的确认）一个都还没有碰过，而单机池这一侧已经做得比它们细得多。这是当天调整先后时的理由。万邦的沙箱后来在 3.2 连过；顺丰国际的配置在 2026-11-20 经网关对着真实沙箱跑过（1.1）。同日做了面单（1.1、2.6）、JWKS 同步（4.4）、出站编译（4.3）和一部分流量治理（第 5 节）。对应的 ADR 在 2026-11-21 由仓库所有者定为 Accepted。真的重启一台机器，和 Gatekeeper 团队的确认，仍没有碰过。
 
 ## 先后一览
 
@@ -51,7 +51,7 @@ flowchart TD
 
 ## 0. 收尾
 
-- **告警（ADR-0010 V1.7）已经收尾。** 2026-11-17 这台 WSL 的时钟对准之后，compose 套件连跑三轮，都是 21/21，每轮 669 到 686 秒。`GatewayKeeperDown` 从看守停下算起是 61.1、61.1、61.0 秒，落在原来的 60 到 75 秒里；检查没有放宽。更早量到的 54 到 56 秒是单调时钟被调慢了。`units.py` 是 6/6。黑盒证据已按这次的源码重跑：58/59，失败的仍是 `P1-SS-04`，326 项检查与上一份逐项相同。`SH-20` 和 `SH-21` 没有做对照。这不是具名批准，ADR 仍是 Proposed，验收状态仍是 `NOT_RUN`。
+- **告警（ADR-0010 V1.7）已经收尾。** 2026-11-17 这台 WSL 的时钟对准之后，compose 套件连跑三轮，都是 21/21，每轮 669 到 686 秒。`GatewayKeeperDown` 从看守停下算起是 61.1、61.1、61.0 秒，落在原来的 60 到 75 秒里；检查没有放宽。更早量到的 54 到 56 秒是单调时钟被调慢了。`units.py` 是 6/6。黑盒证据已按这次的源码重跑：58/59，失败的仍是 `P1-SS-04`，326 项检查与上一份逐项相同。`SH-20` 和 `SH-21` 没有做对照。这不是具名批准，验收状态仍是 `NOT_RUN`。ADR-0010 在 2026-11-21 由仓库所有者定为 Accepted。
 
 ## 1. 要先定的事
 
@@ -67,7 +67,7 @@ flowchart TD
   - 沙箱实际的行为（2026-11-19 量的，与文档和上面不同）：同一个客单号、正文完全相同再创建，答 `Succeeded` 真和已有的处理号，不新建；正文不同才是 `0x100005`；删除之后客单号可再用；查不到的处理号是 HTTP 404、正文为空；同一个随机数用两次、`Accept` 不是 `application/json`，沙箱都不拒。
 - **只有一个测试账号。** P2 要两个账户（[G06](G06_Testing_and_Acceptance.md) 第 4 节）：要么向对方再要一个，要么两个账户之间的隔离只在替身上验。等：仓库所有者定。 **2026-11-19 定了**：第二个账号要不到，两个账户之间的隔离只在替身上验；沙箱上验的是"没有登记账户的租户被拒"。
 - 先前看过的另一家（嘉谷万邑的 Dragon Open API）用的是 OAuth2 客户端凭证，文档里也有沙箱。它留作 2.1 第二步以后对着真实系统验证的候选。那一家给的账号在正式环境上，下单出的是真实面单，不用来测试。
-- **2026-11-20 选定第二家承运商：顺丰国际（出口电商 IECS）**（仓库所有者定）。[对接文档](https://openapi-portal.sf.global/)是公开的；沙箱 `http://api-ifsp-sit.sf.global` 只有明文 HTTP；沙箱的凭证是文档"测试环境授权信息"一页公开给出的一套，所有人共用，不进仓库。它的协议要加密请求正文、对密文签名，装不进现在"复制一个 `Authorization` 头"的做法；提案是 [ADR-0014](adr/ADR-0014.md)（Proposed）。
+- **2026-11-20 选定第二家承运商：顺丰国际（出口电商 IECS）**（仓库所有者定）。[对接文档](https://openapi-portal.sf.global/)是公开的；沙箱 `http://api-ifsp-sit.sf.global` 只有明文 HTTP；沙箱的凭证是文档"测试环境授权信息"一页公开给出的一套，所有人共用，不进仓库。它的协议要加密请求正文、对密文签名，装不进现在"复制一个 `Authorization` 头"的做法；提案是 [ADR-0014](adr/ADR-0014.md)（2026-11-21 定为 Accepted）。
   - 同日只读探测过沙箱（三个请求，都是文档写明的正常用法，没有创建订单；从开发机直连，不经代理）：取令牌两次，都是 `apiResultCode` 0、`expireIn` 7200，两次是同一个令牌（与文档常见问题"测试环境令牌固定"一致）；用 `IECS_QUERY_AGENTNO` 查一个不存在的订单号，`apiResultData` 解得开，是业务 JSON，`wrongData` 里一条 `status` 为 `4001`（未找到）。所以加密、签名、解密的算法在沙箱上是对的；沙箱上验不了令牌 2 小时过期、取了新的旧的失效，和到承运商的 TLS。探测用的程序和凭证在仓库之外，没有入库。
   - 同日在写替身之前，用仓库之外的一个临时程序量过沙箱（一个客单号、两张运单，都取消了，没有剩下的）：每次应答都是 HTTP 200、`application/json`；成功的信封恰好是 `apiResultCode`、`apiResultData`、`apiTimestamp`，没有 `apiErrorMsg`；创建约 1.1 秒，`success` 真，有 `sfWaybillNo`，没有业务 `code`；同一份正文再创建，`success` 真、`code` 为 `"123052"`、运单号不变；刚创建的单查代理单号是 `wrongData` 的 `status` `"4002"`（代理单号未生成），不存在或已取消的是 `"4001"`；创建之后 1.2 秒和约 3.6 秒的两次取消答 `code` `"500"`、`success` 假，订单还在，稍后再取消成功；取消之后客单号可以再用。没有量的：同一个客单号换一份正文、取消不存在的订单、信封一级的拒绝。替身把文档、量到的、更严的地方和假设分开写在 `tests/integration/sfintl/mock_sfintl.py` 开头。
   - 同日这份配置经网关、`gateway-authz` 和 `provider-signer` 对着真实沙箱跑过，在联调架子上（[套件](../tests/integration/sfintl/README.md)）。第二遍 14/14（233 项检查：168 过、65 跳过、0 失败，17.7 秒）。当时写入的 [rig-sandbox.json](../tests/integration/sfintl/evidence/rig-sandbox.json) 后来被提交 `e1b01ed` 覆盖，见本条面单那一项。第一遍 13/14：前两次取令牌失败，证据没有留在仓库里，写在提交 `7fd2dd2` 的说明里。单机池是当天的第三步，见下一条。
@@ -102,8 +102,8 @@ flowchart TD
 ### 1.4 凭证由谁去取，撤销记在哪里
 
 - 基线设计把凭证的登记和 Broker 放在 Gatekeeper（[G02](G02_Architecture.md) 11.1 节，[G04](G04_Identity_and_Security.md) 第 2 节）。现在的代码里发放凭证的是本仓库的 `gateway-authz`；[ADR-0009](adr/ADR-0009.md) 把"凭证从哪里来、撤销从哪里来"和"契约的归属要跟着改"列在没有定的里面。
-- 凭证从哪里来：[ADR-0011](adr/ADR-0011.md)（Proposed）。它按"凭证正文由 `gateway-authz` 自己持有"写。2026-11-18 仓库所有者同意照它做 2.1；这是开工的许可，ADR 的状态仍由仓库所有者决定；不接受的话，2.1 按拒绝的理由改。
-- 撤销记在哪里：[ADR-0012](adr/ADR-0012.md)（Proposed，2026-11-18）。它按"`gateway-authz` 自己落盘，写入口只认一个工作负载身份"写；Gatekeeper 里收回授权是另一层，不动。
+- 凭证从哪里来：[ADR-0011](adr/ADR-0011.md)。它按"凭证正文由 `gateway-authz` 自己持有"写。2026-11-18 仓库所有者同意照它做 2.1，那是开工的许可；2026-11-21 仓库所有者把这篇定为 Accepted。
+- 撤销记在哪里：[ADR-0012](adr/ADR-0012.md)（2026-11-18 同意照它动手是开工的许可；2026-11-21 定为 Accepted）。它按"`gateway-authz` 自己落盘，写入口只认一个工作负载身份"写；Gatekeeper 里收回授权是另一层，不动。
 - 2026-11-18 仓库所有者同意照 ADR-0012 做 2.2，和 ADR-0011 一样是开工的许可。等：涉及 Gatekeeper 职责的部分还要 Gatekeeper 团队。
 
 ### 1.5 测试主机
@@ -120,7 +120,7 @@ flowchart TD
 
 - [G06](G06_Testing_and_Acceptance.md) 第 6 节：进入 D2（Provider Sandbox）的条件是 D1（功能 PoC）通过，而 D1 现在是 `NOT_RUN`。黑盒套件的对端是替身，不算门禁证据（[governance/README.md](governance/README.md)）。
 - 原来要定的是：P2 这一轮的结果算开发中的验证，还是算验收证据。下面定了。
-- [ADR-0008](adr/ADR-0008.md)（凭证经 ExtAuthZ 响应头注入）和 ADR-0010 仍是 Proposed：它们的状态由仓库所有者决定（见下一条和 [governance/README.md](governance/README.md)）。
+- [ADR-0008](adr/ADR-0008.md)（凭证经 ExtAuthZ 响应头注入）仍是 Proposed。ADR-0010 在 2026-11-21 由仓库所有者定为 Accepted。状态由仓库所有者决定（见下一条和 [governance/README.md](governance/README.md)）。
 - **2026-11-19 定了（仓库所有者）**：这是一个技术软件，不用执行人和批准人分开的做法，那只会增加复杂度。P2 这一轮的结果照实记成验证的记录：跑了什么、在哪些提交和镜像上、看到了什么；不设批准人，不等门禁的结论。3.4 不再等这一项。
 
 ## 2. 请求路径（`gateway-authz`）
@@ -183,7 +183,7 @@ flowchart TD
 - API Key。现在端口和评审过的配置都只认 `Authorization` 这一个头。放在别的请求头里时要把这一处放开；放在请求头以外（比如查询参数）时，复制响应头做不到，按 [ADR-0008](adr/ADR-0008.md) 第 4 条单独评估并补测。
 - 签名（HMAC 或承运商私有的）。要对最终外发的方法、路径和正文签名；[G04](G04_Identity_and_Security.md) 第 4 节建议用一个受限的签名适配器。2026-11-20 起，第二家承运商要的加密和签名的提案见 [ADR-0014](adr/ADR-0014.md)。顺丰的签名盖的是令牌、时间戳、随机数和密文，不是方法、路径和明文正文；上面那句说的是一般情况，没有改。
 - 对 Provider 的 mTLS。
-- **到哪了（2026-11-20）**：签名这一项做了顺丰国际这一家，记在 [ADR-0014](adr/ADR-0014.md) 的 V1.1（第零步到第二步）和 V1.2（第三步）。仓库所有者当天同意照那篇动手，是开工的许可，状态仍是 Proposed。`cmd/provider-signer`（`internal/providersigner`，只用标准库）和 `gateway-authz` 的第四种凭证来源 `--sf-openapi-apps` 在 `b782c7a`；替身、配置和离线契约在 `0dddab8`；联调架子上的套件在 `094c5e5`（对着替身 14/14，284 项检查）；对着真实沙箱的那一遍在 `7fd2dd2`（14/14，168 项过、65 项跳过；当时的 [rig-sandbox.json](../tests/integration/sfintl/evidence/rig-sandbox.json) 后来被提交 `e1b01ed` 覆盖）。单机池做了，记在同一篇的 V1.2：叠加文件 `deploy/compose/provider-signer.yml`、经 `gateway-control publish` 发布、签名器自己的出口规则、池上的套件和 SF-11。对着替身的那一遍是 15 个用例，266 项检查里 264 项过、2 项跳过（当时的 [pool-standin.json](../tests/integration/sfintl/evidence/pool-standin.json) 后来被提交 `e1b01ed` 覆盖）。池上沙箱见 1.1。面单（`IECS_PRINT_ORDER`）在 `95e2b90` 做了，记在同一篇的 V1.3。对着替身的数字见 1.1。四条路由的证据在提交 `e1b01ed`（跑在干净的 `4416f89`）：替身联调 14 个用例、327 项都过；替身池 15 个用例、309 项里 307 过、2 跳过；沙箱联调 14 个用例、275 项里 200 过、75 跳过；沙箱池 15 个用例、259 项里 189 过、70 跳过；没有剩下未取消的订单。逐项在 [tests/integration/sfintl/README.md](../tests/integration/sfintl/README.md) 的「四条路由」和 [ADR-0014](adr/ADR-0014.md) V1.3。到承运商的 TLS 仍没有做（沙箱没有）。API Key 和对 Provider 的 mTLS 仍没有做。
+- **到哪了（2026-11-20）**：签名这一项做了顺丰国际这一家，记在 [ADR-0014](adr/ADR-0014.md) 的 V1.1（第零步到第二步）和 V1.2（第三步）。仓库所有者当天同意照那篇动手，是开工的许可。2026-11-21 仓库所有者把这篇定为 Accepted。`cmd/provider-signer`（`internal/providersigner`，只用标准库）和 `gateway-authz` 的第四种凭证来源 `--sf-openapi-apps` 在 `b782c7a`；替身、配置和离线契约在 `0dddab8`；联调架子上的套件在 `094c5e5`（对着替身 14/14，284 项检查）；对着真实沙箱的那一遍在 `7fd2dd2`（14/14，168 项过、65 项跳过；当时的 [rig-sandbox.json](../tests/integration/sfintl/evidence/rig-sandbox.json) 后来被提交 `e1b01ed` 覆盖）。单机池做了，记在同一篇的 V1.2：叠加文件 `deploy/compose/provider-signer.yml`、经 `gateway-control publish` 发布、签名器自己的出口规则、池上的套件和 SF-11。对着替身的那一遍是 15 个用例，266 项检查里 264 项过、2 项跳过（当时的 [pool-standin.json](../tests/integration/sfintl/evidence/pool-standin.json) 后来被提交 `e1b01ed` 覆盖）。池上沙箱见 1.1。面单（`IECS_PRINT_ORDER`）在 `95e2b90` 做了，记在同一篇的 V1.3。对着替身的数字见 1.1。四条路由的证据在提交 `e1b01ed`（跑在干净的 `4416f89`）：替身联调 14 个用例、327 项都过；替身池 15 个用例、309 项里 307 过、2 跳过；沙箱联调 14 个用例、275 项里 200 过、75 跳过；沙箱池 15 个用例、259 项里 189 过、70 跳过；没有剩下未取消的订单。逐项在 [tests/integration/sfintl/README.md](../tests/integration/sfintl/README.md) 的「四条路由」和 [ADR-0014](adr/ADR-0014.md) V1.3。到承运商的 TLS 仍没有做（沙箱没有）。API Key 和对 Provider 的 mTLS 仍没有做。
 
 ## 3. 进沙箱
 
@@ -234,9 +234,9 @@ flowchart TD
 2. **发布历史和发布状态。** 现在只记最后一条确认过的快照。要做的是保存快照、记录发布过什么，以及 [G03](G03_Routing_and_Configuration.md) 第 3 节的状态机和审批。持久化要先定：[ADR-0009](adr/ADR-0009.md) 第 4 条规定控制面的持久化用 Bento-Go，第一次引入时同时带上 `tests/bentocontract` 和显式的迁移命令，版本到时再确认。`GW-GAP-06`。提案见 [ADR-0013](adr/ADR-0013.md)（2026-11-19）；仓库所有者当天定了它列出的六项，都照推荐的做（先落在池旁边的文件里，Bento-Go 以后），那是开工的许可。
    - **到哪了（2026-11-19）**：两个阶段都做了，记在 [ADR-0013](adr/ADR-0013.md) 的 V1.1 一节。第一阶段（`7c3612a`）是 Go：历史的端口和文件适配器（`snapshots/<SHA-256>.yaml`、只追加的 `releases.log`），`publish`、`restart` 先写后做，三条新命令 `releases`、`release`、`rollback`，`--history-dir`、`--pool`、`--note`，收尾写不进去时的 `ACTIVE_NOT_RECORDED`（退出码 8）。第二阶段是部署和验证：看守的单元带 `--history-dir ${POOL_DIR}/history --pool idp-gateway-pool`，历史目录是池的目录下的第三个子目录，`compose.yml` 没有改，开机的路上（`place`、`confirm`）不碰历史，只有看守和操作员的命令碰它；Go 只改了一处：历史打不开时 `reconcile` 和看守不再退出。compose 套件多了 `SH-23` 到 `SH-30`，在真的池上看了带历史发布、先写后做、发布器被杀之后看守补结局（`FAILED`、`OVERTAKEN`）、收尾那一行没写上、回滚、漏给参数、开机不靠历史。没有做的：Bento-Go 仍没有引入（条件见 ADR-0013 第 9 条）；批准、Fabric、撤回的状态、多个池的汇总；备份、防篡改、保留策略；`ACTIVE_NOT_RECORDED` 本身没有在真的池上造出来；历史目录的属主由谁定仍没有定。第 3 项（RouteIntent 编译器）的提案在 2026-11-19 还没有起草；后来做了，见下面第 3 项。 留着没有动的一处（2026-11-19，仓库所有者同意不做）：带重启的发布做到一半被杀之后，对账把文件放回去而网关还带着新的启动设置，这一条在历史里记成 `FAILED`，原因里写明还差一次重启；没有为它另设状态，情形少见，现有的记法不误导人。
 3. **RouteIntent 编译器。** 把中立的意图编译成 agentgateway 配置，用锁定的二进制校验；`scripts/preflight_intents.py` 的预检移植成 Go；`gateway-authz` 的登记表改由控制面下发。`GW-GAP-06`；`GW-FR-039`、`GW-FR-048`。 **推后到 P2 之后**（2026-11-19，仓库所有者定）：现在只有一家承运商、六条手写的路由，手写加评审够用；出现第三四家承运商，或者开始接 Fabric 时再出提案。
-   - **到哪了（2026-11-20）**：出站这一支做了，记在 [ADR-0016](adr/ADR-0016.md)（Proposed）。仓库所有者当天说「我没有第三家了，其他的全都做」，是开工的许可，不是决定。没有第三家承运商。提交 `e78d62e`：`internal/routecompile`，`gateway-control compile`。`scripts/preflight_intents.py` 移植成 Go，覆盖 INGRESS、EGRESS、AI，与 `tests/contracts/invalid-route-intents.json` 对过。编译只做出站，写出 agentgateway 1.7.0 的 YAML 和 `gateway-authz` 的登记表 JSON。明文沙箱例外在 `PROD` 被拒绝。池内签名器后端仍要 `VERIFY_REQUIRED` 和 `backend_tls`。写文件之前用锁定的 `agentgateway --validate-only`，给了 `--lock-file` 就核对 SHA-256。万邦和顺丰各 4 条路由，`yaml.safe_load` 与 JSON 都和手写的黄金文件结构相同，`native_validated` 为 true。带 `frontend_limits` 和 `local_rate_limit` 的规格也过了 `--validate-only`。两个构建各 36 个包通过。四条安全对照不通过后已改回。手写的 `agentgateway.yaml` 和 `policy.example.json` 仍是黄金基线。这一提交没有跑 compose 三轮，也没有重跑黑盒；那两项的结果记在 ADR-0016。没有做的：入口和 AI 的编译，Fabric 的发布批准，`gateway-authz` 登记表的动态下发。
+   - **到哪了（2026-11-20）**：出站这一支做了，记在 [ADR-0016](adr/ADR-0016.md)。仓库所有者当天说「我没有第三家了，其他的全都做」，是开工的许可，不是决定。2026-11-21 仓库所有者把这篇定为 Accepted。没有第三家承运商。提交 `e78d62e`：`internal/routecompile`，`gateway-control compile`。`scripts/preflight_intents.py` 移植成 Go，覆盖 INGRESS、EGRESS、AI，与 `tests/contracts/invalid-route-intents.json` 对过。编译只做出站，写出 agentgateway 1.7.0 的 YAML 和 `gateway-authz` 的登记表 JSON。明文沙箱例外在 `PROD` 被拒绝。池内签名器后端仍要 `VERIFY_REQUIRED` 和 `backend_tls`。写文件之前用锁定的 `agentgateway --validate-only`，给了 `--lock-file` 就核对 SHA-256。万邦和顺丰各 4 条路由，`yaml.safe_load` 与 JSON 都和手写的黄金文件结构相同，`native_validated` 为 true。带 `frontend_limits` 和 `local_rate_limit` 的规格也过了 `--validate-only`。两个构建各 36 个包通过。四条安全对照不通过后已改回。手写的 `agentgateway.yaml` 和 `policy.example.json` 仍是黄金基线。这一提交没有跑 compose 三轮，也没有重跑黑盒；那两项的结果记在 ADR-0016。没有做的：入口和 AI 的编译，Fabric 的发布批准，`gateway-authz` 登记表的动态下发。
 4. **换镜像、JWKS、发布器的证书。** 换镜像（升级）这个操作；JWKS 的同步；发布器证书的签发和轮换。`GW-GAP-13`、`GW-FR-045`。
-   - **到哪了（2026-11-20）**：JWKS 同步做了，记在 [ADR-0015](adr/ADR-0015.md)（Proposed）。提交 `e94602e`：`internal/jwkssync`，`gateway-control sync-jwks`。锁定的 1.7.0 按 `jwks.url` 取时，不认识的 `kid` 不会立刻重取；Hydra 的 `Cache-Control` 下大约要 16 分钟。`jwks.file` 被原子替换后，大约 0.3 到 0.4 秒重新加载，不用重启。Gatekeeper 联调 `GK-12` 连跑两遍都通过，13/13，新密钥分别在 2.015 秒和 1.012 秒被接受，网关没有重启。这一提交没有跑 compose 三轮，也没有重跑黑盒；那两项的结果记在 ADR-0015。没有做的：换镜像（升级）；发布器证书的签发和轮换。`sync-jwks` 还没有写进 `deploy/compose/compose.yml`，也没有 systemd 单元。
+   - **到哪了（2026-11-20）**：JWKS 同步做了，记在 [ADR-0015](adr/ADR-0015.md)。2026-11-21 仓库所有者把这篇定为 Accepted。提交 `e94602e`：`internal/jwkssync`，`gateway-control sync-jwks`。锁定的 1.7.0 按 `jwks.url` 取时，不认识的 `kid` 不会立刻重取；Hydra 的 `Cache-Control` 下大约要 16 分钟。`jwks.file` 被原子替换后，大约 0.3 到 0.4 秒重新加载，不用重启。Gatekeeper 联调 `GK-12` 连跑两遍都通过，13/13，新密钥分别在 2.015 秒和 1.012 秒被接受，网关没有重启。这一提交没有跑 compose 三轮，也没有重跑黑盒；那两项的结果记在 ADR-0015。没有做的：换镜像（升级）；发布器证书的签发和轮换。`sync-jwks` 不在 `deploy/compose/compose.yml` 里，也没有 systemd 单元。2026-11-21 起它是叠加文件 `deploy/compose/jwks.yml`（ADR-0015 V1.1）。七个服务的套件没有改，也没有重跑。
 5. **别的平台和规模。** Kubernetes 上的下发；一台机器上放不止一个池；日志和资源上限。
 6. **告警送到谁。** 规则在仓库里，路由和接收人不在。
 7. **撤销用的命令。** [ADR-0012](adr/ADR-0012.md) 的写入口是 `gateway-authz` 上的一个接口，已经做出来了（2.2）。操作员用的命令放进 `gateway-control`，2026-11-19 做了，见下面的“到哪了”。
@@ -245,7 +245,7 @@ flowchart TD
 ## 5. P3 生产候选（只列大项）
 
 - 流量治理：账户级的配额和限流、连接上限、熔断、超时预算。`GW-GAP-05`、`GW-GAP-09`。
-  - **到哪了（2026-11-20）**：一部分做了，记在 [ADR-0017](adr/ADR-0017.md)（Proposed）。提交 `6c5659d`。按 Provider 账户的限流在 `gateway-authz`，启动参数 `--rate-limits`，默认关。超额是 HTTP 429、`Retry-After`、原因码 `RATE_LIMITED`。顺序是策略、撤销、Gatekeeper 授权、限流，然后才发放凭证。桶只在本进程里，对得上契约里的 `LOCAL_APPROXIMATE`。跨实例的配额协调没有做。锁定的 1.7.0 上，`frontendPolicies.http.maxConcurrentRequests` 超额是 503，`frontendPolicies.tcp.maxConnections` 可用，路由上的 `localRateLimit` 超额是 429 加 `Retry-After`。`gateway-control compile` 能写出前两种上限和 `localRateLimit`。承运商被动熔断在 `provider-signer`：`--cb-failure-threshold` 默认 0（关着），`--cb-open-duration` 默认 30 秒。打开时 HTTP 503，`error` 是 `carrier_circuit_open`，不联系承运商。半开时一次只放一个探测。锁定的 1.7.0 没有可用的静态 `host:` 熔断：`health.eviction` 校验得过，失败的静态主机没有被摘掉。不经 `provider-signer` 的路由（万邦就是这样）有超时、并发上限和按账户限流，数据面上没有熔断。两个构建各 36 个包通过。`-race` 覆盖 `egressauthz`、`providersigner`、`gateway-authz`、`provider-signer`，17 个包通过。四条安全对照不通过后已改回。回环证明用了端口 28410 到 28450。黑盒套件从干净的 `6c5659d` 重跑，证据由 `4416f89` 写入：97 个用例，96 个通过，751 项检查；唯一失败仍是已知的 `P1-SS-04`（两个 `Host` 头）。`--check-evidence` 打印 `OK p1-run-agentgateway-1.7.0.json (96/97 passed, commit 6c5659d)`。与 `149aa0e` 上的证据相比，没有一条用例、也没有一项检查在文字或结果上不同。文件起止是 2026-11-20T13:54:53Z 到 13:56:06Z，相差 72.5 秒；提交说明写用时 74.825 秒。详见 [ADR-0017](adr/ADR-0017.md)。
+  - **到哪了（2026-11-20）**：一部分做了，记在 [ADR-0017](adr/ADR-0017.md)。2026-11-21 仓库所有者把这篇定为 Accepted。提交 `6c5659d`。按 Provider 账户的限流在 `gateway-authz`，启动参数 `--rate-limits`，默认关。超额是 HTTP 429、`Retry-After`、原因码 `RATE_LIMITED`。顺序是策略、撤销、Gatekeeper 授权、限流，然后才发放凭证。桶只在本进程里，对得上契约里的 `LOCAL_APPROXIMATE`。跨实例的配额协调没有做。锁定的 1.7.0 上，`frontendPolicies.http.maxConcurrentRequests` 超额是 503，`frontendPolicies.tcp.maxConnections` 可用，路由上的 `localRateLimit` 超额是 429 加 `Retry-After`。`gateway-control compile` 能写出前两种上限和 `localRateLimit`。承运商被动熔断在 `provider-signer`：`--cb-failure-threshold` 默认 0（关着），`--cb-open-duration` 默认 30 秒。打开时 HTTP 503，`error` 是 `carrier_circuit_open`，不联系承运商。半开时一次只放一个探测。锁定的 1.7.0 没有可用的静态 `host:` 熔断：`health.eviction` 校验得过，失败的静态主机没有被摘掉。不经 `provider-signer` 的路由（万邦就是这样）有超时、并发上限和按账户限流，数据面上没有熔断。两个构建各 36 个包通过。`-race` 覆盖 `egressauthz`、`providersigner`、`gateway-authz`、`provider-signer`，17 个包通过。四条安全对照不通过后已改回。回环证明用了端口 28410 到 28450。黑盒套件从干净的 `6c5659d` 重跑，证据由 `4416f89` 写入：97 个用例，96 个通过，751 项检查；唯一失败仍是已知的 `P1-SS-04`（两个 `Host` 头）。`--check-evidence` 打印 `OK p1-run-agentgateway-1.7.0.json (96/97 passed, commit 6c5659d)`。与 `149aa0e` 上的证据相比，没有一条用例、也没有一项检查在文字或结果上不同。文件起止是 2026-11-20T13:54:53Z 到 13:56:06Z，相差 72.5 秒；提交说明写用时 74.825 秒。详见 [ADR-0017](adr/ADR-0017.md)。
 - 协议兼容矩阵的 12 项：gRPC、流式、大报文等。`GW-GAP-10`。
 - 报文采集与脱敏：`scripts/diagnostic_reference.py` 的移植，四阶段的证据。`GW-GAP-07`。
 - 完整的 Trace 和审计，SLO。`GW-FR-017`、`GW-GAP-08`。

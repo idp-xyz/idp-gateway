@@ -667,5 +667,56 @@ class ComposeSuite(unittest.TestCase):
         self.assertEqual(cut, [KeeperUnit.COMMAND])
 
 
+class JWKSOverlay(unittest.TestCase):
+    """sync-jwks is an overlay. compose.yml and its seven services stay as the suite runs them."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.raw = text('deploy/compose/jwks.yml')
+        cls.doc = yaml.safe_load(cls.raw)
+        cls.service = cls.doc['services']['jwks']
+        command = cls.service['command']
+        cls.command = command if isinstance(command, str) else ' '.join(command)
+
+    def test_one_service_named_jwks(self):
+        self.assertEqual(list(self.doc['services']), ['jwks'])
+
+    def test_the_lockdown_matches_place_and_confirm(self):
+        service = self.service
+        self.assertEqual(service['restart'], 'no')
+        self.assertIs(service['read_only'], True)
+        self.assertIn('ALL', service['cap_drop'])
+        self.assertIn('no-new-privileges:true', service['security_opt'])
+        self.assertEqual(service['entrypoint'], ['/usr/local/bin/gateway-control'])
+        self.assertEqual(service['user'], '${CONTROL_USER:?see .env.example}')
+        self.assertEqual(service['image'], SERVICES['place']['image'])
+        self.assertEqual(service['stop_grace_period'], '5s')
+        self.assertNotIn('ports', service)
+        self.assertNotIn('network_mode', service)
+
+    def test_the_command_is_the_long_running_sync(self):
+        self.assertIn('sync-jwks', self.command)
+        self.assertIn('--output=/pool/tls/jwks.json', self.command)
+        self.assertIn('--mode=0644', self.command)
+        for forbidden in ('--once', '--empty-on-stale', '--metrics-listen', 'service:netns'):
+            self.assertNotIn(forbidden, self.command)
+        self.assertNotEqual(self.service.get('network_mode'), 'service:netns')
+
+    def test_the_tls_directory_is_writable_and_the_binary_is_not(self):
+        volumes = self.service['volumes']
+        tls = [item for item in volumes if ':/pool/tls' in item]
+        binary = [item for item in volumes if ':/usr/local/bin/gateway-control' in item]
+        self.assertEqual(tls, ['${POOL_DIR:?see .env.example}/tls:/pool/tls'])
+        self.assertNotIn(':ro', tls[0])
+        self.assertEqual(binary, ['${GATEWAY_CONTROL:?see .env.example}:/usr/local/bin/gateway-control:ro'])
+        self.assertTrue(binary[0].endswith(':ro'))
+
+    def test_the_url_is_required_and_the_timings_keep_the_command_defaults(self):
+        self.assertIn('${JWKS_URL:?', self.command)
+        self.assertIn('${JWKS_INTERVAL:-15s}', self.command)
+        self.assertIn('${JWKS_TIMEOUT:-3s}', self.command)
+        self.assertIn('${JWKS_MAX_STALE:-15m}', self.command)
+
+
 if __name__ == '__main__':
     unittest.main()

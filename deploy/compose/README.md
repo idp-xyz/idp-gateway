@@ -1,6 +1,6 @@
 # 单机上的一个网关池（docker compose）
 
-运行平台的第一期是单机上的 docker compose（[ADR-0010](../../docs/adr/ADR-0010.md) 第 10 条；这篇 ADR 是建议，仍是 Proposed）。这个目录是它的部署文件：一台机器上的一个池，池里一个网关实例。
+运行平台的第一期是单机上的 docker compose（[ADR-0010](../../docs/adr/ADR-0010.md) 第 10 条；2026-11-21 仓库所有者把这篇定为 Accepted）。这个目录是它的部署文件：一台机器上的一个池，池里一个网关实例。
 
 > **单点。** 这台机器或它的 docker 停了，经它出去的调用全部中断。作为第一期可以接受；G01 要的分池和高可用，要到多机或 Kubernetes 才谈得上。  
 > **验证到哪一步。** [`tests/integration/compose`](../../tests/integration/compose/README.md) 跑的就是这里的 `compose.yml`，看守也是对着它跑的。其中"断电"是把容器强行杀掉来模拟的：真的重启一台机器没有做过。两个 systemd 单元没有装到哪台机器上跑过：它们之间的关系在用户级的 systemd 里用替身跑过，它们里面写的命令不经 systemd 原样跑过。见文末"没有验证的"。
@@ -221,7 +221,7 @@ STAGING="--image <compose.yml 里网关用的那个镜像，按摘要>
 
 ## 发布历史
 
-[ADR-0013](../../docs/adr/ADR-0013.md)（Proposed）。每一次发布在历史里是一条记录：谁发起的、什么时候、发布的是哪一份快照、每一步和结局；快照的全文按它的 SHA-256 存着，所以能回到更早的一份。
+[ADR-0013](../../docs/adr/ADR-0013.md)（2026-11-21 定为 Accepted）。每一次发布在历史里是一条记录：谁发起的、什么时候、发布的是哪一份快照、每一步和结局；快照的全文按它的 SHA-256 存着，所以能回到更早的一份。
 
 **在哪里，谁碰它。** `POOL_DIR/history`，池的目录下的第三个子目录，0700，归 `CONTROL_USER`，要先建好（"准备"第 3 点）。里面是 `releases.log`（只追加，一行一个 JSON，0600）和 `snapshots/`（0700，每份快照一个文件，名字是内容的 SHA-256，0600）。碰它的只有两样：**看守**（每分钟对账之后给停在半路的发布补结局，没有这样的发布时只读）和**操作员手工跑的** `publish`、`restart`、`rollback`、`releases`、`release`（都要给 `$HISTORY`）。**开机的路上不碰它**：`compose.yml` 里没有哪个服务挂它，`place` 和 `confirm` 不给 `--history-dir`。所以历史目录丢了、日志坏了，机器照样起得来，池照样通；给停在半路的发布补结局由看守的对账做，不在开机时做（`SH-30`）。
 
@@ -353,6 +353,23 @@ docker compose -f compose.yml -f gateway-authz.yml -f provider-signer.yml up -d
 - **变量**写在 [`provider-signer.env.example`](provider-signer.env.example)，抄进同一个 `.env`。必填的缺了，`docker compose` 会说是哪一个：`SIGNER`（二进制）、`SIGNER_USER`、`SIGNER_TLS_CERT`、`SIGNER_TLS_KEY`、`SIGNER_CLIENT_CA`（签发网关证书的 CA）、`SIGNER_GATEWAY_IDENTITY`、`SIGNER_CARRIER_URL`、`SIGNER_EGRESS_CONFIG`（上面那份小文件）。`SIGNER_PLAIN_HTTP_HOST` 和 `GATEWAY_AUTHZ_SF_PLAIN_HTTP_HOST` 可以空着。
 - **明文。** `--carrier-plain-http-host` 空着，适配器只允许回环地址字面量上的明文 `http`。沙箱和替身的地址不是回环，要把主机名写在这个变量里，`gateway-authz` 的那个变量写同一个主机名。
 - **还没有的**：`gateway-authz` 自己去令牌端点的那条连接没有出口规则；systemd 单元；看守（`gateway-control keep`）带上这个叠加文件；生产证书；别的机器。这个叠加文件和顺丰国际的配置一起，在 `tests/integration/sfintl/pool.py` 里跑过。
+
+## sync-jwks（叠加文件）
+
+网关只读本机文件 `tls/jwks.json`。`jwks.yml` 跑常驻的 `gateway-control sync-jwks`，把身份提供者的 JWKS 写到这个文件。它是叠加文件，不改 `compose.yml`，基线的七个服务不动：
+
+```bash
+docker compose -f compose.yml -f jwks.yml up -d
+```
+
+- **不在 `netns` 里。** 它用项目的默认网络，这样才能连到身份提供者。网关不向它发请求，只读它写出的文件。不映射主机端口，也不开指标。
+- **加固照 `place` 和 `confirm`。** 镜像是 `FRONT_IMAGE` 的那个默认摘要，只是个壳；跑的是本机上的 `gateway-control`，只读挂在 `/usr/local/bin/gateway-control`。身份是 `CONTROL_USER`。`read_only`、`cap_drop: ALL`、`no-new-privileges`、`restart: "no"`。
+- **写的是目录。** `${POOL_DIR}/tls` 读写挂在 `/pool/tls`。程序在这个目录里建临时文件再改名；只挂 `jwks.json` 这一个文件会写不成。`compose.yml` 里网关对同一目录的挂载仍是只读，那个文件没有改。
+- **权限 0644。** `GATEWAY_USER` 要读得了这个文件。两个账号不是同一个时，0600 它读不到。程序只接受 0600 和 0644。
+- **变量**写在 [`jwks.env.example`](jwks.env.example)，抄进同一个 `.env`。`JWKS_URL` 必填。`JWKS_INTERVAL`、`JWKS_TIMEOUT`、`JWKS_MAX_STALE` 可以不写，默认 15 秒、3 秒、15 分钟。地址必须是 `https`，或者程序已经允许的 `http`：回环地址的字面量，或者操作员自己加上 `--plain-http-host` 时的那一个裸主机名。
+- **`--empty-on-stale` 关着。** 取失败时文件留着上一份，直到 `--max-stale`；到了也不把密钥清掉。
+- **先取到，再发布。** 进程起来先取一轮。第一份引用 `tls/jwks.json` 的发布，要等这一轮成功之后。
+- **看守不会把它拉起来。** systemd 单元没有改。看守的单元仍只对 `compose.yml` 跑 `docker compose up -d`。操作员没有把 `-f jwks.yml` 加进那条命令之前，这个进程不由看守重启。
 
 ## 停
 

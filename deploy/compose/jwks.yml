@@ -1,0 +1,46 @@
+# sync-jwks in the pool. An overlay: use it with compose.yml, which it does not change.
+#
+#   docker compose -f compose.yml -f jwks.yml up -d
+#
+# (the variables it needs are in jwks.env.example; put them in the same .env). One service, jwks, runs
+# gateway-control sync-jwks and writes tls/jwks.json. The gateway keeps reading that file and does not call this
+# process. compose.yml is not modified. The systemd units are not modified. The keeper unit still runs
+# `docker compose up -d` on compose.yml alone, so this process is not restarted by the keeper unless the operator
+# adds `-f jwks.yml` to that command.
+#
+# It is not network_mode: service:netns. It uses the compose project network so it can reach the identity provider.
+# Nothing is published on the host. There is no metrics listener.
+#
+# Hardened as place and confirm are (compose.yml, x-gateway-control): the image is a shell only, by digest, the same
+# FRONT_IMAGE default place uses; what runs is the gateway-control binary of the host, mounted read-only; read-only
+# root file system, no capability, no-new-privileges, not root, restart "no". It runs as CONTROL_USER.
+#
+# The output is the tls directory, mounted read-write. sync-jwks writes with os.CreateTemp in the output directory
+# and then renames, so a mount of the single file jwks.json would keep the old inode. The gateway's own mount of
+# that directory in compose.yml stays read-only; this file does not change compose.yml.
+#
+# --mode=0644 so GATEWAY_USER can read the file when the two users differ. The command accepts only 0600 and 0644.
+# --empty-on-stale is off: a failed fetch keeps the previous file until --max-stale and does not wipe the keys.
+# The long-running process fetches once at start. There is no --once and no --plain-http-host (add that flag
+# yourself if the URL is the one plain host the command allows).
+services:
+  jwks:
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    image: ${FRONT_IMAGE:-public.ecr.aws/nginx/nginx-unprivileged:stable-alpine@sha256:c3fc8fa482be50ef709c6438eb1bc98d50dbfe5a9b48be90711b8814f4dfd701}
+    entrypoint: ["/usr/local/bin/gateway-control"]
+    user: "${CONTROL_USER:?see .env.example}"
+    command:
+      - sync-jwks
+      - --url=${JWKS_URL:?see jwks.env.example}
+      - --output=/pool/tls/jwks.json
+      - --interval=${JWKS_INTERVAL:-15s}
+      - --timeout=${JWKS_TIMEOUT:-3s}
+      - --max-stale=${JWKS_MAX_STALE:-15m}
+      - --mode=0644
+    volumes:
+      - "${GATEWAY_CONTROL:?see .env.example}:/usr/local/bin/gateway-control:ro"
+      - "${POOL_DIR:?see .env.example}/tls:/pool/tls"
+    stop_grace_period: 5s
