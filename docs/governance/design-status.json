@@ -121,7 +121,7 @@
   ],
   "warnings": [
     "The manifest keeps the structure of IDP-SCG-STD-001 and passes its JSON Schema; the UNASSIGNED-* and UNRESOLVED-* placeholders are left open on purpose and do not block anything.",
-    "ADR-0001 through ADR-0008 remain Proposed. ADR-0009 is Accepted and only decides repository structure. On 2026-11-21 the repository owner accepted ADR-0010 through ADR-0017. That is not an acceptance of the formal cases or the STD-CP gates. The decisions array is intentionally empty.",
+    "On 2026-11-21 the repository owner accepted ADR-0001 through ADR-0008. ADR-0009 is Accepted and only decides repository structure. On the same day the repository owner accepted ADR-0010 through ADR-0017. That is not an acceptance of the formal cases or the STD-CP gates, and it does not lift the UI freeze: accepting ADR-0008 satisfies only one of the three lift_when items, and scope_freeze.ui_ux_expansion.state stays FROZEN. The decisions array is intentionally empty.",
     "On 2026-11-19 three runtime verifications were changed from NOT_RUN to RUN with their reservations (runtime_verification_notes). On 2026-11-20 those notes were extended with later evidence (see each item). The six gates and the cases of the acceptance matrix have not been re-evaluated against the evidence: they are unchanged. security_penetration, performance and production have no evidence."
   ]
 }

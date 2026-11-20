@@ -1,7 +1,7 @@
 # 开发计划 — 出站网关，到真实第三方沙箱为止
 
 > **状态**：草案 · **日期** 2026-11-17  
-> 范围和先后是仓库所有者在 2026-11-17 定的，执笔的是 AI 编码助手。这份计划本身不改变任何验收用例、缺口或门禁的 `NOT_RUN`。2026-11-21 仓库所有者把 ADR-0010 至 ADR-0017 定为 Accepted，那不是这份计划改的；ADR-0001 至 ADR-0008 仍是 Proposed。2026-11-19 仓库所有者定：项目不用角色分离和具名批准，由仓库所有者决定，验证看证据（[governance/README.md](governance/README.md)）。
+> 范围和先后是仓库所有者在 2026-11-17 定的，执笔的是 AI 编码助手。这份计划本身不改变任何验收用例、缺口或门禁的 `NOT_RUN`。2026-11-21 仓库所有者把 ADR-0001 至 ADR-0008 定为 Accepted，同日已把 ADR-0010 至 ADR-0017 定为 Accepted；那不是这份计划改的。2026-11-19 仓库所有者定：项目不用角色分离和具名批准，由仓库所有者决定，验证看证据（[governance/README.md](governance/README.md)）。
 
 ## 这份计划管什么
 
@@ -120,7 +120,7 @@ flowchart TD
 
 - [G06](G06_Testing_and_Acceptance.md) 第 6 节：进入 D2（Provider Sandbox）的条件是 D1（功能 PoC）通过，而 D1 现在是 `NOT_RUN`。黑盒套件的对端是替身，不算门禁证据（[governance/README.md](governance/README.md)）。
 - 原来要定的是：P2 这一轮的结果算开发中的验证，还是算验收证据。下面定了。
-- [ADR-0008](adr/ADR-0008.md)（凭证经 ExtAuthZ 响应头注入）仍是 Proposed。ADR-0010 在 2026-11-21 由仓库所有者定为 Accepted。状态由仓库所有者决定（见下一条和 [governance/README.md](governance/README.md)）。
+- [ADR-0008](adr/ADR-0008.md)（凭证经 ExtAuthZ 响应头注入）在 2026-11-21 由仓库所有者定为 Accepted。ADR-0010 在 2026-11-21 由仓库所有者定为 Accepted。状态由仓库所有者决定（见下一条和 [governance/README.md](governance/README.md)）。
 - **2026-11-19 定了（仓库所有者）**：这是一个技术软件，不用执行人和批准人分开的做法，那只会增加复杂度。P2 这一轮的结果照实记成验证的记录：跑了什么、在哪些提交和镜像上、看到了什么；不设批准人，不等门禁的结论。3.4 不再等这一项。
 
 ## 2. 请求路径（`gateway-authz`）

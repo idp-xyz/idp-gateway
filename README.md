@@ -2,7 +2,7 @@
 
 出站（Egress）API 网关：数据面用 agentgateway，本仓库是围绕它的 Go 代码、契约、部署配置和测试。
 
-> **状态**：开发阶段。95 条正式验收用例与六个 STD-CP 门禁全部 `NOT_RUN`；三项运行验证（agentgateway、Gatekeeper 与 ExtAuthZ、Provider 沙箱）2026-11-19 起是 `RUN`，各自的保留见 [design-status.json](docs/governance/design-status.json)。ADR-0009 是 Accepted，ADR-0001 至 0008 仍是 Proposed。2026-11-21，仓库所有者把 ADR-0010 至 ADR-0017 定为 Accepted。  
+> **状态**：开发阶段。95 条正式验收用例与六个 STD-CP 门禁全部 `NOT_RUN`；三项运行验证（agentgateway、Gatekeeper 与 ExtAuthZ、Provider 沙箱）2026-11-19 起是 `RUN`，各自的保留见 [design-status.json](docs/governance/design-status.json)。2026-11-21，仓库所有者把 ADR-0001 至 ADR-0008 定为 Accepted，与 ADR-0009、ADR-0010 至 ADR-0017 同为 Accepted。  
 > 设计基线交付包与 PoC 的原貌在标签 `baseline-v1.0-poc`；之后的目录结构见 [ADR-0009](docs/adr/ADR-0009.md)。
 
 ## 目录
