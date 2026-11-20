@@ -167,9 +167,21 @@ tests/integration/gatekeeper/stack.sh up
 - 沙箱的行为与文档不同或文档没写的几处，是另外直接对着沙箱量的（不经网关，一个包裹，用完删除），写在上面"替身的假设"和 [deploy/providers/wanbexpress/README.md](../../../deploy/providers/wanbexpress/README.md) 里。
 - **这里没有验的**：承运商实际收到的头（只在替身上看得到）；两个账户之间的隔离（只有一个沙箱账号）；到承运商的 TLS（沙箱只有明文 HTTP）；从 compose 池里发出去（这里的网关是本机进程，没有出口规则）。这些结果算不算验收证据（开发计划 1.6）没有定。
 
-### 计划 3.4 这一遍（待仓库所有者填，日期：）
+### 计划 3.4 这一遍（2026-11-19）
 
-（`run.py --sandbox --evidence` 和 `pool.py --sandbox --evidence` 的结果写在这里；证据文件 `evidence/rig-sandbox.json`、`evidence/pool-sandbox.json`。）
+从干净的树（`be79639`）上带 `--evidence` 跑的四遍，证据在 [evidence/](evidence/)：
+
+| 证据文件 | 上游 | 用例 | 检查 |
+|---|---|---|---|
+| `rig-standin.json` | 替身，联调架子 | 13 个，都过 | 142 项都过 |
+| `rig-sandbox.json` | 真实沙箱，联调架子 | 13 个，没有不通过 | 115 项：74 过，41 跳过 |
+| `pool-standin.json` | 替身，compose 池 | 14 个，没有不通过 | 111 项：107 过，4 跳过 |
+| `pool-sandbox.json` | 真实沙箱，compose 池 | 14 个，没有不通过 | 101 项：65 过，36 跳过 |
+
+- 沙箱上真的跑了的新用例是 `WB-12`（撤销）：`gateway-control revoke` 之后 blue 的下一个请求是 403 `ACCOUNT_REVOKED`，`restore` 之后 `whoami` 200，`gateway-authz` 是同一个进程。`WB-13`、`WB-14` 在沙箱上跳过，原因在用例表里。池上三个新用例都跳过。
+- 四遍里创建的包裹都删了；证据里没有令牌、`Authorization` 的值和账号（套件写完自查，我另外查了一遍）。
+- 第一次带 `--evidence` 跑沙箱时证据被自查删掉了：沙箱账号的客户代码恰好和环境名是同一个词，按子串找必然撞上。`be79639` 把账号改成按完整的字符串值找，上面是改了之后的结果。
+- 证据里不记执行人和批准人（开发计划 1.6）。这些是验证的记录；`docs/governance/design-status.json` 里各项的状态没有因为它们而改。
 
 ### 计划 3.4 补的用例，对着替身（2026-11-19）
 

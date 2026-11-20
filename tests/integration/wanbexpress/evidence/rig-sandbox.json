@@ -1,0 +1,693 @@
+{
+ "kind": "rig: the real local Gatekeeper, agentgateway 1.7.0 as a local binary, gateway-authz as a local process",
+ "upstream_kind": "the carrier's sandbox",
+ "operator_and_approver": "Not recorded. The repository owner decided on 2026-11-19 (development plan 1.6) that this technical software has no operator and approver kept apart: this file records what was run, on which commits and images, and what was seen. It is a record of verification, not a gate decision.",
+ "agentgateway": {
+  "version": "1.7.0",
+  "image": "cr.agentgateway.dev/agentgateway@sha256:60216aafb03d37f94e952ff3d51d2f630a65b10ecaebdc0a864882f92610c45b",
+  "local_binary_sha256": "c7ef326b7b5702451e94bab55ff484d600d5abdc5344a4cdf7c72fc0bcff9e24"
+ },
+ "gatekeeper_commit": "f36dc06",
+ "repository": {
+  "commit": "be79639",
+  "uncommitted_files": 0
+ },
+ "registry_sha256": "3ae4a8adb597d16db02fe1798d02b4c8e091ea880f7c080ee98754df15815c0d",
+ "registry_note": "the example register; each run fills its placeholders with that run's tenant and client ids, so the filled copy differs from run to run",
+ "gateway_configuration_sha256": "9f116b3c247c34b975e6f5c57aec00f55ed31ce60421346a3d6706d59b69d2c2",
+ "environment": [
+  "TEST"
+ ],
+ "started_at_utc": "2026-11-20T02:59:35+00:00",
+ "finished_at_utc": "2026-11-20T02:59:37+00:00",
+ "clock": {
+  "carrier_response_date": "Fri, 20 Nov 2026 02:59:36 GMT",
+  "offset_seconds": -0.1,
+  "resolution_seconds": 1,
+  "taken_from": "the answer to the first whoami (WB-01), as it reached the caller"
+ },
+ "dataset": {
+  "reference_prefix": "IDPGW-20261120-",
+  "data": "the example request of the carrier's documentation",
+  "parcels_created_and_deleted": [
+   "SBXTT0000014000YQ",
+   "SBXTT0000014003YQ"
+  ],
+  "parcels_left_undeleted": []
+ },
+ "upstream": {
+  "kind": "the carrier's sandbox",
+  "name": "api-sbx.wanbexpress.com",
+  "port": 80,
+  "name_resolved_to_at_the_start": [
+   "47.106.164.236",
+   "47.107.36.179"
+  ],
+  "addresses_the_gateway_process_held_connections_to": [
+   "47.106.164.236:80",
+   "47.107.36.179:80"
+  ]
+ },
+ "gateway_proxy_variables": {
+  "proxy_variables_removed_from_the_gateway_process": [
+   "HTTPS_PROXY",
+   "HTTP_PROXY",
+   "NO_PROXY",
+   "http_proxy",
+   "https_proxy",
+   "no_proxy",
+   "npm_config_no_proxy",
+   "npm_config_noproxy"
+  ],
+  "present_in_the_gateway_process": false
+ },
+ "cases": [
+  {
+   "id": "WB-01",
+   "title": "whoami: the blue tenant's real Gatekeeper token, through the gateway, answers with that account",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "status 200",
+     "result": "pass"
+    },
+    {
+     "check": "Succeeded is true",
+     "result": "pass"
+    },
+    {
+     "check": "Data is the account number of the blue tenant's account (value not recorded)",
+     "result": "pass"
+    },
+    {
+     "check": "gateway-authz decided ACTIVE_ACCOUNT_GRANT for whoami.get",
+     "result": "pass"
+    },
+    {
+     "check": "no Set-Cookie from the carrier reaches the caller",
+     "result": "skipped",
+     "reason": "the real sandbox sets none to be removed; the stand-in does"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "WB-02",
+   "title": "create, get by process code, delete: one whole chain",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "create: status 200 and Succeeded true",
+     "result": "pass"
+    },
+    {
+     "check": "create: the answer carries a ProcessCode and our ReferenceId",
+     "result": "pass"
+    },
+    {
+     "check": "create: Status is Original (AutoConfirm was not set)",
+     "result": "pass"
+    },
+    {
+     "check": "get: status 200, Succeeded true",
+     "result": "pass"
+    },
+    {
+     "check": "get: ReferenceId and ProcessCode are the ones created",
+     "result": "pass"
+    },
+    {
+     "check": "delete: status 200, Succeeded true",
+     "result": "pass"
+    },
+    {
+     "check": "get after delete: HTTP 404, as the carrier answered it, passed on by the gateway unchanged",
+     "result": "pass"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "WB-03",
+   "title": "the same ReferenceId again: identical body gets the existing parcel back; a changed body gets 0x100005 (HTTP 200, Succeeded false), unchanged to the caller",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "the first create succeeded",
+     "result": "pass"
+    },
+    {
+     "check": "identical body: HTTP 200, Succeeded true",
+     "result": "pass"
+    },
+    {
+     "check": "identical body: the ProcessCode is the first one (nothing new was made)",
+     "result": "pass"
+    },
+    {
+     "check": "changed body: HTTP status 200",
+     "result": "pass"
+    },
+    {
+     "check": "changed body: Succeeded false",
+     "result": "pass"
+    },
+    {
+     "check": "changed body: Error.Code is 0x100005",
+     "result": "pass"
+    },
+    {
+     "check": "the parcel made for this case is deleted",
+     "result": "pass"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "WB-04",
+   "title": "what the carrier receives (stand-in only): one Authorization of the documented form, a new nonce each time, Accept written by the gateway, nothing of the caller",
+   "result": "skipped",
+   "checks": [
+    {
+     "check": "every check of this case",
+     "result": "skipped",
+     "reason": "only the stand-in can say what it received"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "WB-05",
+   "title": "no token, a token for another audience, a forged signature: refused with 401, the carrier gets nothing, gateway-authz is not asked",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "no token: 401",
+     "result": "pass"
+    },
+    {
+     "check": "no token: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "no token: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "another audience: 401",
+     "result": "pass"
+    },
+    {
+     "check": "another audience: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "another audience: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "forged signature: 401",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "WB-06",
+   "title": "tenants: each gets its own account; blue asking for green's account is refused (sandbox: green has no account)",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "green (no account in this run): 403",
+     "result": "pass"
+    },
+    {
+     "check": "green gets the green account's Data; the two accounts do not mix",
+     "result": "skipped",
+     "reason": "there is one sandbox account"
+    },
+    {
+     "check": "blue asking for the green account: 403",
+     "result": "pass"
+    },
+    {
+     "check": "the reason is ACCOUNT_NOT_GRANTED",
+     "result": "pass"
+    },
+    {
+     "check": "blue asking for the green account: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    }
+   ],
+   "notes": {
+    "green: gateway-authz's reason": "ACCOUNT_NOT_GRANTED"
+   }
+  },
+  {
+   "id": "WB-07",
+   "title": "a client the register knows but Gatekeeper has no grant for: 403, the carrier gets nothing",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "403",
+     "result": "pass"
+    },
+    {
+     "check": "the reason is ACCOUNT_NOT_GRANTED",
+     "result": "pass"
+    },
+    {
+     "check": "the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "WB-08",
+   "title": "a method or a path that is not registered does not get to the carrier",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "PUT /parcels/ABC123: 404 from the gateway, gateway-authz not asked",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /parcels/ABC123: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "PATCH /parcels/ABC123: 404 from the gateway, gateway-authz not asked",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /parcels/ABC123: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "PUT /parcels: 404 from the gateway, gateway-authz not asked",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /parcels: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "POST /whoami: 404 from the gateway, gateway-authz not asked",
+     "result": "pass"
+    },
+    {
+     "check": "POST /whoami: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "DELETE /whoami: 404 from the gateway, gateway-authz not asked",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /whoami: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "GET /bags: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /bags: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "GET /parcels: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /parcels: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "GET /parcels?referenceId=IDPGW-1: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /parcels?referenceId=IDPGW-1: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "GET /parcels/: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /parcels/: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "GET /parcels/ABC/def: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /parcels/ABC/def: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "GET /parcels/../whoami: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /parcels/../whoami: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "GET /parcels/%2e%2e/whoami: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /parcels/%2e%2e/whoami: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "GET /parcels/a%2fb: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /parcels/a%2fb: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "DELETE /parcels/a%2Fb: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /parcels/a%2Fb: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "GET /parcels/ABC;x=1: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /parcels/ABC;x=1: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "GET /parcels/%00: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /parcels/%00: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "GET /whoami/extra: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /whoami/extra: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "GET /parcels/%252e%252e: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /parcels/%252e%252e: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "GET /api/whoami: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /api/whoami: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "GET /providers/mockcarrier/v1/tracking/T-1: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /providers/mockcarrier/v1/tracking/T-1: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "GET //whoami: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "GET //whoami: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "POST /parcels/: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "POST /parcels/: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "POST /parcels/ABC123: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "POST /parcels/ABC123: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "DELETE /parcels: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /parcels: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "WB-09",
+   "title": "gateway-authz allows and releases no credential: the gateway itself refuses; a caller's own Authorization does not take its place",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "the PDP is set to allow without a credential",
+     "result": "pass"
+    },
+    {
+     "check": "the caller sends nothing of its own: the caller does not get a success (403)",
+     "result": "pass"
+    },
+    {
+     "check": "the caller sends nothing of its own: the PDP did allow it (so it is the gateway that refused)",
+     "result": "pass"
+    },
+    {
+     "check": "the caller sends nothing of its own: the answer is not the carrier's",
+     "result": "pass"
+    },
+    {
+     "check": "the caller sends nothing of its own: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "the caller's own Authorization after its token: the caller does not get a success (403)",
+     "result": "pass"
+    },
+    {
+     "check": "the caller's own Authorization after its token: the PDP did allow it (so it is the gateway that refused)",
+     "result": "pass"
+    },
+    {
+     "check": "the caller's own Authorization after its token: the answer is not the carrier's",
+     "result": "pass"
+    },
+    {
+     "check": "the caller's own Authorization after its token: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "the caller's own Authorization before its token: refused (401)",
+     "result": "pass"
+    },
+    {
+     "check": "the caller's own Authorization before its token: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "the PDP is set back to normal",
+     "result": "pass"
+    },
+    {
+     "check": "control: with a credential released, the same request goes through with the PDP's credential and not the caller's",
+     "result": "skipped",
+     "reason": "WB-04 is stand-in only; not repeated at the sandbox"
+    },
+    {
+     "check": "the product build of gateway-authz is back and allows again",
+     "result": "pass"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "WB-10",
+   "title": "the logs of the gateway and gateway-authz, this run's output and the result file hold no token and no Authorization of the carrier's scheme",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "gateway log: none of the 10 secrets of this run, and no value of the carrier's authorization scheme",
+     "result": "pass"
+    },
+    {
+     "check": "gateway-authz log: none of the 10 secrets of this run, and no value of the carrier's authorization scheme",
+     "result": "pass"
+    },
+    {
+     "check": "standard output: none of the 10 secrets of this run, and no value of the carrier's authorization scheme",
+     "result": "pass"
+    },
+    {
+     "check": "result file: none of the 10 secrets of this run, and no value of the carrier's authorization scheme",
+     "result": "pass"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "WB-12",
+   "title": "revocation through gateway-control: blue is refused on its next request, gateway-authz is not replaced, green is not touched; restored, blue is served again",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "before: blue is served (one whoami to the carrier)",
+     "result": "skipped",
+     "reason": "the sandbox is not asked for more than it has to be: the confirming whoami comes after the restore"
+    },
+    {
+     "check": "gateway-control revoke: exit 0, REVOKED, the account is revoked and it changed",
+     "result": "pass"
+    },
+    {
+     "check": "blue's next request: 403",
+     "result": "pass"
+    },
+    {
+     "check": "the reason is ACCOUNT_REVOKED, in the answer and in gateway-authz's decision",
+     "result": "pass"
+    },
+    {
+     "check": "blue's request after the revocation: the carrier received nothing",
+     "result": "skipped",
+     "reason": "cannot be seen at the real sandbox"
+    },
+    {
+     "check": "green is not affected by blue's revocation",
+     "result": "skipped",
+     "reason": "there is one sandbox account"
+    },
+    {
+     "check": "gateway-control revocations: LISTED, blue's account is in the table and no other",
+     "result": "pass"
+    },
+    {
+     "check": "gateway-control restore: exit 0, LIFTED, the account is not revoked and it changed",
+     "result": "pass"
+    },
+    {
+     "check": "after the restore blue is served again: whoami 200, Succeeded true",
+     "result": "pass"
+    },
+    {
+     "check": "gateway-authz is the same process throughout (same pid, still running)",
+     "result": "pass"
+    }
+   ],
+   "notes": {
+    "gateway-control revoke": {
+     "exit": 0,
+     "outcome": "REVOKED",
+     "said": "gateway-control: REVOKED: account-blue is revoked (revocation epoch 1)"
+    },
+    "blue's next request": {
+     "status": 403,
+     "reason_code": "ACCOUNT_REVOKED",
+     "gateway-authz decided": "ACCOUNT_REVOKED"
+    }
+   }
+  },
+  {
+   "id": "WB-13",
+   "title": "credential rotation (stand-in only): the credentials file is replaced the way gateway-authz asks; the next request leaves with the new token; a file that does not load changes nothing",
+   "result": "skipped",
+   "checks": [
+    {
+     "check": "every check of this case",
+     "result": "skipped",
+     "reason": "the sandbox has one valid token; sending a real carrier an invalid credential is not a normal request"
+    }
+   ],
+   "notes": {}
+  },
+  {
+   "id": "WB-14",
+   "title": "a create whose result is unknown (stand-in only): after a timeout and after an answer cut off half way the carrier received one POST, none is replayed; the same ReferenceId and body again gives the parcel that exists",
+   "result": "skipped",
+   "checks": [
+    {
+     "check": "every check of this case",
+     "result": "skipped",
+     "reason": "the sandbox cannot be made to be slow or to cut an answer; faults are the stand-in's"
+    }
+   ],
+   "notes": {}
+  }
+ ],
+ "summary": {
+  "cases": 13,
+  "cases_failed": 0,
+  "cases_skipped": 3,
+  "checks": 115,
+  "checks_passed": 74,
+  "checks_failed": 0,
+  "checks_skipped": 41
+ }
+}
