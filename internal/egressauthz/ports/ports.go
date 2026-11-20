@@ -21,11 +21,13 @@ type CredentialSource interface {
 	AuthorizationHeader(ctx context.Context, bindingRef, accountID string) (Secret, error)
 }
 
-// Revocations 给出账户的撤销状态。每次判定都要读，不允许用路由发布时的旧值。
+// Revocations 给出账户的撤销状态，以及操作是否被封禁。每次判定都要读，不允许用路由发布时的旧值。
 type Revocations interface {
 	// State 返回账户此刻是否已被撤销，以及读到这个结果时的撤销代次。
 	State(ctx context.Context, accountID string) (revoked bool, epoch uint64, err error)
-	// Epoch 返回当前的撤销代次。
+	// View 同时读出账户是否被撤销、操作是否被封禁，以及这一刻的代次。三个值同一次读出，彼此一致。
+	View(ctx context.Context, accountID, operationID string) (accountRevoked, operationBanned bool, epoch uint64, err error)
+	// Epoch 返回当前的撤销代次。账户撤销和操作封禁共用这一个代次。
 	Epoch(ctx context.Context) (uint64, error)
 }
 
@@ -52,10 +54,30 @@ type RevocationChange struct {
 	Epoch uint64
 }
 
+// BannedOperation 是封禁表里的一行：这个 operation_id 对每个账户都不放行。
+type BannedOperation struct {
+	OperationID string
+	At          time.Time
+	// By 是做这次封禁的工作负载身份。
+	By     string
+	Reason string
+}
+
+// BanChange 是一次封禁或解除之后的情况。
+type BanChange struct {
+	// Changed 为 false 表示这次调用之前就已经是这个状态。
+	Changed bool
+	// Banned 是这次调用之后该操作是否处于被封禁的状态。
+	Banned bool
+	// Epoch 是这次调用之后的代次。与账户撤销共用。
+	Epoch uint64
+}
+
 // RevocationLedger 是撤销状态可以改的那一侧（docs/adr/ADR-0012.md）。读的一侧仍是 Revocations。
+// 账户撤销和操作封禁在同一份状态、同一个代次里。
 //
-// 改动只往收紧的方向偏：Revoke 先生效再保存，保存不成时返回包装了 ErrRevocationNotWritten
-// 的错误，撤销仍然有效；Restore 先保存，保存不成就不恢复。
+// 改动只往收紧的方向偏：Revoke 和 Ban 先生效再保存，保存不成时返回包装了 ErrRevocationNotWritten
+// 的错误，收紧仍然有效；Restore 和 Lift 先保存，保存不成就不放宽。
 type RevocationLedger interface {
 	Revocations
 	// Revoke 撤销一个账户。by 是做这件事的工作负载身份。
@@ -64,6 +86,12 @@ type RevocationLedger interface {
 	Restore(ctx context.Context, accountID string) (RevocationChange, error)
 	// Revoked 返回整张表（按账户排序）和当前代次。
 	Revoked(ctx context.Context) ([]RevokedAccount, uint64, error)
+	// Ban 封禁一个操作：从下一次判定起，每个账户做这个操作都不放行。by 是做这件事的工作负载身份。
+	Ban(ctx context.Context, operationID, by, reason string) (BanChange, error)
+	// Lift 解除对一个操作的封禁。
+	Lift(ctx context.Context, operationID string) (BanChange, error)
+	// Banned 返回被封禁的操作（按 operation_id 排序）和当前代次。
+	Banned(ctx context.Context) ([]BannedOperation, uint64, error)
 }
 
 // RateLimiter 按 Provider 账户做进程内配额。allowed 为 false 时 retryAfterSeconds 至少为 1。

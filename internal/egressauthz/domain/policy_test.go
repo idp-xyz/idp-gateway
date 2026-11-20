@@ -191,6 +191,25 @@ func TestIncompleteRowAuthorisesNothing(t *testing.T) {
 	}
 }
 
+func TestNamesOperation(t *testing.T) {
+	policy := examplePolicy()
+	if !policy.NamesOperation("tracking.get") {
+		t.Error("登记表里的操作没有被认出来")
+	}
+	for _, operation := range []string{"", "tracking.put", "Tracking.Get", "tracking.get "} {
+		if policy.NamesOperation(operation) {
+			t.Errorf("%q 被当成了登记表里的操作", operation)
+		}
+	}
+	policy.Operations = append(policy.Operations, Operation{OperationID: "labels.print"})
+	if !policy.NamesOperation("labels.print") {
+		t.Error("第二行里的操作没有被认出来")
+	}
+	if (Policy{}).NamesOperation("tracking.get") {
+		t.Error("空的登记表认出了操作")
+	}
+}
+
 func TestNamesAccount(t *testing.T) {
 	policy := examplePolicy()
 	for _, account := range []string{"account-blue", "account-green"} {

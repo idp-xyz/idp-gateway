@@ -1092,6 +1092,11 @@ func (r *revocationTable) State(context.Context, string) (bool, uint64, error) {
 	return r.revoked, 1, nil
 }
 
+func (r *revocationTable) View(ctx context.Context, accountID, _ string) (bool, bool, uint64, error) {
+	revoked, epoch, err := r.State(ctx, accountID)
+	return revoked, false, epoch, err
+}
+
 func (r *revocationTable) Epoch(context.Context) (uint64, error) { return 1, nil }
 
 func TestExpiresInIsClamped(t *testing.T) {

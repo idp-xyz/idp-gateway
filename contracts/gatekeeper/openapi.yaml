@@ -187,6 +187,68 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RevocationChange'
+  /v1/egress/operation-bans:
+    get:
+      operationId: listBannedOperations
+      summary: The operations that are refused for every account, and the revocation epoch
+      description: 'Served by gateway-authz on the same listener as account revocation, for the same revoker
+        workload identity (docs/adr/ADR-0012.md V1.3). Where no revoker is configured the path does not exist.
+        Banning an operation is not a route publication and does not change agentgateway configuration.'
+      security:
+      - WorkloadMTLS: []
+      responses:
+        '200':
+          description: The operations that are banned. The body holds no credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationBanState'
+        '401':
+          description: The caller is not the revoker workload. Nothing is disclosed.
+        '404':
+          description: No revoker is configured
+    post:
+      operationId: changeOperationBan
+      summary: Ban one operation for every account, or lift that ban
+      description: 'A ban takes effect on the next decision for that operation_id, for every account, and is then
+        written into the same revocations file as account revocations. One epoch covers both. If the ban cannot
+        be written the answer is 500 with error revocation_in_effect_but_not_written: the operation is refused
+        now and will not be after a restart, unless the request is repeated and written. Lifting a ban is written
+        first and does not happen if it cannot be written. Repeating either request changes nothing and is not
+        an error. Only an operation_id that the loaded policy names, or that is banned already, is accepted.'
+      security:
+      - WorkloadMTLS: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OperationBanRequest'
+      responses:
+        '200':
+          description: The state of the operation after the call
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationBanChange'
+        '400':
+          description: Not an OperationBanRequest, or a ban without a reason. Nothing changed.
+        '401':
+          description: The caller is not the revoker workload. Nothing changed.
+        '404':
+          description: No revoker is configured
+        '422':
+          description: The operation is neither named in the policy nor banned. Nothing changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationBanChange'
+        '500':
+          description: The change could not be written. The body says what is in effect now.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationBanChange'
   /v1/egress/credentials/materialize:
     post:
       operationId: materializeEgressCredential
@@ -457,6 +519,83 @@ components:
         revoked_by:
           type: string
           description: The workload identity that made the revocation
+        reason:
+          type: string
+    OperationBanRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - operation_id
+      - banned
+      properties:
+        operation_id:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: An operation_id that already appears in the loaded gateway-authz policy. At most 256 bytes of UTF-8, no control characters.
+        banned:
+          type: boolean
+          description: true bans the operation for every account; false lifts the ban
+        reason:
+          type: string
+          maxLength: 512
+          description: Required and not blank when banned is true. At most 512 bytes of UTF-8, no control characters. It is kept in the revocations file and written to the service log, so it must not contain a secret.
+    OperationBanChange:
+      type: object
+      required:
+      - operation_id
+      - banned
+      - changed
+      - revocation_epoch
+      properties:
+        operation_id:
+          type: string
+        banned:
+          type: boolean
+          description: Whether the operation is banned after this call
+        changed:
+          type: boolean
+          description: false when the operation was in that state already
+        revocation_epoch:
+          type: integer
+          minimum: 0
+          description: The epoch after this call. Account revocations and operation bans share it.
+        error:
+          type: string
+          enum:
+          - unknown_operation
+          - revocation_in_effect_but_not_written
+          - revocations_not_changed
+          description: Present on 422 and 500 only
+    OperationBanState:
+      type: object
+      required:
+      - revocation_epoch
+      - banned_operations
+      properties:
+        revocation_epoch:
+          type: integer
+          minimum: 0
+        banned_operations:
+          type: array
+          items:
+            $ref: '#/components/schemas/BannedOperation'
+    BannedOperation:
+      type: object
+      required:
+      - operation_id
+      - banned_at
+      - banned_by
+      - reason
+      properties:
+        operation_id:
+          type: string
+        banned_at:
+          type: string
+          format: date-time
+        banned_by:
+          type: string
+          description: The workload identity that banned the operation. The same identity that revokes accounts.
         reason:
           type: string
     CredentialUseRequest:

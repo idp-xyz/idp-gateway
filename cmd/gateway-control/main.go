@@ -11,6 +11,8 @@
 //	gateway-control revoke      --account <账户> --reason <原因> --authz <host:port> --authz-name <名字> --tls-cert … --tls-key … --tls-ca …
 //	gateway-control restore     --account <账户> --authz … （其余同上）
 //	gateway-control revocations --authz … （其余同上）
+//	gateway-control ban         --operation <operation_id> --reason <原因> --authz … （证书参数与 revoke 相同）
+//	gateway-control unban       --operation <operation_id> --authz … （其余与 ban 相同，不要 --reason）
 //
 // 另有三条对着池的发布历史（history.go，docs/adr/ADR-0013.md）：
 //
@@ -177,6 +179,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, docker do
 		fmt.Fprintln(stderr, "       gateway-control compile --spec <file> --output-gateway <file> --output-policy <file>")
 		fmt.Fprintln(stderr, "       gateway-control compile --preflight-only --intents <file> [--provider-registry <file>]")
 		fmt.Fprintln(stderr, "       gateway-control revoke|restore|revocations [flags]   (revoke or lift the revocation of a Provider account in gateway-authz, or read its table)")
+		fmt.Fprintln(stderr, "       gateway-control ban|unban [flags]   (ban an operation for every account, or lift that ban)")
 		fmt.Fprintln(stderr, "       gateway-control releases|release|rollback [flags]   (the release history of a pool: list it, show one release, roll back to one)")
 		fmt.Fprintln(stderr, "       gateway-control sync-jwks [flags]   (copy a JWKS document from an identity provider to a local file and keep it fresh)")
 		return exitUsage

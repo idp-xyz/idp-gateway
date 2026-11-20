@@ -44,6 +44,9 @@ type brokenRevocations struct{}
 func (brokenRevocations) State(context.Context, string) (bool, uint64, error) {
 	return false, 0, errors.New("revocation store down")
 }
+func (brokenRevocations) View(context.Context, string, string) (bool, bool, uint64, error) {
+	return false, false, 0, errors.New("revocation store down")
+}
 func (brokenRevocations) Epoch(context.Context) (uint64, error) {
 	return 0, errors.New("revocation store down")
 }

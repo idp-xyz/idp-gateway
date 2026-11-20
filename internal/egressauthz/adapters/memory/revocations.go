@@ -11,9 +11,13 @@ import (
 )
 
 // Revocations 实现 ports.Revocations。零值可用。
+//
+// 产品构建在没有撤销文件时用它，那时没有写入口，封禁一直是空的。Ban 和 Lift 与 Revoke 一样，
+// 留给测试；验收控制接口只调用账户的那一侧。
 type Revocations struct {
 	mu      sync.RWMutex
 	revoked map[string]struct{}
+	banned  map[string]struct{}
 	epoch   uint64
 }
 
@@ -23,6 +27,15 @@ func (r *Revocations) State(_ context.Context, accountID string) (bool, uint64, 
 	defer r.mu.RUnlock()
 	_, revoked := r.revoked[accountID]
 	return revoked, r.epoch, nil
+}
+
+// View 同时读出账户是否被撤销、操作是否被封禁，以及代次。
+func (r *Revocations) View(_ context.Context, accountID, operationID string) (bool, bool, uint64, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, revoked := r.revoked[accountID]
+	_, banned := r.banned[operationID]
+	return revoked, banned, r.epoch, nil
 }
 
 // Epoch 返回当前代次。
@@ -43,6 +56,31 @@ func (r *Revocations) Revoke(accountID string) {
 		r.revoked = make(map[string]struct{})
 	}
 	r.revoked[accountID] = struct{}{}
+	r.epoch++
+}
+
+// Ban 封禁一个操作。状态确有变化时代次加一。与账户撤销共用代次。
+func (r *Revocations) Ban(operationID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, already := r.banned[operationID]; already {
+		return
+	}
+	if r.banned == nil {
+		r.banned = make(map[string]struct{})
+	}
+	r.banned[operationID] = struct{}{}
+	r.epoch++
+}
+
+// Lift 解除对一个操作的封禁。状态确有变化时代次加一。
+func (r *Revocations) Lift(operationID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, banned := r.banned[operationID]; !banned {
+		return
+	}
+	delete(r.banned, operationID)
 	r.epoch++
 }
 

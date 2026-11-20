@@ -89,6 +89,17 @@ func TestARevocationWithoutAReasonIsNotSent(t *testing.T) {
 	if _, err := client.Restore(context.Background(), ""); err == nil {
 		t.Error("没有账户：应当报错")
 	}
+	for _, reason := range []string{"", " ", "\t"} {
+		if _, err := client.Ban(context.Background(), "tracking.get", reason); err == nil {
+			t.Errorf("封禁原因 %q：应当报错", reason)
+		}
+	}
+	if _, err := client.Ban(context.Background(), "", "why"); err == nil {
+		t.Error("没有操作：应当报错")
+	}
+	if _, err := client.Unban(context.Background(), ""); err == nil {
+		t.Error("没有操作：应当报错")
+	}
 	if n := atomic.LoadInt32(requests); n != 0 {
 		t.Errorf("发出去了 %d 个请求", n)
 	}

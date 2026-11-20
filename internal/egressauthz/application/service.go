@@ -1,6 +1,6 @@
 // Package application 把一次出站判定串起来：选定账户、按登记表判定、查撤销状态，
-// 配置了授权来源时再问一次账户的使用授权，配置了配额时再按 Provider 账户限流，
-// 需要时取出凭证。它不知道请求是经哪种协议来的。
+// 账户没有被撤销时再看这个操作有没有被封禁，配置了授权来源时再问一次账户的使用授权，
+// 配置了配额时再按 Provider 账户限流，需要时取出凭证。它不知道请求是经哪种协议来的。
 package application
 
 import (
@@ -17,6 +17,7 @@ import (
 // 判定做不出来时的原因码。它们不是拒绝，更不是放行。
 const (
 	ReasonAccountRevoked             = "ACCOUNT_REVOKED"
+	ReasonOperationBanned            = "OPERATION_BANNED"
 	ReasonRevocationStateUnavailable = "REVOCATION_STATE_UNAVAILABLE"
 	ReasonCredentialUnavailable      = "CREDENTIAL_UNAVAILABLE"
 	ReasonGrantStateUnavailable      = "GRANT_STATE_UNAVAILABLE"
@@ -29,6 +30,9 @@ var ErrIndeterminate = errors.New("egressauthz: decision indeterminate")
 
 // ErrUnknownAccount 表示要撤销或恢复的账户既不在登记表里，也不在撤销表里。多半是名字打错了。
 var ErrUnknownAccount = errors.New("egressauthz: account is neither in the policy nor revoked")
+
+// ErrUnknownOperation 表示要封禁或解除的操作既不在登记表里，也不在封禁表里。多半是名字打错了。
+var ErrUnknownOperation = errors.New("egressauthz: operation is neither in the policy nor banned")
 
 // ErrNoRevocationLedger 表示这个服务没有配置可以改的撤销表。
 var ErrNoRevocationLedger = errors.New("egressauthz: no revocation ledger configured")
@@ -142,8 +146,8 @@ func (s *Service) Decide(ctx context.Context, in Input) (Outcome, error) {
 	}
 
 	// 撤销状态在每次判定时读取，与路由发布无关。读不到就不出结论：既不能当作没撤销，
-	// 也没有可以如实填写的撤销代次。
-	revoked, epoch, err := s.revocations.State(ctx, out.Account)
+	// 也没有可以如实填写的撤销代次。账户是否被撤销、操作是否被封禁，和代次一起读出。
+	revoked, banned, epoch, err := s.revocations.View(ctx, out.Account, in.OperationID)
 	if err != nil {
 		out.Reason = ReasonRevocationStateUnavailable
 		return out, fmt.Errorf("%w: revocation state: %w", ErrIndeterminate, err)
@@ -158,8 +162,14 @@ func (s *Service) Decide(ctx context.Context, in Input) (Outcome, error) {
 	if !decision.Allowed {
 		return out, nil
 	}
+	// 账户撤销先于操作封禁：两样都碰上时原因仍是 ACCOUNT_REVOKED。封禁只在登记表本来会放行时
+	// 才成为原因，并且排在取凭证、问授权、扣配额之前。
 	if revoked {
 		out.Reason = ReasonAccountRevoked
+		return out, nil
+	}
+	if banned {
+		out.Reason = ReasonOperationBanned
 		return out, nil
 	}
 	// 放在配额之前问：前面任何一步拒绝，都不必为这个请求发一次网络调用，也不扣配额。
@@ -263,6 +273,52 @@ func (s *Service) RevokedAccounts(ctx context.Context) ([]ports.RevokedAccount, 
 		return nil, 0, ErrNoRevocationLedger
 	}
 	return s.ledger.Revoked(ctx)
+}
+
+// BanOperation 封禁一个操作：从下一次判定起，每个账户做这个操作都不放行。by 是做这件事的
+// 工作负载身份。别的操作不变。这不是路由发布。
+//
+// 只接受登记表里出现过的 operation_id（已经在封禁表里的也接受，那是重复封禁）：名字打错了要得到
+// ErrUnknownOperation，而不是一次什么都没拦住的成功。返回的错误包装了
+// ports.ErrRevocationNotWritten 时，封禁已经生效，只是没有保存下来。
+func (s *Service) BanOperation(ctx context.Context, operationID, by, reason string) (ports.BanChange, error) {
+	if s.ledger == nil {
+		return ports.BanChange{}, ErrNoRevocationLedger
+	}
+	if !s.policy.NamesOperation(operationID) {
+		_, banned, epoch, err := s.ledger.View(ctx, "", operationID)
+		if err != nil {
+			return ports.BanChange{}, err
+		}
+		if !banned {
+			return ports.BanChange{Epoch: epoch}, ErrUnknownOperation
+		}
+	}
+	return s.ledger.Ban(ctx, operationID, by, reason)
+}
+
+// LiftOperationBan 解除对一个操作的封禁。操作没有被封禁时什么都不改；操作既不在登记表里也
+// 不在封禁表里时返回 ErrUnknownOperation。解除没有保存下来就不生效。
+func (s *Service) LiftOperationBan(ctx context.Context, operationID string) (ports.BanChange, error) {
+	if s.ledger == nil {
+		return ports.BanChange{}, ErrNoRevocationLedger
+	}
+	_, banned, epoch, err := s.ledger.View(ctx, "", operationID)
+	if err != nil {
+		return ports.BanChange{}, err
+	}
+	if !banned && !s.policy.NamesOperation(operationID) {
+		return ports.BanChange{Epoch: epoch}, ErrUnknownOperation
+	}
+	return s.ledger.Lift(ctx, operationID)
+}
+
+// BannedOperations 返回被封禁的操作和当前代次。
+func (s *Service) BannedOperations(ctx context.Context) ([]ports.BannedOperation, uint64, error) {
+	if s.ledger == nil {
+		return nil, 0, ErrNoRevocationLedger
+	}
+	return s.ledger.Banned(ctx)
 }
 
 func randomDecisionID() string {

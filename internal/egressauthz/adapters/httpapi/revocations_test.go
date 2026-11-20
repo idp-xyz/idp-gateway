@@ -25,11 +25,16 @@ const revokerID = "spiffe://idp.test/egress/revoker"
 type testLedger struct {
 	table   memory.Revocations
 	entries map[string]ports.RevokedAccount
+	bans    map[string]ports.BannedOperation
 	broken  bool
 }
 
 func (l *testLedger) State(ctx context.Context, accountID string) (bool, uint64, error) {
 	return l.table.State(ctx, accountID)
+}
+
+func (l *testLedger) View(ctx context.Context, accountID, operationID string) (bool, bool, uint64, error) {
+	return l.table.View(ctx, accountID, operationID)
 }
 
 func (l *testLedger) Epoch(ctx context.Context) (uint64, error) { return l.table.Epoch(ctx) }
@@ -60,6 +65,47 @@ func (l *testLedger) Restore(ctx context.Context, accountID string) (ports.Revoc
 	delete(l.entries, accountID)
 	epoch, _ = l.table.Epoch(ctx)
 	return ports.RevocationChange{Changed: true, Epoch: epoch}, nil
+}
+
+func (l *testLedger) Ban(ctx context.Context, operationID, by, reason string) (ports.BanChange, error) {
+	_, already, _, _ := l.table.View(ctx, "", operationID)
+	if !already {
+		l.table.Ban(operationID)
+		if l.bans == nil {
+			l.bans = map[string]ports.BannedOperation{}
+		}
+		l.bans[operationID] = ports.BannedOperation{OperationID: operationID, At: time.Date(2026, 11, 21, 1, 0, 0, 0, time.UTC), By: by, Reason: reason}
+	}
+	_, _, epoch, _ := l.table.View(ctx, "", operationID)
+	change := ports.BanChange{Changed: !already, Banned: true, Epoch: epoch}
+	if l.broken {
+		return change, fmt.Errorf("%w: disk full", ports.ErrRevocationNotWritten)
+	}
+	return change, nil
+}
+
+func (l *testLedger) Lift(ctx context.Context, operationID string) (ports.BanChange, error) {
+	_, banned, epoch, _ := l.table.View(ctx, "", operationID)
+	if !banned {
+		return ports.BanChange{Epoch: epoch}, nil
+	}
+	if l.broken {
+		return ports.BanChange{Banned: true, Epoch: epoch}, errors.New("lift not applied: disk full")
+	}
+	l.table.Lift(operationID)
+	delete(l.bans, operationID)
+	_, _, epoch, _ = l.table.View(ctx, "", operationID)
+	return ports.BanChange{Changed: true, Epoch: epoch}, nil
+}
+
+func (l *testLedger) Banned(ctx context.Context) ([]ports.BannedOperation, uint64, error) {
+	operations := make([]ports.BannedOperation, 0, len(l.bans))
+	for _, operation := range l.bans {
+		operations = append(operations, operation)
+	}
+	sort.Slice(operations, func(i, j int) bool { return operations[i].OperationID < operations[j].OperationID })
+	_, _, epoch, _ := l.table.View(ctx, "", "")
+	return operations, epoch, nil
 }
 
 func (l *testLedger) Revoked(ctx context.Context) ([]ports.RevokedAccount, uint64, error) {

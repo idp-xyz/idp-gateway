@@ -376,6 +376,44 @@ class ServiceSpeaksTheContract(unittest.TestCase):
         self.assertIsNotNone(path_constant)
         self.assertEqual(path_constant[1], '/v1/egress/revocations')
 
+    def test_operation_ban_interface_fields(self):
+        """ADR-0012 V1.3: ban and lift an operation on the same listener, for the same revoker."""
+        source = text('internal/egressauthz/adapters/httpapi/bans.go')
+
+        def fields(struct):
+            body = re.search(rf'^type {struct} struct \{{\n(.*?)^\}}', source, re.S | re.M)
+            self.assertIsNotNone(body, struct)
+            found = {name: (kind.startswith('*'), bool(omit))
+                     for kind, name, omit in re.findall(r'^\s+\w+\s+(\S+)\s+`json:"([a-z_]+)(,omitempty)?"`', body[1], re.M)}
+            self.assertTrue(found, struct)
+            return found
+
+        schemas = GATEKEEPER['components']['schemas']
+        request, change = schemas['OperationBanRequest'], schemas['OperationBanChange']
+        accepted = fields('operationBanRequest')
+        self.assertIn('DisallowUnknownFields', source)
+        self.assertIs(request['additionalProperties'], False)
+        self.assertEqual(set(accepted), set(request['properties']))
+        self.assertEqual({name for name, (pointer, _) in accepted.items() if pointer}, set(request['required']))
+        sent = fields('operationBanChange')
+        self.assertEqual(set(sent), set(change['properties']))
+        self.assertEqual({name for name, (_, omit) in sent.items() if not omit}, set(change['required']))
+        self.assertEqual(set(change['properties']['error']['enum']),
+                         {'unknown_operation', 'revocation_in_effect_but_not_written', 'revocations_not_changed'})
+        self.assertEqual(set(fields('operationBanState')), set(schemas['OperationBanState']['required']))
+        self.assertEqual(set(fields('bannedOperation')), set(schemas['BannedOperation']['required']))
+        path = GATEKEEPER['paths']['/v1/egress/operation-bans']
+        self.assertEqual(set(path), {'get', 'post'})
+        for method, operation in path.items():
+            with self.subTest(method=method):
+                self.assertEqual(operation['security'], [{'WorkloadMTLS': []}])
+                self.assertIn('401', operation['responses'])
+        constant = re.search(r'^\s+PathOperationBans\s+= "([^"]+)"$', self.HANDLER, re.M)
+        self.assertIsNotNone(constant)
+        self.assertEqual(constant[1], '/v1/egress/operation-bans')
+        client = re.search(r'^const OperationBansPath = "([^"]+)"$', text('internal/egressauthz/adapters/revokerclient/client.go'), re.M)
+        self.assertEqual(client[1], constant[1])
+
     def test_canonical_path_rule_is_the_same_everywhere(self):
         """One expression: in the service, in the offline preflight and (checked by the Go tests) on the gateway routes."""
         service = re.search(r'CanonicalPathPattern = `([^`]+)`', text('internal/egressauthz/domain/path.go'))

@@ -136,6 +136,20 @@ func (p Policy) SoleAccount(tenantID, providerID, operationID, environment strin
 	return found[0], true
 }
 
+// NamesOperation 报告登记表里有没有哪一行写着这个 operation_id。封禁只接受这样的操作：
+// 操作名打错了，封禁的人要得到一个错误，而不是一次什么都没拦住的成功。
+func (p Policy) NamesOperation(operationID string) bool {
+	if operationID == "" {
+		return false
+	}
+	for _, op := range p.Operations {
+		if op.OperationID == operationID {
+			return true
+		}
+	}
+	return false
+}
+
 // NamesAccount 报告登记表里有没有哪一行把这个账户授给了某个租户。撤销只接受这样的账户：
 // 账户名打错了，撤销的人要得到一个错误，而不是一次什么都没拦住的"成功"。
 func (p Policy) NamesAccount(accountID string) bool {

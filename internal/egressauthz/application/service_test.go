@@ -32,12 +32,17 @@ func (f *fakeCredentials) AuthorizationHeader(_ context.Context, bindingRef, acc
 
 type fakeRevocations struct {
 	revoked map[string]bool
+	banned  map[string]bool
 	epoch   uint64
 	err     error
 }
 
 func (f *fakeRevocations) State(_ context.Context, accountID string) (bool, uint64, error) {
 	return f.revoked[accountID], f.epoch, f.err
+}
+
+func (f *fakeRevocations) View(_ context.Context, accountID, operationID string) (bool, bool, uint64, error) {
+	return f.revoked[accountID], f.banned[operationID], f.epoch, f.err
 }
 
 func (f *fakeRevocations) Epoch(context.Context) (uint64, error) { return f.epoch, f.err }
@@ -329,6 +334,42 @@ func (f *fakeLedger) Revoked(context.Context) ([]ports.RevokedAccount, uint64, e
 	return accounts, f.epoch, f.err
 }
 
+func (f *fakeLedger) Ban(_ context.Context, operationID, by, reason string) (ports.BanChange, error) {
+	f.calls = append(f.calls, "ban "+operationID+" by "+by+" because "+reason)
+	changed := !f.banned[operationID]
+	if changed {
+		if f.banned == nil {
+			f.banned = map[string]bool{}
+		}
+		f.banned[operationID] = true
+		f.epoch++
+	}
+	return ports.BanChange{Changed: changed, Banned: true, Epoch: f.epoch}, f.fail
+}
+
+func (f *fakeLedger) Lift(_ context.Context, operationID string) (ports.BanChange, error) {
+	f.calls = append(f.calls, "lift "+operationID)
+	if !f.banned[operationID] {
+		return ports.BanChange{Epoch: f.epoch}, nil
+	}
+	if f.fail != nil {
+		return ports.BanChange{Banned: true, Epoch: f.epoch}, f.fail
+	}
+	delete(f.banned, operationID)
+	f.epoch++
+	return ports.BanChange{Changed: true, Epoch: f.epoch}, nil
+}
+
+func (f *fakeLedger) Banned(context.Context) ([]ports.BannedOperation, uint64, error) {
+	var operations []ports.BannedOperation
+	for operation, banned := range f.banned {
+		if banned {
+			operations = append(operations, ports.BannedOperation{OperationID: operation})
+		}
+	}
+	return operations, f.epoch, f.err
+}
+
 func newServiceWithLedger() (*Service, *fakeCredentials, *fakeLedger) {
 	_, credentials, _ := newService()
 	// account-gone 是登记表换过之后留在撤销表里的账户：登记表里已经没有它了。
@@ -447,6 +488,89 @@ func TestRevocationStateThatCannotBeReadIsNotMistakenForAnUnknownAccount(t *test
 	}
 }
 
+func policyWithLabels() domain.Policy {
+	policy := twoTenantPolicy()
+	labels := policy.Operations[0]
+	labels.OperationID = "labels.print"
+	labels.Method = "POST"
+	labels.PathPrefix = "/providers/mockcarrier/v1/labels"
+	policy.Operations = append(policy.Operations, labels)
+	return policy
+}
+
+func labelsInput() Input {
+	in := blueInput()
+	in.OperationID = "labels.print"
+	in.Method = "POST"
+	in.Path = "/providers/mockcarrier/v1/labels/1"
+	return in
+}
+
+// 封禁只挡住点名的那一个操作。账户撤销先检查。不认识的操作不改表。
+func TestBanningAnOperationDeniesOnlyThatOperation(t *testing.T) {
+	ctx := context.Background()
+	credentials := &fakeCredentials{held: map[string]string{
+		ports.Handle(binding, "account-blue"):  "Bearer blue-token",
+		ports.Handle(binding, "account-green"): "Bearer green-token",
+	}}
+	ledger := &fakeLedger{fakeRevocations: fakeRevocations{revoked: map[string]bool{}, banned: map[string]bool{}, epoch: 3}}
+	service := New(policyWithLabels(), credentials, ledger, WithRevocationLedger(ledger))
+
+	if out, _, err := service.Authorize(ctx, blueInput()); err != nil || !out.Allowed {
+		t.Fatalf("封禁之前：%+v %v", out, err)
+	}
+	credentials.asked = nil
+
+	change, err := service.BanOperation(ctx, "tracking.get", "spiffe://idp.test/revoker", "abuse")
+	if err != nil || change != (ports.BanChange{Changed: true, Banned: true, Epoch: 4}) {
+		t.Fatalf("封禁：%+v %v", change, err)
+	}
+	out, credential, err := service.Authorize(ctx, blueInput())
+	if err != nil || out.Allowed || out.Reason != ReasonOperationBanned || !credential.IsZero() || len(credentials.asked) != 0 {
+		t.Fatalf("封禁之后：%+v %v，问过凭证来源 %v", out, err, credentials.asked)
+	}
+	if out, _, err := service.Authorize(ctx, labelsInput()); err != nil || !out.Allowed || len(credentials.asked) != 1 {
+		t.Fatalf("另一个操作：%+v %v，问过 %v", out, err, credentials.asked)
+	}
+	green := blueInput()
+	green.Tenant = "tenant-green"
+	if out, _, err := service.Authorize(ctx, green); err != nil || out.Allowed || out.Reason != ReasonOperationBanned {
+		t.Fatalf("绿账户做被封的操作：%+v %v", out, err)
+	}
+
+	// 两样都碰上时，账户撤销先说。
+	if _, err := service.RevokeAccount(ctx, "account-blue", "spiffe://idp.test/revoker", "key leaked"); err != nil {
+		t.Fatal(err)
+	}
+	credentials.asked = nil
+	out, _, err = service.Authorize(ctx, blueInput())
+	if err != nil || out.Allowed || out.Reason != ReasonAccountRevoked || len(credentials.asked) != 0 {
+		t.Fatalf("账户撤销应当先于封禁：%+v %v，问过 %v", out, err, credentials.asked)
+	}
+
+	before := len(ledger.calls)
+	epoch := ledger.epoch
+	for _, operation := range []string{"tracking.put", "Tracking.Get", ""} {
+		if change, err := service.BanOperation(ctx, operation, "spiffe://idp.test/revoker", "typo"); !errors.Is(err, ErrUnknownOperation) || change.Epoch != epoch || change.Changed || change.Banned {
+			t.Errorf("封禁 %q：%+v %v", operation, change, err)
+		}
+	}
+	if len(ledger.calls) != before {
+		t.Fatalf("不认识的操作仍交给了表：%v", ledger.calls)
+	}
+	if change, err := service.BanOperation(ctx, "tracking.get", "spiffe://idp.test/revoker", "again"); err != nil || change.Changed || change.Epoch != epoch || !change.Banned {
+		t.Fatalf("重复封禁：%+v %v", change, err)
+	}
+
+	ledger.fail = errors.New("lift not applied: disk full")
+	if change, err := service.LiftOperationBan(ctx, "tracking.get"); err == nil || change.Banned != true || change.Epoch != epoch {
+		t.Fatalf("没写下去的解除：%+v %v", change, err)
+	}
+	if out, _, _ := service.Authorize(ctx, green); out.Allowed || out.Reason != ReasonOperationBanned {
+		t.Fatalf("没写下去的解除却生效了：%+v", out)
+	}
+}
+
 func TestWithoutALedgerRevocationsCannotBeChanged(t *testing.T) {
 	ctx := context.Background()
 	service, _, _ := newService()
@@ -458,6 +582,12 @@ func TestWithoutALedgerRevocationsCannotBeChanged(t *testing.T) {
 	}
 	if _, _, err := service.RevokedAccounts(ctx); !errors.Is(err, ErrNoRevocationLedger) {
 		t.Errorf("读表：%v", err)
+	}
+	if _, err := service.BanOperation(ctx, "tracking.get", "spiffe://idp.test/revoker", "abuse"); !errors.Is(err, ErrNoRevocationLedger) {
+		t.Errorf("封禁：%v", err)
+	}
+	if _, err := service.LiftOperationBan(ctx, "tracking.get"); !errors.Is(err, ErrNoRevocationLedger) {
+		t.Errorf("解除：%v", err)
 	}
 	if out, _, err := service.Authorize(ctx, blueInput()); err != nil || !out.Allowed {
 		t.Fatalf("被拒绝的改动影响了判定：%+v %v", out, err)

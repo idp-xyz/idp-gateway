@@ -1,5 +1,6 @@
-// Package revokerclient 是操作员一侧的客户端：对着一个 gateway-authz 的撤销接口（/v1/egress/revocations，
-// docs/adr/ADR-0012.md、contracts/gatekeeper/openapi.yaml）发一次请求，把应答归成一个结局。
+// Package revokerclient 是操作员一侧的客户端：对着一个 gateway-authz 的撤销接口（/v1/egress/revocations）
+// 或操作封禁接口（/v1/egress/operation-bans，docs/adr/ADR-0012.md、contracts/gatekeeper/openapi.yaml）
+// 发一次请求，把应答归成一个结局。
 //
 // 只走双向 TLS，出示撤销者自己的证书，按指定的 CA 和名字验证服务端；不跟随重定向，不用环境里的代理，
 // 每次一条新连接，不重试。重发是调用方的决定：这个接口是幂等的，但"要不要再发一次"要由看到结局的人来定。
@@ -29,6 +30,9 @@ import (
 // Path 是撤销接口的路径。
 const Path = "/v1/egress/revocations"
 
+// OperationBansPath 是封禁操作的路径。与撤销接口同一个监听、同一个撤销者身份。
+const OperationBansPath = "/v1/egress/operation-bans"
+
 // maxBody 是一个应答最多读多少。整张撤销表很小。
 const maxBody = 4 << 20
 
@@ -52,15 +56,22 @@ const (
 	OutcomeNoRevoker Outcome = "NO_REVOKER_CONFIGURED"
 	// OutcomeUnknownAccount：422，不认识的账户，多半是名字敲错了。什么都没有变。
 	OutcomeUnknownAccount Outcome = "UNKNOWN_ACCOUNT"
+	// OutcomeBanned：封禁在 gateway-authz 上生效了（或本来就是封禁的，State.Changed 为 false），也写下去了。
+	OutcomeBanned Outcome = "BANNED"
+	// OutcomeBannedNotWritten：这个操作现在被拒绝，但没有写进撤销文件，gateway-authz 重启之后就不是了。
+	OutcomeBannedNotWritten Outcome = "BANNED_NOT_WRITTEN"
+	// OutcomeUnknownOperation：422，不认识的操作，多半是名字敲错了。什么都没有变。
+	OutcomeUnknownOperation Outcome = "UNKNOWN_OPERATION"
 	// OutcomeRefused：400，请求不合格式。什么都没有变。
 	OutcomeRefused Outcome = "REQUEST_REFUSED"
 	// OutcomeUnknown：不知道。请求可能到了也可能没到，生效没生效不知道。
 	OutcomeUnknown Outcome = "UNKNOWN"
 )
 
-// State 是服务端说的、这次调用之后账户的状态。
+// State 是服务端说的、这次调用之后的状态。账户命令看 Revoked，封禁命令看 Banned。
 type State struct {
 	Revoked bool
+	Banned  bool
 	Changed bool
 	Epoch   uint64
 }
@@ -189,7 +200,7 @@ func (c *Client) Restore(ctx context.Context, account string) (Result, error) {
 
 // List 读整张撤销表。
 func (c *Client) List(ctx context.Context) Result {
-	status, body, err := c.do(ctx, http.MethodGet, nil, func(status int) bool { return status == http.StatusOK })
+	status, body, err := c.do(ctx, http.MethodGet, Path, nil, func(status int) bool { return status == http.StatusOK })
 	if err != nil {
 		return unknown(0, err.Error())
 	}
@@ -208,8 +219,27 @@ func (c *Client) List(ctx context.Context) Result {
 		}
 		return Result{Outcome: OutcomeListed, Status: status, Table: table}
 	default:
-		return c.byStatus(status)
+		return c.byStatus(status, OutcomeUnknownAccount)
 	}
+}
+
+// Ban 封禁一个操作。原因不能为空。请求没有发出去（参数不合格）时返回错误；发出去之后不返回错误。
+func (c *Client) Ban(ctx context.Context, operation, reason string) (Result, error) {
+	if operation == "" {
+		return Result{}, errors.New("revokerclient: no operation given")
+	}
+	if strings.TrimSpace(reason) == "" {
+		return Result{}, errors.New("revokerclient: a ban needs a reason")
+	}
+	return c.changeBan(ctx, banRequest{OperationID: operation, Banned: true, Reason: reason}), nil
+}
+
+// Unban 解除一个操作的封禁。
+func (c *Client) Unban(ctx context.Context, operation string) (Result, error) {
+	if operation == "" {
+		return Result{}, errors.New("revokerclient: no operation given")
+	}
+	return c.changeBan(ctx, banRequest{OperationID: operation, Banned: false}), nil
 }
 
 func (c *Client) change(ctx context.Context, request revocationRequest) Result {
@@ -218,7 +248,7 @@ func (c *Client) change(ctx context.Context, request revocationRequest) Result {
 		return unknown(0, err.Error())
 	}
 	// 200 和 500 的正文要读；别的状态码只看状态码。
-	status, body, err := c.do(ctx, http.MethodPost, encoded, func(status int) bool {
+	status, body, err := c.do(ctx, http.MethodPost, Path, encoded, func(status int) bool {
 		return status == http.StatusOK || status == http.StatusInternalServerError
 	})
 	if err != nil {
@@ -256,19 +286,80 @@ func (c *Client) change(ctx context.Context, request revocationRequest) Result {
 		}
 		return unknown(status, "the answer is a server error that this command does not know")
 	default:
-		return c.byStatus(status)
+		return c.byStatus(status, OutcomeUnknownAccount)
+	}
+}
+
+type banRequest struct {
+	OperationID string `json:"operation_id"`
+	Banned      bool   `json:"banned"`
+	Reason      string `json:"reason,omitempty"`
+}
+
+type banChange struct {
+	OperationID     *string `json:"operation_id"`
+	Banned          *bool   `json:"banned"`
+	Changed         *bool   `json:"changed"`
+	RevocationEpoch *uint64 `json:"revocation_epoch"`
+	Error           string  `json:"error,omitempty"`
+}
+
+func (c *Client) changeBan(ctx context.Context, request banRequest) Result {
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		return unknown(0, err.Error())
+	}
+	status, body, err := c.do(ctx, http.MethodPost, OperationBansPath, encoded, func(status int) bool {
+		return status == http.StatusOK || status == http.StatusInternalServerError
+	})
+	if err != nil {
+		return unknown(0, err.Error())
+	}
+	switch status {
+	case http.StatusOK:
+		state, ok := understoodBan(body, request)
+		if !ok {
+			return unknown(status, "the answer does not say what state the operation is in")
+		}
+		outcome := OutcomeLifted
+		if request.Banned {
+			outcome = OutcomeBanned
+		}
+		return Result{Outcome: outcome, Status: status, State: state}
+	case http.StatusInternalServerError:
+		var change banChange
+		if err := decodeOne(body, &change); err == nil {
+			switch {
+			case request.Banned && change.Error == errorRevocationNotWritten:
+				result := Result{Outcome: OutcomeBannedNotWritten, Status: status}
+				if state, ok := understoodBan(body, request); ok {
+					result.State = state
+				}
+				return result
+			case !request.Banned && change.Error == errorRevocationsNotChanged:
+				result := Result{Outcome: OutcomeLiftNotWritten, Status: status}
+				if state, ok := understoodBan(body, banRequest{OperationID: request.OperationID, Banned: true}); ok {
+					result.State = state
+				}
+				return result
+			}
+		}
+		return unknown(status, "the answer is a server error that this command does not know")
+	default:
+		return c.byStatus(status, OutcomeUnknownOperation)
 	}
 }
 
 // byStatus 归那几个只看状态码的结局；别的状态码是"应答看不懂"，只报状态码。
-func (c *Client) byStatus(status int) Result {
+// unknownSubject 是 422 的结局：撤销命令是不认识的账户，封禁命令是不认识的操作。
+func (c *Client) byStatus(status int, unknownSubject Outcome) Result {
 	switch status {
 	case http.StatusUnauthorized:
 		return Result{Outcome: OutcomeNotRevoker, Status: status}
 	case http.StatusNotFound:
 		return Result{Outcome: OutcomeNoRevoker, Status: status}
 	case http.StatusUnprocessableEntity:
-		return Result{Outcome: OutcomeUnknownAccount, Status: status}
+		return Result{Outcome: unknownSubject, Status: status}
 	case http.StatusBadRequest:
 		return Result{Outcome: OutcomeRefused, Status: status}
 	}
@@ -290,6 +381,21 @@ func understood(body []byte, request revocationRequest) (*State, bool) {
 	return &State{Revoked: *change.Revoked, Changed: *change.Changed, Epoch: *change.RevocationEpoch}, true
 }
 
+// understoodBan 读一次封禁的应答：操作和是否封禁要与请求的一致，三项必填的都在。
+func understoodBan(body []byte, request banRequest) (*State, bool) {
+	var change banChange
+	if err := decodeOne(body, &change); err != nil {
+		return nil, false
+	}
+	if change.OperationID == nil || change.Banned == nil || change.Changed == nil || change.RevocationEpoch == nil || *change.OperationID != request.OperationID {
+		return nil, false
+	}
+	if *change.Banned != request.Banned {
+		return nil, false
+	}
+	return &State{Banned: *change.Banned, Changed: *change.Changed, Epoch: *change.RevocationEpoch}, true
+}
+
 func decodeOne(body []byte, into any) error {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	if err := decoder.Decode(into); err != nil {
@@ -307,12 +413,12 @@ func unknown(status int, detail string) Result {
 
 // do 发一次请求。readBody 说这个状态码的正文要不要读；不读的话 body 为 nil。拿不到应答、读正文时断了、
 // 正文过长，都返回错误（"不知道"）。
-func (c *Client) do(ctx context.Context, method string, payload []byte, readBody func(status int) bool) (int, []byte, error) {
+func (c *Client) do(ctx context.Context, method, path string, payload []byte, readBody func(status int) bool) (int, []byte, error) {
 	var reader io.Reader
 	if payload != nil {
 		reader = bytes.NewReader(payload)
 	}
-	request, err := http.NewRequestWithContext(ctx, method, "https://"+c.address+Path, reader)
+	request, err := http.NewRequestWithContext(ctx, method, "https://"+c.address+path, reader)
 	if err != nil {
 		return 0, nil, errors.New("the request could not be built")
 	}

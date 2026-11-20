@@ -7,6 +7,11 @@ package main
 //	gateway-control restore     --account <账户> --authz … （其余同上）
 //	gateway-control revocations --authz … （其余同上）
 //
+// 另有两条封禁操作的命令，证书参数与上面相同（docs/adr/ADR-0012.md V1.3）：
+//
+//	gateway-control ban   --operation <operation_id> --reason <原因> --authz … --authz-name … --tls-cert … --tls-key … --tls-ca …
+//	gateway-control unban --operation <operation_id> --authz … （其余同上）
+//
 // 标准输出一行 JSON，标准错误一句给人看的话。结局和退出码：
 //
 //	0  REVOKED、LIFTED、LISTED：做成了。本来就是这个状态也是（changed 为 false），不算错
@@ -41,6 +46,8 @@ const (
 	commandRevoke      = "revoke"
 	commandRestore     = "restore"
 	commandRevocations = "revocations"
+	commandBan         = "ban"
+	commandUnban       = "unban"
 
 	// exitRevokedNotWritten：撤销已经生效，但没有写下去。
 	exitRevokedNotWritten = 7
@@ -50,19 +57,25 @@ const (
 )
 
 func isRevocationCommand(command string) bool {
-	return command == commandRevoke || command == commandRestore || command == commandRevocations
+	return command == commandRevoke || command == commandRestore || command == commandRevocations ||
+		command == commandBan || command == commandUnban
+}
+
+func isOperationBanCommand(command string) bool {
+	return command == commandBan || command == commandUnban
 }
 
 type revocationOptions struct {
-	command string
-	account string
-	reason  string
-	address string
-	name    string
-	cert    string
-	key     string
-	ca      string
-	timeout time.Duration
+	command   string
+	account   string
+	operation string
+	reason    string
+	address   string
+	name      string
+	cert      string
+	key       string
+	ca        string
+	timeout   time.Duration
 }
 
 func parseRevocation(command string, args []string, output io.Writer) (revocationOptions, error) {
@@ -74,11 +87,17 @@ func parseRevocation(command string, args []string, output io.Writer) (revocatio
 		flags.StringVar(target, name, "", usage)
 		required[name] = target
 	}
-	if command != commandRevocations {
+	switch command {
+	case commandRevoke, commandRestore:
 		text(&o.account, "account", "要"+map[string]string{commandRevoke: "撤销", commandRestore: "取消撤销"}[command]+"的 Provider 账户")
+	case commandBan, commandUnban:
+		text(&o.operation, "operation", "要"+map[string]string{commandBan: "封禁", commandUnban: "解除封禁"}[command]+"的 operation_id")
 	}
 	if command == commandRevoke {
 		text(&o.reason, "reason", "撤销的原因，必填，不能为空；会写进撤销表和 gateway-authz 的日志，不要往里放秘密")
+	}
+	if command == commandBan {
+		text(&o.reason, "reason", "封禁的原因，必填，不能为空；会写进撤销文件和 gateway-authz 的日志，不要往里放秘密")
 	}
 	text(&o.address, "authz", "gateway-authz 的地址，host:port")
 	text(&o.name, "authz-name", "gateway-authz 证书上的名字")
@@ -89,6 +108,10 @@ func parseRevocation(command string, args []string, output io.Writer) (revocatio
 	flags.Usage = func() {
 		fmt.Fprintf(output, "Usage of gateway-control %s:\n", command)
 		flags.PrintDefaults()
+		if isOperationBanCommand(command) {
+			fmt.Fprint(output, banOutcomesHelp)
+			return
+		}
 		fmt.Fprint(output, outcomesHelp)
 	}
 	if err := flags.Parse(args); err != nil {
@@ -106,7 +129,7 @@ func parseRevocation(command string, args []string, output io.Writer) (revocatio
 	if len(missing) > 0 {
 		return o, errors.New("missing required flags: " + strings.Join(missing, ", "))
 	}
-	if command == commandRevoke && strings.TrimSpace(o.reason) == "" {
+	if (command == commandRevoke || command == commandBan) && strings.TrimSpace(o.reason) == "" {
 		return o, errors.New("--reason must not be blank")
 	}
 	if host, port, err := net.SplitHostPort(o.address); err != nil || host == "" || port == "" {
@@ -135,13 +158,31 @@ Standard output is one line of JSON; standard error is one sentence. outcome (ex
   exit 1: nothing was sent (a certificate file cannot be read, ...), no JSON; exit 2: the command line is wrong
 `
 
+// banOutcomesHelp 是 ban 和 unban 的 --help 末尾。证书参数与 revoke 相同，结局按操作来说。
+const banOutcomesHelp = `
+Standard output is one line of JSON; standard error is one sentence. outcome (exit code):
+  BANNED, LIFTED (0)               done; "changed": false means it was in that state already, which is not an error
+  NOT_REVOKER (3)                  401: the certificate is not the revoker's; nothing changed
+  NO_REVOKER_CONFIGURED (3)        404: this gateway-authz has no revoker configured; nothing changed
+  UNKNOWN_OPERATION (3)            422: no such operation, probably mistyped; nothing changed
+  REQUEST_REFUSED (3)              400: the request was not accepted as well-formed; nothing changed
+  LIFT_NOT_WRITTEN (3)             500: the change could not be written, so the ban was NOT lifted
+  UNKNOWN (5)                      no answer, or an answer not understood: the request may or may not have taken
+                                   effect. Running the same command again is safe. Nothing is retried automatically
+  BANNED_NOT_WRITTEN (7)           500: the operation is refused now but the ban is not in the file, so it is lost when
+                                   gateway-authz restarts. Fix the file, then run the same command again
+  exit 1: nothing was sent (a certificate file cannot be read, ...), no JSON; exit 2: the command line is wrong
+`
+
 // revocationReport 是标准输出上的那一行 JSON。
 type revocationReport struct {
 	Command         string        `json:"command"`
 	Outcome         string        `json:"outcome"`
 	Account         string        `json:"account,omitempty"`
+	Operation       string        `json:"operation,omitempty"`
 	HTTPStatus      int           `json:"http_status,omitempty"`
 	Revoked         *bool         `json:"revoked,omitempty"`
+	Banned          *bool         `json:"banned,omitempty"`
 	Changed         *bool         `json:"changed,omitempty"`
 	RevocationEpoch *uint64       `json:"revocation_epoch,omitempty"`
 	RevokedAccounts *[]revokedRow `json:"revoked_accounts,omitempty"`
@@ -157,12 +198,12 @@ type revokedRow struct {
 
 func revocationExit(outcome revokerclient.Outcome) int {
 	switch outcome {
-	case revokerclient.OutcomeRevoked, revokerclient.OutcomeLifted, revokerclient.OutcomeListed:
+	case revokerclient.OutcomeRevoked, revokerclient.OutcomeLifted, revokerclient.OutcomeListed, revokerclient.OutcomeBanned:
 		return exitActive
-	case revokerclient.OutcomeRevokedNotWritten:
+	case revokerclient.OutcomeRevokedNotWritten, revokerclient.OutcomeBannedNotWritten:
 		return exitRevokedNotWritten
 	case revokerclient.OutcomeNotRevoker, revokerclient.OutcomeNoRevoker, revokerclient.OutcomeUnknownAccount,
-		revokerclient.OutcomeRefused, revokerclient.OutcomeLiftNotWritten:
+		revokerclient.OutcomeUnknownOperation, revokerclient.OutcomeRefused, revokerclient.OutcomeLiftNotWritten:
 		return exitNotDone
 	default: // UNKNOWN，以及任何这里不认识的结局：不认识的不当成成功
 		return exitUnknown
@@ -193,6 +234,10 @@ func runRevocation(ctx context.Context, command string, args []string, stdout, s
 		result, err = client.Revoke(ctx, o.account, o.reason)
 	case commandRestore:
 		result, err = client.Restore(ctx, o.account)
+	case commandBan:
+		result, err = client.Ban(ctx, o.operation, o.reason)
+	case commandUnban:
+		result, err = client.Unban(ctx, o.operation)
 	default:
 		result = client.List(ctx)
 	}
@@ -200,20 +245,33 @@ func runRevocation(ctx context.Context, command string, args []string, stdout, s
 		fmt.Fprintln(stderr, "gateway-control:", err)
 		return exitUsage
 	}
-	if err := json.NewEncoder(stdout).Encode(reportRevocation(command, o.account, result)); err != nil {
+	if err := json.NewEncoder(stdout).Encode(reportRevocation(command, o.account, o.operation, result)); err != nil {
 		fmt.Fprintln(stderr, "gateway-control:", err)
 	}
-	fmt.Fprintln(stderr, "gateway-control:", sentence(command, o.account, result))
+	line := sentence(command, o.account, result)
+	if isOperationBanCommand(command) {
+		line = sentenceBan(command, o.operation, result)
+	}
+	fmt.Fprintln(stderr, "gateway-control:", line)
 	return revocationExit(result.Outcome)
 }
 
-func reportRevocation(command, account string, result revokerclient.Result) revocationReport {
+func reportRevocation(command, account, operation string, result revokerclient.Result) revocationReport {
 	report := revocationReport{Command: command, Outcome: string(result.Outcome), HTTPStatus: result.Status, Detail: result.Detail}
-	if command != commandRevocations {
+	switch command {
+	case commandRevocations:
+	case commandBan, commandUnban:
+		report.Operation = operation
+	default:
 		report.Account = account
 	}
 	if s := result.State; s != nil {
-		report.Revoked, report.Changed, report.RevocationEpoch = &s.Revoked, &s.Changed, &s.Epoch
+		report.Changed, report.RevocationEpoch = &s.Changed, &s.Epoch
+		if isOperationBanCommand(command) {
+			report.Banned = &s.Banned
+		} else {
+			report.Revoked = &s.Revoked
+		}
 	}
 	if t := result.Table; t != nil {
 		rows := make([]revokedRow, 0, len(t.Rows))
@@ -267,4 +325,41 @@ func sentence(command, account string, result revokerclient.Result) string {
 	return "UNKNOWN: " + result.Detail + ". The request may or may not have reached gateway-authz, so " + account +
 		" may or may not be revoked. Running the same command again is safe (the interface is idempotent); " +
 		"until `gateway-control revocations` has shown the account in the table, do not take it as revoked. Nothing was retried automatically"
+}
+
+// sentenceBan 是 ban 和 unban 的那一句话。revoke 和 restore 仍走 sentence，不经过这里。
+func sentenceBan(command, operation string, result revokerclient.Result) string {
+	switch result.Outcome {
+	case revokerclient.OutcomeBanned:
+		if result.State.Changed {
+			return fmt.Sprintf("BANNED: %s is banned for every account (revocation epoch %d)", operation, result.State.Epoch)
+		}
+		return fmt.Sprintf("BANNED: %s was banned already; nothing changed (revocation epoch %d)", operation, result.State.Epoch)
+	case revokerclient.OutcomeLifted:
+		if result.State.Changed {
+			return fmt.Sprintf("LIFTED: the ban of %s is lifted (revocation epoch %d)", operation, result.State.Epoch)
+		}
+		return fmt.Sprintf("LIFTED: %s was not banned; nothing changed (revocation epoch %d)", operation, result.State.Epoch)
+	case revokerclient.OutcomeBannedNotWritten:
+		return fmt.Sprintf("BANNED_NOT_WRITTEN: %s is refused now, but gateway-authz could not write the ban to its revocations file, "+
+			"so it will not be refused after gateway-authz restarts. Find out why that file cannot be written "+
+			"(disk, permissions, the directory), fix it, then run the same command again to have it written", operation)
+	case revokerclient.OutcomeLiftNotWritten:
+		return fmt.Sprintf("LIFT_NOT_WRITTEN: gateway-authz could not write the change to its revocations file, so the ban of %s "+
+			"was NOT lifted: the operation is still banned. Find out why that file cannot be written, fix it, then run the same command again", operation)
+	case revokerclient.OutcomeNotRevoker:
+		return "NOT_REVOKER: gateway-authz does not accept this certificate as the revoker's (401). Nothing changed"
+	case revokerclient.OutcomeNoRevoker:
+		return "NO_REVOKER_CONFIGURED: this gateway-authz has no revoker configured, so it has no revocation interface (404). Nothing changed"
+	case revokerclient.OutcomeUnknownOperation:
+		return fmt.Sprintf("UNKNOWN_OPERATION: gateway-authz knows no operation %q (422); the name is probably mistyped. Nothing changed", operation)
+	case revokerclient.OutcomeRefused:
+		return "REQUEST_REFUSED: gateway-authz did not accept the request as well-formed (400). Nothing changed"
+	}
+	if command == commandUnban {
+		return "UNKNOWN: " + result.Detail + ". The request may or may not have reached gateway-authz, so the ban of " + operation +
+			" may or may not be lifted. Running the same command again is safe (the interface is idempotent). Nothing was retried automatically"
+	}
+	return "UNKNOWN: " + result.Detail + ". The request may or may not have reached gateway-authz, so " + operation +
+		" may or may not be banned. Running the same command again is safe (the interface is idempotent). Nothing was retried automatically"
 }

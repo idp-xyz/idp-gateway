@@ -91,6 +91,19 @@ func TestRateLimitIsAfterPolicyRevocationAndGrants(t *testing.T) {
 		}
 	})
 
+	t.Run("操作被封禁", func(t *testing.T) {
+		service, credentials, revocations, limiter := newLimited(t, 1, nil)
+		revocations.banned = map[string]bool{"tracking.get": true}
+		out, _, err := service.Authorize(context.Background(), blueInput())
+		if err != nil || out.Reason != ReasonOperationBanned || out.RateLimited || limiter.calls != 0 || len(credentials.asked) != 0 {
+			t.Fatalf("%+v calls=%d err=%v", out, limiter.calls, err)
+		}
+		revocations.banned["tracking.get"] = false
+		if out, _, err := service.Authorize(context.Background(), blueInput()); err != nil || !out.Allowed || limiter.calls != 1 {
+			t.Fatalf("封禁的请求扣了配额：%+v calls=%d %v", out, limiter.calls, err)
+		}
+	})
+
 	t.Run("授权来源拒绝", func(t *testing.T) {
 		grants := &fakeGrants{}
 		service, credentials, _, limiter := newLimited(t, 1, grants)

@@ -1,6 +1,7 @@
 // Package httpapi 把出站判定接到 HTTP 上：agentgateway 的 HTTP ExtAuthZ 交换，只返回判定、
-// 不返回凭证的 JSON 接口，以及改撤销表的接口。线上契约是 contracts/gatekeeper/openapi.yaml
-// 里的 /v1/extauthz/check、/v1/egress/authorizations/decision 与 /v1/egress/revocations。
+// 不返回凭证的 JSON 接口，以及改撤销表和封禁操作的接口。线上契约是 contracts/gatekeeper/openapi.yaml
+// 里的 /v1/extauthz/check、/v1/egress/authorizations/decision、/v1/egress/revocations
+// 与 /v1/egress/operation-bans。
 //
 // 调用方是谁只看 TLS 握手中已验证的客户端证书，不看任何请求头。
 package httpapi
@@ -23,10 +24,11 @@ import (
 )
 
 const (
-	PathHealth      = "/healthz"
-	PathExtAuthz    = "/v1/extauthz/check"
-	PathDecision    = "/v1/egress/authorizations/decision"
-	PathRevocations = "/v1/egress/revocations"
+	PathHealth        = "/healthz"
+	PathExtAuthz      = "/v1/extauthz/check"
+	PathDecision      = "/v1/egress/authorizations/decision"
+	PathRevocations   = "/v1/egress/revocations"
+	PathOperationBans = "/v1/egress/operation-bans"
 )
 
 // 网关写入的可信上下文。每一项都必须恰好出现零次或一次：出现第二份，说明有网关以外的
@@ -90,7 +92,7 @@ func (c Callers) MayCall(path, identity string) bool {
 		return identity == c.Gateway
 	case PathDecision:
 		return identity == c.Gateway || identity == c.Broker
-	case PathRevocations:
+	case PathRevocations, PathOperationBans:
 		return identity == c.Revoker
 	}
 	return false
@@ -117,10 +119,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.extAuthz(w, r)
 	case PathDecision:
 		h.decision(w, r)
-	case PathRevocations:
-		// 没有配置撤销者时，这个接口不存在，对谁都一样。
+	case PathRevocations, PathOperationBans:
+		// 没有配置撤销者时，改撤销表和封禁操作的接口都不存在，对谁都一样。
 		if h.callers.Revoker == "" {
 			writeJSON(w, http.StatusNotFound, errorBody{Error: "not_found"})
+			return
+		}
+		if r.URL.Path == PathOperationBans {
+			h.operationBans(w, r)
 			return
 		}
 		h.revocations(w, r)
