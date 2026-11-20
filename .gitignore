@@ -34,3 +34,4 @@ tests/integration/egressnet/.run/
 deploy/compose/.env
 
 tests/integration/wanbexpress/.run/
+tests/integration/sfintl/.run/

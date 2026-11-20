@@ -1,0 +1,91 @@
+{
+  "version": "sfintl-example",
+  "default_decision": "DENY",
+  "registered_operations": [
+    {
+      "route_id": "sfintl-orders-create",
+      "provider_id": "sfintl",
+      "operation_id": "orders.create",
+      "environment": "TEST",
+      "method": "POST",
+      "path_prefix": "/providers/sfintl/v1/orders",
+      "upstream_hostname": "provider-signer",
+      "port": 9444,
+      "credential_binding_ref": "gatekeeper:sfintl-test",
+      "allowed_tenants": [
+        "TENANT-ID-BLUE",
+        "TENANT-ID-GREEN"
+      ],
+      "accounts_by_tenant": {
+        "TENANT-ID-BLUE": [
+          "account-blue"
+        ],
+        "TENANT-ID-GREEN": [
+          "account-green"
+        ]
+      },
+      "allowed_service_ids": [
+        "CLIENT-ID-BLUE",
+        "CLIENT-ID-GREEN"
+      ]
+    },
+    {
+      "route_id": "sfintl-orders-cancel",
+      "provider_id": "sfintl",
+      "operation_id": "orders.cancel",
+      "environment": "TEST",
+      "method": "POST",
+      "path_prefix": "/providers/sfintl/v1/order-cancellations",
+      "upstream_hostname": "provider-signer",
+      "port": 9444,
+      "credential_binding_ref": "gatekeeper:sfintl-test",
+      "allowed_tenants": [
+        "TENANT-ID-BLUE",
+        "TENANT-ID-GREEN"
+      ],
+      "accounts_by_tenant": {
+        "TENANT-ID-BLUE": [
+          "account-blue"
+        ],
+        "TENANT-ID-GREEN": [
+          "account-green"
+        ]
+      },
+      "allowed_service_ids": [
+        "CLIENT-ID-BLUE",
+        "CLIENT-ID-GREEN"
+      ]
+    },
+    {
+      "route_id": "sfintl-agent-numbers-query",
+      "provider_id": "sfintl",
+      "operation_id": "agent-numbers.query",
+      "environment": "TEST",
+      "method": "POST",
+      "path_prefix": "/providers/sfintl/v1/agent-number-queries",
+      "upstream_hostname": "provider-signer",
+      "port": 9444,
+      "credential_binding_ref": "gatekeeper:sfintl-test",
+      "allowed_tenants": [
+        "TENANT-ID-BLUE",
+        "TENANT-ID-GREEN"
+      ],
+      "accounts_by_tenant": {
+        "TENANT-ID-BLUE": [
+          "account-blue"
+        ],
+        "TENANT-ID-GREEN": [
+          "account-green"
+        ]
+      },
+      "allowed_service_ids": [
+        "CLIENT-ID-BLUE",
+        "CLIENT-ID-GREEN"
+      ]
+    }
+  ],
+  "allow_request_redirects": false,
+  "enforce_tls_upstream": true,
+  "gateway_may_retry_non_idempotent": false,
+  "notes": "Example for the SF International (IECS) sandbox. TENANT-ID-*, CLIENT-ID-* are placeholders: fill in the Gatekeeper tenant ids and the M2M client ids (the sub of the caller's token) when deploying. account-blue and account-green are the ids of the provider_account objects in Gatekeeper and the second part of the handles in the file given to gateway-authz as --sf-openapi-apps (gatekeeper:sfintl-test/account-blue). upstream_hostname and port describe the route's upstream, which is provider-signer, not the carrier; gateway-authz does not read them, nor enforce_tls_upstream (it ignores everything outside the rows' decision fields). enforce_tls_upstream is true because the hop from the gateway to provider-signer is mutual TLS; provider-signer's own hop to the carrier's sandbox is plain HTTP, and this field does not describe it."
+}

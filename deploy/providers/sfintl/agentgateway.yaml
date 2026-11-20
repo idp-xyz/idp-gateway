@@ -1,0 +1,373 @@
+# SF International (顺丰国际, IECS export e-commerce) sandbox: outbound configuration for agentgateway 1.7.0, written by
+# hand from the WanbExpress file deploy/providers/wanbexpress/agentgateway.yaml (which follows the reviewed configuration
+# tests/acceptance/blackbox/agentgateway.poc.yaml), the way development plan 3.2 describes and ADR-0014 item 4 applies.
+# What is different from the WanbExpress file is listed in deploy/providers/sfintl/README.md.
+#
+# Three operations, all POST, and nothing else reaches the signer (caller's path -> signer's path, operation id, msgType):
+#   /providers/sfintl/v1/orders               -> /sfintl/v1/orders                orders.create        IECS_CREATE_ORDER
+#   /providers/sfintl/v1/order-cancellations  -> /sfintl/v1/order-cancellations   orders.cancel        IECS_CANCEL_ORDER
+#   /providers/sfintl/v1/agent-number-queries -> /sfintl/v1/agent-number-queries  agent-numbers.query  IECS_QUERY_AGENTNO
+#
+# THE UPSTREAM OF THESE ROUTES IS THE SIGNER, NOT THE CARRIER. The carrier's protocol encrypts the body and signs it,
+# which the gateway cannot do (docs/adr/ADR-0014.md), so the backend is provider-signer (cmd/provider-signer), over mutual
+# TLS: the gateway presents its own certificate (backendTLS), the signer serves only that identity. The signer builds the
+# request to the carrier itself; nothing of the caller's headers, path or query goes on. The carrier's address is the
+# signer's --carrier-url, not a value in this file.
+# The carrier's sandbox, http://api-ifsp-sit.sf.global, is PLAIN HTTP, for the token endpoint (asked by gateway-authz,
+# which needs --sf-openapi-plain-http-host) and for dispatch (asked by the signer, which needs --carrier-plain-http-host).
+# That is acceptable for the sandbox only. The body is encrypted by the signer, but the app key, the access token and the
+# signature travel in clear headers. Nothing here has checked TLS towards the carrier.
+#
+# The values are those of the single-host pool described by deploy/compose (compose.yml, gateway-authz.yml):
+# the callers' listener on 8081 (front forwards to it), the read-back listener on 8443, admin, stats and readiness on
+# 15000, 15020 and 15021 (loopback), certificates as tls/<file> under the pool's tls directory, the JWKS of the issuer
+# as the file tls/jwks.json (a file the operator puts there: the pool's egress rules let the gateway reach only the
+# hosts this file names, so it does not fetch it), gateway-authz as the pool's own service gateway-authz:9443 and the
+# signer as provider-signer:9444, both found by name so that the egress rules cover these hops too (the pool has no
+# provider-signer service yet). The issuer is the one that signs the callers' tokens.
+# The environment is TEST: the token has no env claim, so it is a constant of the route.
+#
+# The session key is not in this file: the pool gives it to the gateway in the environment variable SESSION_KEY.
+# Each route's timeout is 9 seconds: front (nginx) waits for the gateway at most 10 seconds (deploy/compose README),
+# and a longer timeout here would show the caller nginx's 504 instead of the gateway's answer. The signer's own timeout
+# towards the carrier is 8 seconds (--carrier-timeout, default), so the signer's 504 arrives before the route gives up.
+config:
+  adminAddr: 127.0.0.1:15000
+  statsAddr: 127.0.0.1:15020
+  readinessAddr: 127.0.0.1:15021
+  storage:
+    mode: readOnly
+
+frontendPolicies:
+  networkAuthorization:
+    rules:
+    - allow: 'destination.port == 8081'
+    - allow: 'destination.port == 8443 && source.spiffeId == "spiffe://idp.test/gateway-control/publisher"'
+
+  # One access-log line per call, with the numbers that tie it to gateway-authz's decision and to the
+  # carrier's own numbers (same expressions as the reviewed configuration; see its comments).
+  # customerOrderNo is the number we give the carrier, in the request body; sfWaybillNo is the carrier's, in the answer:
+  # the signer has already decrypted apiResultData, so it is a plain object here. The query operation has neither at
+  # that place. Not verified yet: that these two fields show up in the log.
+  accessLog:
+    add:
+      authz_decision_id: 'has(extauthz.decision_id) ? extauthz.decision_id : response.headers["x-idp-decision-id"]'
+      tenant_ref: 'jwt.tenant_id'
+      provider_reference_id: 'json(request.body).customerOrderNo.matches("^[A-Za-z0-9._-]{1,64}$") ? json(request.body).customerOrderNo : "(malformed)"'
+      provider_request_id: 'json(response.body).apiResultData.data.sfWaybillNo.matches("^[A-Za-z0-9._-]{1,64}$") ? json(response.body).apiResultData.data.sfWaybillNo : "(malformed)"'
+
+gateways:
+  read-back:
+    port: 8443
+    tls:
+      cert: tls/gateway-readback.crt
+      key: tls/gateway-readback.key
+      root: tls/ca.crt
+  egress-test:
+    port: 8081
+    bindAddress: 127.0.0.1
+    protocol: HTTP
+    jwtAuth:
+      mode: strict
+      issuer: http://127.0.0.1:27621
+      audiences: [idp-egress-gateway]
+      jwks:
+        file: tls/jwks.json
+
+# The three prefixes are not nested in one another (none is a string prefix of another), so no two routes can match
+# the same request.
+routes:
+- name: sfintl-orders-create
+  gateways: [egress-test]
+  hostnames: ["egress-api.idp.test"]
+  matches:
+  - path:
+      pathPrefix: /providers/sfintl/v1/orders
+    method: POST
+  policies:
+    # Path shape (create: POST on exactly /orders). The reviewed
+    # configuration's canonical-path rule is a weaker form of this one: the characters allowed are the
+    # same, and no segment starts with a dot, so "." and ".." cannot occur. The shape is also what keeps
+    # a path that merely starts with the registered prefix (a deeper path) from reaching the
+    # signer; gateway-authz's register only compares a prefix, so this rule is the only place that says it.
+    authorization:
+      rules:
+      - allow: 'request.path == "/providers/sfintl/v1/orders"'
+    extAuthz:
+      host: gateway-authz:9443
+      failureMode:
+        denyWithStatus: 503
+      includeRequestHeaders:
+      - x-provider-account
+      policies:
+        backendTLS:
+          cert: tls/gateway.crt
+          key: tls/gateway.key
+          root: tls/ca.crt
+          hostname: gatekeeper.idp.test
+        http:
+          requestTimeout: 1s
+      protocol:
+        http:
+          path: '"/v1/extauthz/check"'
+          addRequestHeaders:
+            x-idp-verified-subject: jwt.sub
+            x-idp-verified-tenant: jwt.tenant_id
+            x-idp-verified-env: '"TEST"'
+            x-idp-route-id: '"sfintl-orders-create"'
+            x-idp-provider-id: '"sfintl"'
+            x-idp-operation-id: '"orders.create"'
+            x-idp-environment: '"TEST"'
+            x-idp-method: request.method
+            x-idp-path: request.path
+          metadata:
+            decision_id: 'response.headers["x-idp-decision-id"]'
+          includeResponseHeaders:
+          - authorization
+    urlRewrite:
+      # The signer's Host: the name its certificate is for, without a port: the port is the backend's.
+      authority:
+        full: provider-signer.idp.test
+      path:
+        prefix: /sfintl/v1/orders
+    responseHeaderModifier:
+      remove:
+      - location
+      - set-cookie
+      - x-idp-decision-id
+    # No retry policy on purpose. A create that times out has an unknown result; the carrier answers a repeated customerOrderNo with the existing order (measured 2026-11-20 for an identical body).
+    timeout:
+      requestTimeout: 9s
+  backends:
+  - host: provider-signer:9444
+    policies:
+      # Mutual TLS to the signer: the gateway presents its certificate; SNI and the name the signer's certificate is
+      # verified for is hostname.
+      backendTLS:
+        cert: tls/gateway.crt
+        key: tls/gateway.key
+        root: tls/ca.crt
+        hostname: provider-signer.idp.test
+      # Fail closed if the PDP allowed but released no credential. The caller's token was removed
+      # after validation, so a header that starts like this can only have come from the PDP.
+      authorization:
+        rules:
+        - allow: 'request.headers["authorization"].startsWith("Sf-OpenApi ")'
+      transformations:
+        request:
+          replace: 'request.headers.filterKeys(k, k in ["accept", "authorization", "content-type", "idempotency-key", "traceparent", "x-client-trace"])'
+      # No Accept is written: this carrier has no Accept requirement. A Content-Type that is not JSON is refused
+      # by the signer (415), not rewritten here.
+      requestHeaderModifier:
+        remove:
+        - x-provider-account
+        - cookie
+        - x-forwarded-host
+        - x-forwarded-for
+        - x-forwarded-proto
+        - forwarded
+        - x-idp-verified-subject
+        - x-idp-verified-tenant
+        - x-idp-verified-env
+
+- name: sfintl-orders-cancel
+  gateways: [egress-test]
+  hostnames: ["egress-api.idp.test"]
+  matches:
+  - path:
+      pathPrefix: /providers/sfintl/v1/order-cancellations
+    method: POST
+  policies:
+    # Path shape (cancel: POST on exactly /order-cancellations). The reviewed
+    # configuration's canonical-path rule is a weaker form of this one: the characters allowed are the
+    # same, and no segment starts with a dot, so "." and ".." cannot occur. The shape is also what keeps
+    # a path that merely starts with the registered prefix (a deeper path) from reaching the
+    # signer; gateway-authz's register only compares a prefix, so this rule is the only place that says it.
+    authorization:
+      rules:
+      - allow: 'request.path == "/providers/sfintl/v1/order-cancellations"'
+    extAuthz:
+      host: gateway-authz:9443
+      failureMode:
+        denyWithStatus: 503
+      includeRequestHeaders:
+      - x-provider-account
+      policies:
+        backendTLS:
+          cert: tls/gateway.crt
+          key: tls/gateway.key
+          root: tls/ca.crt
+          hostname: gatekeeper.idp.test
+        http:
+          requestTimeout: 1s
+      protocol:
+        http:
+          path: '"/v1/extauthz/check"'
+          addRequestHeaders:
+            x-idp-verified-subject: jwt.sub
+            x-idp-verified-tenant: jwt.tenant_id
+            x-idp-verified-env: '"TEST"'
+            x-idp-route-id: '"sfintl-orders-cancel"'
+            x-idp-provider-id: '"sfintl"'
+            x-idp-operation-id: '"orders.cancel"'
+            x-idp-environment: '"TEST"'
+            x-idp-method: request.method
+            x-idp-path: request.path
+          metadata:
+            decision_id: 'response.headers["x-idp-decision-id"]'
+          includeResponseHeaders:
+          - authorization
+    urlRewrite:
+      # The signer's Host: the name its certificate is for, without a port: the port is the backend's.
+      authority:
+        full: provider-signer.idp.test
+      path:
+        prefix: /sfintl/v1/order-cancellations
+    responseHeaderModifier:
+      remove:
+      - location
+      - set-cookie
+      - x-idp-decision-id
+    # No retry policy on purpose. The gateway does not repeat a request.
+    timeout:
+      requestTimeout: 9s
+  backends:
+  - host: provider-signer:9444
+    policies:
+      # Mutual TLS to the signer: the gateway presents its certificate; SNI and the name the signer's certificate is
+      # verified for is hostname.
+      backendTLS:
+        cert: tls/gateway.crt
+        key: tls/gateway.key
+        root: tls/ca.crt
+        hostname: provider-signer.idp.test
+      # Fail closed if the PDP allowed but released no credential. The caller's token was removed
+      # after validation, so a header that starts like this can only have come from the PDP.
+      authorization:
+        rules:
+        - allow: 'request.headers["authorization"].startsWith("Sf-OpenApi ")'
+      transformations:
+        request:
+          replace: 'request.headers.filterKeys(k, k in ["accept", "authorization", "content-type", "idempotency-key", "traceparent", "x-client-trace"])'
+      # No Accept is written: this carrier has no Accept requirement. A Content-Type that is not JSON is refused
+      # by the signer (415), not rewritten here.
+      requestHeaderModifier:
+        remove:
+        - x-provider-account
+        - cookie
+        - x-forwarded-host
+        - x-forwarded-for
+        - x-forwarded-proto
+        - forwarded
+        - x-idp-verified-subject
+        - x-idp-verified-tenant
+        - x-idp-verified-env
+
+- name: sfintl-agent-numbers-query
+  gateways: [egress-test]
+  hostnames: ["egress-api.idp.test"]
+  matches:
+  - path:
+      pathPrefix: /providers/sfintl/v1/agent-number-queries
+    method: POST
+  policies:
+    # Path shape (query: POST on exactly /agent-number-queries). The reviewed
+    # configuration's canonical-path rule is a weaker form of this one: the characters allowed are the
+    # same, and no segment starts with a dot, so "." and ".." cannot occur. The shape is also what keeps
+    # a path that merely starts with the registered prefix (a deeper path) from reaching the
+    # signer; gateway-authz's register only compares a prefix, so this rule is the only place that says it.
+    authorization:
+      rules:
+      - allow: 'request.path == "/providers/sfintl/v1/agent-number-queries"'
+    extAuthz:
+      host: gateway-authz:9443
+      failureMode:
+        denyWithStatus: 503
+      includeRequestHeaders:
+      - x-provider-account
+      policies:
+        backendTLS:
+          cert: tls/gateway.crt
+          key: tls/gateway.key
+          root: tls/ca.crt
+          hostname: gatekeeper.idp.test
+        http:
+          requestTimeout: 1s
+      protocol:
+        http:
+          path: '"/v1/extauthz/check"'
+          addRequestHeaders:
+            x-idp-verified-subject: jwt.sub
+            x-idp-verified-tenant: jwt.tenant_id
+            x-idp-verified-env: '"TEST"'
+            x-idp-route-id: '"sfintl-agent-numbers-query"'
+            x-idp-provider-id: '"sfintl"'
+            x-idp-operation-id: '"agent-numbers.query"'
+            x-idp-environment: '"TEST"'
+            x-idp-method: request.method
+            x-idp-path: request.path
+          metadata:
+            decision_id: 'response.headers["x-idp-decision-id"]'
+          includeResponseHeaders:
+          - authorization
+    urlRewrite:
+      # The signer's Host: the name its certificate is for, without a port: the port is the backend's.
+      authority:
+        full: provider-signer.idp.test
+      path:
+        prefix: /sfintl/v1/agent-number-queries
+    responseHeaderModifier:
+      remove:
+      - location
+      - set-cookie
+      - x-idp-decision-id
+    # No retry policy on purpose. The gateway does not repeat a request.
+    timeout:
+      requestTimeout: 9s
+  backends:
+  - host: provider-signer:9444
+    policies:
+      # Mutual TLS to the signer: the gateway presents its certificate; SNI and the name the signer's certificate is
+      # verified for is hostname.
+      backendTLS:
+        cert: tls/gateway.crt
+        key: tls/gateway.key
+        root: tls/ca.crt
+        hostname: provider-signer.idp.test
+      # Fail closed if the PDP allowed but released no credential. The caller's token was removed
+      # after validation, so a header that starts like this can only have come from the PDP.
+      authorization:
+        rules:
+        - allow: 'request.headers["authorization"].startsWith("Sf-OpenApi ")'
+      transformations:
+        request:
+          replace: 'request.headers.filterKeys(k, k in ["accept", "authorization", "content-type", "idempotency-key", "traceparent", "x-client-trace"])'
+      # No Accept is written: this carrier has no Accept requirement. A Content-Type that is not JSON is refused
+      # by the signer (415), not rewritten here.
+      requestHeaderModifier:
+        remove:
+        - x-provider-account
+        - cookie
+        - x-forwarded-host
+        - x-forwarded-for
+        - x-forwarded-proto
+        - forwarded
+        - x-idp-verified-subject
+        - x-idp-verified-tenant
+        - x-idp-verified-env
+
+# Read-back: the only route on the read-back listener, as in the reviewed configuration.
+- name: read-back
+  gateways: [read-back]
+  matches:
+  - path:
+      exact: /config_dump
+    method: GET
+  - path:
+      exact: /api/runtime
+    method: GET
+  policies:
+    timeout:
+      requestTimeout: 2s
+  backends:
+  - host: 127.0.0.1:15000
