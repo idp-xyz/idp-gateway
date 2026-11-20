@@ -2,9 +2,9 @@
 
 [开发计划](../../../docs/development-plan.md) 1.1 的第二家承运商：一份手写的 agentgateway 配置和一份登记表，照[万邦那一份](../wanbexpress/README.md)的样子，值也是[单机池](../../compose/README.md)的。这家的协议要加密正文、对密文签名，网关做不了，所以路由的上游不是承运商，而是签名适配器 `provider-signer`（[ADR-0014](../../../docs/adr/ADR-0014.md)）。
 
-**这份配置已经在联调架子上对着替身跑过**（[tests/integration/sfintl](../../../tests/integration/sfintl/README.md)）。还没有对着真实沙箱跑，也没有在单机池里跑。单机池里还没有 `provider-signer` 这个服务。
+**这份配置已经在联调架子上对着替身跑过，也对着真实沙箱跑过**（[tests/integration/sfintl](../../../tests/integration/sfintl/README.md)，证据 `rig-standin.json`、`rig-sandbox.json`）。没有在单机池里跑。单机池里还没有 `provider-signer` 这个服务。
 
-现在查过的：锁定的 agentgateway 1.7.0 的 `--validate-only` 接受这份文件；离线的[契约测试](../../../tests/contracts/test_sfintl_config.py)查配置、登记表和 Go 代码里的几个常量互相对得上（操作表、凭证前缀、适配器的默认超时），并查联调套件的替换还在；联调套件把这份文件换上联调的地址后，经网关、`gateway-authz` 和 `provider-signer` 对着替身跑过，结果在套件的 README 里。
+现在查过的：锁定的 agentgateway 1.7.0 的 `--validate-only` 接受这份文件；离线的[契约测试](../../../tests/contracts/test_sfintl_config.py)查配置、登记表和 Go 代码里的几个常量互相对得上（操作表、凭证前缀、适配器的默认超时），并查联调套件的替换还在；联调套件把这份文件换上联调的地址后，经网关、`gateway-authz` 和 `provider-signer` 对着替身跑过，也在 2026-11-20 对着真实沙箱跑了两遍。第二遍的证据是 `rig-sandbox.json`（14/14，168 项过、65 项跳过）。第一遍 13/14，前两次取令牌失败，证据没有留在仓库里，写在提交 `7fd2dd2` 的说明里。细节在套件的 README 里。
 
 ```
 调用方 → 网关 → provider-signer（双向 TLS）→ 承运商
@@ -55,7 +55,7 @@
 - `--client-ca`：签发网关证书的 CA。
 - `--gateway-identity`：网关证书（`tls/gateway.crt`）里的 URI。`provider-signer` 只服务这一个对端。
 - `--carrier-url`：承运商的 dispatch 地址，完整的。承运商的地址只在这里，不在网关的配置里。沙箱是 `http://api-ifsp-sit.sf.global/openapi/api/dispatch`，要加 `--carrier-plain-http-host api-ifsp-sit.sf.global`。
-- `--carrier-timeout`：默认 8 秒，**必须小于路由的 9 秒**，否则网关先放弃，`provider-signer` 的 504 就没有人收了。
+- `--carrier-timeout`：默认 8 秒。这份配置用默认值，它小于路由的 9 秒；不小于时网关先放弃，`provider-signer` 的 504 就没有人收了。程序只拒绝不大于 0 的值，不拒绝 20 秒（对照 `signer-long-timeout`）。
 
 ## 给调用方的话
 
@@ -125,9 +125,13 @@
 ## 没有做的
 
 - **面单**（`IECS_PRINT_ORDER`）和别的 `msgType`。操作表里只有上面三个。
-- **池上的 `provider-signer`**：单机池里还没有这个服务，也没有它的出口规则（它自己发起到承运商的连接）。
+- **池上的 `provider-signer`**：单机池里还没有这个服务，也没有它的出口规则（它自己发起到承运商的连接），也没有经 `gateway-control publish` 发布，也没有池上的套件和 SF-11。
 - **到承运商的 TLS**：沙箱没有，没有验过。
+- **`gateway-authz` 到令牌端点的连接没有出口规则。**
 - **令牌刷新时旧令牌立刻作废**（承运商文档写的）：`gateway-authz` 不知道承运商把缓存里的令牌作废了。SF-13 在替身上量到：作废之后的下一次请求，和接着的三次，都是 HTTP 200、承运商的 `apiResultCode` 500，原样给调用方；把应用文件里的 `key_version` 改掉（旁边写新文件，再改名盖上去）之后才重新取。已经带着旧令牌在路上的那一个请求没有单独量。
-- **几个 `gateway-authz` 实例会互相作废令牌**：一个应用只能有一个取令牌的进程。
-- **访问日志里 `provider_reference_id`、`provider_request_id`**：SF-01 看到创建那一行带着这两个字段，分别是这次的 `customerOrderNo` 和应答里的 `sfWaybillNo`。查询在这两处都没有东西，没有另查。
+- **取令牌失败只记一个类别**（`timeout`、`unreachable`、`status N`、`code N`、`bad_answer`），不写地址，因为地址里有应用密钥。2026-11-20 第一遍沙箱的两次 `unreachable` 分不出更细的原因。
+- **几个 `gateway-authz` 实例会互相作废令牌**，一次重启也是一次新的取令牌，生产上同样作废前一枚。一个应用只能有一个取令牌的进程。沙箱令牌是固定的，这一条验不了。
+- **`--carrier-timeout` 不短于路由的 9 秒时，程序不拒绝。** 给 20 秒，调用方在 9.0 秒得到网关自己的 504（对照 `signer-long-timeout`）。
+- **发给承运商的请求还带着 Go 默认的 `User-Agent`（`Go-http-client/1.1`）和 `Accept-Encoding: gzip`。** 替身记下的头名里有这两个（SF-03，只记名字）。
+- **访问日志里 `provider_reference_id`、`provider_request_id`**：SF-01 看到创建那一行带着这两个字段，分别是这次的 `customerOrderNo` 和应答里的 `sfWaybillNo`。沙箱那一遍也看到了。查询在这两处都没有东西，没有另查。
 - **查询串在网关上没有限制**。SF-07 看到 `POST /providers/sfintl/v1/orders?x=1` 被 `provider-signer` 以 400（`query_not_allowed`）拒绝，调用方看到的也是 400，承运商没有收到。网关自己没有拦。

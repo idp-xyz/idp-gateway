@@ -2,7 +2,7 @@
 
 读的是 `deploy/providers/sfintl/agentgateway.yaml` 本身，不是另抄一份。不改 Go，不改 `tests/integration/gatekeeper/run.py`：那一套的 `run.py` 被原样当模块用（取令牌、`seed`、签证书、起进程、停进程、读判定记录都是它的）。
 
-> 已发布的 `gk.idp.xyz` 不在这里访问。`--sandbox` 的代码在，结果不在这个文件里。
+> 已发布的 `gk.idp.xyz` 不在这里访问。`--sandbox` 的结果在下面「结果」一节，证据是 `evidence/rig-sandbox.json`。
 
 ## 怎么跑
 
@@ -11,7 +11,7 @@ tests/integration/gatekeeper/stack.sh up                                   # 本
 .venv/bin/python tests/integration/sfintl/run.py                           # 上游是替身；约 26 秒
 .venv/bin/python tests/integration/sfintl/run.py --mutate NAME             # 对照：只在替身上
 .venv/bin/python tests/integration/sfintl/run.py --sandbox --sandbox-credentials /仓库之外/sfintl-sandbox.json
-.venv/bin/python tests/integration/sfintl/run.py --evidence                 # 另写 evidence/rig-standin.json
+.venv/bin/python tests/integration/sfintl/run.py --evidence                 # 另写 evidence/rig-standin.json；和 --sandbox 一起则写 rig-sandbox.json
 ```
 
 端口沿用联调那一组（27611-27620 和 27621-27623）。签名器占 **27618**（黑盒套件另有用处，几套不能同时跑）。进程的文件和日志在 `tests/integration/gatekeeper/.run/`，名字以 `sfintl.` 开头；结果在 `tests/integration/sfintl/.run/result-*.json`（都被 git 忽略）。
@@ -34,7 +34,7 @@ tests/integration/gatekeeper/stack.sh up                                   # 本
 
   结果里记：从网关进程去掉的代理变量名、沙箱的名字解析到的地址、**签名器**和 **`gateway-authz`** 连着的非回环地址（这两边才跟承运商说话）、每个调用的耗时。
 
-  **这一遍还没有跑，结果不在这个文件里。**
+  **沙箱的结果在下面「结果」一节。**
 
 只在替身上能验的检查，在 `--sandbox` 下记为 skipped，附原因，不是通过。见下表。
 
@@ -85,7 +85,7 @@ tests/integration/gatekeeper/stack.sh up                                   # 本
 
 ## 结果
 
-2026-11-20，agentgateway 1.7.0，上游是替身，连跑三遍。三遍都是 **14/14**，每遍 **284 项检查，没有跳过**。用时 25.2 秒、25.0 秒、26.8 秒。跑完 27611-27620 没有监听，本机 Gatekeeper 的容器还在。创建的单都取消了，替身上没有剩下的。
+2026-11-20，agentgateway 1.7.0，上游是替身，连跑三遍。三遍都是 **14/14**，每遍 **284 项检查，没有跳过**。用时 25.2 秒、25.0 秒、26.8 秒。跑完 27611-27620 没有监听，本机 Gatekeeper 的容器还在。创建的单都取消了，替身上没有剩下的。提交 `094c5e5` 之前，审阅者又跑了一遍，也是 14/14。
 
 | 用例 | 检查数 |
 |---|---|
@@ -122,17 +122,46 @@ tests/integration/gatekeeper/stack.sh up                                   # 本
 
 这套架子上没有「去掉请求头名单」的对照。签名器不把调用方的任何头带给承运商，承运商的记录显示不出来名单在不在。SF-03 看的是承运商收到的头，不是网关到签名器那一跳的名单。
 
+### 真实沙箱（2026-11-20）
+
+`run.py --sandbox --sandbox-credentials`（0600 的文件，在仓库之外）`--evidence`，在 `094c5e5` 上，没有未提交的文件。两遍。两遍之间没有改任何东西。
+
+第一遍 **13/14**。SF-01 的前两个请求（查询和创建）被网关答 HTTP 503。`gateway-authz` 前两次取令牌失败，日志是 `sf openapi token not fetched`，`result` 是 `unreachable`，用了 127 毫秒和 78 毫秒。判定是 `INDETERMINATE` / `CREDENTIAL_UNAVAILABLE`。没有到签名器，也没有到承运商。0.8 秒之后的第三次取到了，这一遍剩下的都过了。SF-02 创建了一张单并取消，没有剩下的。网络路径上的原因不知道：日志里只有类别，因为请求地址带着应用密钥。紧接着 Python 取了 12 次，一个用适配器那一套传输设置的临时 Go 程序取了 25 次，每次都是新连接，都成功。这一遍的证据文件没有留在仓库里，第二遍写在同一个路径上。上面这段写在提交 `7fd2dd2` 的说明里；那里把 Go 程序的次数写成了 33，写错了，是 25。
+
+第二遍是 `evidence/rig-sandbox.json`。**14/14**。233 项检查：168 过，65 项带原因跳过，0 失败。17.7 秒。SF-03、SF-13、SF-14 整个跳过（只在替身上）。
+
+| 用例 | 过 / 跳过 |
+|---|---|
+| SF-01 | 13 / 2 |
+| SF-02 | 4 / 2 |
+| SF-04 | 27 / 9 |
+| SF-05 | 4 / 2 |
+| SF-06 | 3 / 1 |
+| SF-07 | 70 / 29 |
+| SF-08 | 13 / 6 |
+| SF-09 | 13 / 4 |
+| SF-10 | 5 / 0 |
+| SF-12 | 8 / 3 |
+| SF-15 | 8 / 4 |
+
+SF-01：查一个不存在的单号，`4001`；创建，HTTP 200，`apiResultCode` 0，`success` 真，有 `sfWaybillNo`；再查，`4002`；取消，第一次 `success` 假，第二次（隔 3 秒）成功，备注里 `cancel attempts` 为 2；再查，`4001`。创建的访问日志一行里 `provider_reference_id` 是这次的 `customerOrderNo`，`provider_request_id` 是 `sfWaybillNo`。SF-02：同一份正文再创建，`code` `"123052"`，运单号不变。两张单，运单号 SF6043039280127 和 SF6043039280135，都取消了，没有剩下的。这一遍有 12 个请求到了承运商。经网关的耗时：查询 240 到 770 毫秒（第一次含取令牌），创建 387 到 1155 毫秒，取消 236 到 1701 毫秒。名字 `api-ifsp-sit.sf.global` 解析到 156.59.125.28。签名器和 `gateway-authz` 只连了 156.59.125.28:80。承运商的 `Date` 比这台机器慢 0.1 秒。`gateway-authz` 这一遍取了三次令牌，因为 SF-09 把进程换了两次，每个新进程取一次。沙箱令牌是固定的，没有作废。
+
+离开这台机器的，只有三个操作的正常请求。SF-10 在三份日志、标准输出和结果文件里没有找到 app key、应用密钥、AES 密钥、Gatekeeper 或 PDP 的令牌，也没有像访问令牌或 `Sf-OpenApi` 这种形状的值。提交说明里写了：另外扫了一遍工作区，三个沙箱值都不在。
+
 ## 证据（`--evidence`）
 
 只有带这个参数才写 `tests/integration/sfintl/evidence/`。对着替身是 `rig-standin.json`，对着沙箱是 `rig-sandbox.json`。和 `--mutate` 不能一起用。字段与万邦那套相同；`dataset` 里是 `reference_prefix`、`orders_created_and_cancelled`、`orders_left_uncancelled`（运单号）。写完再读一遍，里面有这次的秘密或 `Sf-OpenApi …;`、`auth_<8 个以上>`、`Bearer ` 加 16 个以上字符，就删掉文件、退出码非零。契约测试（`tests/contracts/test_sfintl_config.py`）看有的文件。
 
-`rig-standin.json` 是 2026-11-20 对着替身带 `--evidence` 的那一遍：14/14，284 项检查都过，26.1 秒，取消了 9 张单，没有剩下的。仓库提交是 `0dddab8`，`uncommitted_files` 是 6（证据目录本身不算进去；这次的改动还没提交，所以不是 0）。`rig-sandbox.json` 还没有。
+`rig-standin.json` 是 2026-11-20 在 `094c5e5` 上对着替身带 `--evidence` 的那一遍：14/14，284 项检查都过，没有跳过，25.5 秒，取消了 9 张单，没有剩下的。`uncommitted_files` 是 0。`rig-sandbox.json` 是上面第二遍，同一提交，未提交文件数也是 0。
 
 ## 没有做的
 
-- **`--sandbox` 的结果**不在这个文件里。
-- **`pool.py`** 没有写。SF-11（出口规则）留着。`run.py` 里的 `HOOKS` 是留给以后在单机池上跑的。
+- **`pool.py`** 没有写。SF-11（出口规则）留着。`run.py` 里的 `HOOKS` 是留给以后在单机池上跑的。单机池的叠加 compose、`gateway-control publish`、签名器自己的出口规则，都没有做。
 - **请求头名单的对照**没有做，原因在上面。
 - **到承运商的 TLS** 没有验。沙箱是明文 HTTP。
 - **面单**（`IECS_PRINT_ORDER`）和别的 `msgType`。
-- **几个 `gateway-authz` 一起取同一个应用的令牌**。
+- **几个 `gateway-authz` 一起取同一个应用的令牌**，一次重启也是一次新的取令牌，生产上会作废前一枚。沙箱令牌是固定的，验不了。
+- **`gateway-authz` 到令牌端点的连接没有出口规则。**
+- **取令牌失败只记一个类别**，第一遍的两次 `unreachable` 分不出更细的原因。
+- **`--carrier-timeout` 不短于 9 秒时程序不拒绝**（对照 `signer-long-timeout`）。
+- **发给承运商的请求还带着 Go 默认的 `User-Agent` 和 `Accept-Encoding: gzip`。** 替身只记下了头名。
