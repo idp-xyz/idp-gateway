@@ -30,7 +30,7 @@ tests/integration/gatekeeper/stack.sh up                                   # 本
 - **默认**：两个租户各有一个账户（替身上两个应用，`app_key`、`app_secret`、43 字符的 `encoding_aes_key`、`api_username` 每次随机）。全部检查都做。
 - **`--sandbox --sandbox-credentials 文件`**：上游是承运商的沙箱（`api-ifsp-sit.sf.global`，明文 HTTP）。文件是 `{"app_key", "app_secret", "encoding_aes_key", "api_username"}`，0600，在仓库之外（在仓库里、权限宽于 0600、不是这四个字段，都拒绝）。一个应用，登记给 blue；green 没有账户。应用文件由套件包一层，写进临时目录（0700，文件 0600），结束时删掉。`gateway-authz` 的 `token_endpoint` 是 `http://api-ifsp-sit.sf.global/openapi/api/token`，并加 `--sf-openapi-plain-http-host api-ifsp-sit.sf.global`。签名器的 `--carrier-url` 是 `http://api-ifsp-sit.sf.global/openapi/api/dispatch`，并加 `--carrier-plain-http-host`。不起替身。
 
-  发到沙箱的只有三个操作的正常请求，凭证是文件里的那一份。`customerOrderNo` 是 `IDPGW-<UTC 日期>-<随机串>`。创建的正文与替身相同，是 2026-11-20 沙箱接受过的那一份（`apiUsername` 来自凭证文件）。凡是创建答了运单号的都记下，结束前取消。沙箱上，业务拒绝（HTTP 200、`apiResultCode` 0、`success` 假）会再试，直到接受，或从第一次尝试起过了 600 秒；间隔 3 秒、3 秒、6 秒，之后每次 10 秒。别的应答（网关的错误、签名器自己的错误、`apiResultCode` 不是 0）最多连着 6 次，每次隔 3 秒。替身上不睡，最多 6 次。消不掉的写在结果里，标准输出用一排感叹号标出，退出码非零。不发到沙箱的：错的或调用方自己塞的凭证、故障、轮换、故意写坏的正文（签名器在本机就拒绝的那些可以发，它们出不了这台机器）。
+  发到沙箱的只有三个操作的正常请求，凭证是文件里的那一份。`customerOrderNo` 是 `IDPGW-<UTC 日期>-<随机串>`。创建的正文与替身相同，是 2026-11-20 沙箱接受过的那一份（`apiUsername` 来自凭证文件）。凡是创建答了运单号的都记下，结束前取消。`--sandbox` 同时把每张单的创建和取消即时落盘到 `tests/integration/sfintl/.run/orders-<UTC 时间戳>-<进程号>.jsonl`（0600，只记时刻、事件、客单号、运单号、进程号，不含凭证），全部取消后自动删除；若运行中断或还有未取消的单，文件留着，下次 `--sandbox` 启动时会打印提醒。沙箱上，业务拒绝（HTTP 200、`apiResultCode` 0、`success` 假）会再试，直到接受，或从第一次尝试起过了 600 秒；间隔 3 秒、3 秒、6 秒，之后每次 10 秒。别的应答（网关的错误、签名器自己的错误、`apiResultCode` 不是 0）最多连着 6 次，每次隔 3 秒。替身上不睡，最多 6 次。消不掉的写在结果里，标准输出用一排感叹号标出，退出码非零。不发到沙箱的：错的或调用方自己塞的凭证、故障、轮换、故意写坏的正文（签名器在本机就拒绝的那些可以发，它们出不了这台机器）。
 
   结果里记：从网关进程去掉的代理变量名、沙箱的名字解析到的地址、**签名器**和 **`gateway-authz`** 连着的非回环地址（这两边才跟承运商说话）、每个调用的耗时。
 
@@ -199,7 +199,7 @@ SF-11 的备注：签名器的命名空间钉住 `sfintl-standin:8080`；网关�
 ## 没有做的
 
 - **池上不做 SF-09 和 SF-12**，原因在表里。这一遍的清理没有要做的（两张单在用例里取消了）。清理真的用满 600 秒，仍没有见过。
-- **建出来的订单号只放在内存里，跑完才写进结果。** 运行中被杀掉的那一次，留下的订单没有人叫得出单号。这是现在这份代码的事实。
+- **`orders-*.jsonl` 的中断留盘只在离线单元测试里验过，没有对着真实沙箱中途强杀验过。**
 - **请求头名单的对照**没有做，原因在上面。
 - **到承运商的 TLS** 没有验。沙箱是明文 HTTP。
 - **面单**（`IECS_PRINT_ORDER`）和别的 `msgType`。

@@ -474,6 +474,8 @@ def main() -> int:
     if args.sandbox and args.control:
         die('--control is for the stand-in only')
     sandbox, STANDIN, CONTROL_NAME = args.sandbox, not args.sandbox, args.control
+    if sandbox:
+        sf.open_sandbox_journal()
     for port in PORT.values():
         if sandbox and port == PORT['mock']:
             continue

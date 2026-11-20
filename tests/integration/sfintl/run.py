@@ -14,8 +14,8 @@ The rig, its processes, its Gatekeeper seed and its tokens are those of tests/in
 imported and used as it is (it is not changed). Ports are the same set plus 27618 for the signer, so this suite, the
 WanbExpress suites, the rig suite and the black-box suite do not run at once.
 Files the processes need are written to tests/integration/gatekeeper/.run/ (ignored) with names starting sfintl.;
-results go to tests/integration/sfintl/.run/. SF-11 is reserved for the pool and is not a case here. There is no pool.py yet;
-HOOKS is the seam a later one would use, the way tests/integration/wanbexpress/pool.py uses the WanbExpress suite.
+results go to tests/integration/sfintl/.run/. SF-11 is reserved for the pool and is not a case here. pool.py runs these cases
+on the single-host pool. HOOKS is the seam it uses, the way tests/integration/wanbexpress/pool.py uses the WanbExpress suite.
 """
 from __future__ import annotations
 import argparse, atexit, base64, datetime, email.utils, hashlib, shutil, tempfile, http.client, importlib.util, ipaddress, json, os, re, secrets, socket, ssl, stat, subprocess, sys, time
@@ -25,6 +25,13 @@ from urllib.parse import parse_qs, urlsplit
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 OUT = HERE / '.run'
+
+# Order numbers from a --sandbox run. Loaded by path: this file is a script, not a package.
+_journal_spec = importlib.util.spec_from_file_location('sfintl_order_journal', HERE / 'order_journal.py')
+journal = importlib.util.module_from_spec(_journal_spec)
+sys.modules['sfintl_order_journal'] = journal
+_journal_spec.loader.exec_module(journal)
+journal.DIRECTORY = OUT
 
 # The rig, as it is. Importing it reads the stack's environment and adds the certificate names the rig uses.
 _spec = importlib.util.spec_from_file_location('gk_rig', ROOT / 'tests/integration/gatekeeper/run.py')
@@ -626,10 +633,18 @@ def cancel_body(order_no: str, waybill: str) -> dict:
     return {'cancelReason': 'IDPGW test order', 'customerOrderNo': order_no, 'sfWaybillNo': waybill}
 
 
+def open_sandbox_journal() -> None:
+    """Start of a --sandbox run (run.py and pool.py). An earlier orders-*.jsonl is named and left where it is."""
+    note = journal.warning(journal.begin())
+    if note:
+        say(note)
+
+
 def remember(order_no: str, waybill: str | None):
     if isinstance(waybill, str) and waybill:
         ORDER_OF.setdefault(waybill, order_no)
         CREATED.setdefault(waybill, 'created')
+        journal.created(order_no, waybill)
 
 
 # What differs when the gateway runs in the pool: where requests go, where records, decisions and logs are read.
@@ -716,6 +731,7 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
         last, attempts, seconds = cancel_repeated(lambda: post(CANCELS, cancel_body(order_no, waybill), token), sandbox)
         if business(last).get('success') is True:
             CREATED[waybill] = 'cancelled'
+            journal.cancelled(order_no, waybill)
         return last, attempts, seconds
 
     def replace_apps(document: dict):
@@ -1499,41 +1515,46 @@ def cancel_repeated(send, patient: bool) -> tuple[dict, int, float]:
 
 def cancel_outstanding(state: dict):
     """Every order this run learned a waybill for, and any the stand-in still calls active, is cancelled.
-    Each order still outstanding gets its own budget, the same one the cases use."""
+    Each order still outstanding gets its own budget, the same one the cases use.
+    On the way out, a sandbox order journal is closed (removed only when every order in it was cancelled)."""
     # Requests are sent to HOOKS['gateway_port']. On the pool that is the published front, not the rig's 27611,
     # so the rig's port being closed must not skip the cleanup.
-    if not gk.port_open(HOOKS['gateway_port']):
-        return
-    if gk.port_open(gk.PORTS['provider']) and MOCK_SECRET:
-        try:
-            for item in standin_orders():
-                if item.get('state') != 'cancelled':
-                    remember(item.get('customer_order_no'), item.get('sf_waybill_no'))
-                    CREATED[item['sf_waybill_no']] = 'created'
-        except SystemExit:
-            raise
-        except Exception:
-            pass
-    pending = [waybill for waybill, status in CREATED.items() if status != 'cancelled']
-    if not pending:
-        return
-    token = gk.token_for(state['blue']['client'])
-    if not token:
-        return
-    STATE['label'] = 'cleanup'
-    patient = bool(PLAIN_HTTP_HOST[0])
-    for waybill in pending:
-        order_no = ORDER_OF.get(waybill)
-        if not order_no:
-            continue
+    try:
+        if not gk.port_open(HOOKS['gateway_port']):
+            return
+        if gk.port_open(gk.PORTS['provider']) and MOCK_SECRET:
+            try:
+                for item in standin_orders():
+                    if item.get('state') != 'cancelled':
+                        remember(item.get('customer_order_no'), item.get('sf_waybill_no'))
+                        CREATED[item['sf_waybill_no']] = 'created'
+            except SystemExit:
+                raise
+            except Exception:
+                pass
+        pending = [waybill for waybill, status in CREATED.items() if status != 'cancelled']
+        if not pending:
+            return
+        token = gk.token_for(state['blue']['client'])
+        if not token:
+            return
+        STATE['label'] = 'cleanup'
+        patient = bool(PLAIN_HTTP_HOST[0])
+        for waybill in pending:
+            order_no = ORDER_OF.get(waybill)
+            if not order_no:
+                continue
 
-        def send(order_no=order_no, waybill=waybill):
-            return req('POST', CANCELS, token, cancel_body(order_no, waybill), sample_peers=patient)
+            def send(order_no=order_no, waybill=waybill):
+                return req('POST', CANCELS, token, cancel_body(order_no, waybill), sample_peers=patient)
 
-        last, attempts, seconds = cancel_repeated(send, patient)
-        if business(last).get('success') is True:
-            CREATED[waybill] = 'cancelled'
-        CLEANUP_CANCELS.append({'customerOrderNo': order_no, 'sfWaybillNo': waybill, 'attempts': attempts, 'seconds': seconds})
+            last, attempts, seconds = cancel_repeated(send, patient)
+            if business(last).get('success') is True:
+                CREATED[waybill] = 'cancelled'
+                journal.cancelled(order_no, waybill)
+            CLEANUP_CANCELS.append({'customerOrderNo': order_no, 'sfWaybillNo': waybill, 'attempts': attempts, 'seconds': seconds})
+    finally:
+        journal.finish()
 
 
 def warn_uncancelled() -> list[str]:
@@ -1663,6 +1684,8 @@ def main() -> int:
         die('--mutate is for the stand-in only')
     global MOCK_SECRET
     OUT.mkdir(exist_ok=True)
+    if args.sandbox:
+        open_sandbox_journal()
     try:
         binary, reported = pin.resolve()
     except pin.PinError as e:
