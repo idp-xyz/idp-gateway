@@ -44,7 +44,7 @@ Publisher 和 Reconciler 可以通过 PostgreSQL Outbox + 独立 Worker 实现�
 
 ## 3. 配置、制品及发布流水线
 
-**CI**：Source → 源码/依赖扫描 → Schema/契约检查 → 静态授权负向检查 → Route/Policy 编译 → agentgateway 官方版本 CLI Schema/启动检查 → 临时环境 HTTP/ExtAuthZ PoC → 签名/摘要 → 人工或受控签核。  
+**CI**：Source → 源码/依赖扫描 → Schema/契约检查 → 静态授权负向检查 → Route/Policy 编译 → agentgateway 官方版本 CLI Schema/启动检查 → 临时环境 HTTP/ExtAuthZ PoC → 签名/摘要 → 由仓库所有者决定的放行。  
 **CD**：批准 Snapshot → 灰度池 → 运行观察 → 扩容分批 → 校验每实例摘要和健康 → 标 ACTIVE → 持续对账。任何真实运行测试没完成时，阶段证据不得标 PASS。
 
 `tests/evidence/` 只存真实测试证明或清楚标注的样例，不允许为了通过门禁编造日志、时间或性能数字；`scripts/validate_baseline.py` 是**离线文档与示例检查器**，不是 agentgateway 配置验收器。
@@ -99,14 +99,14 @@ Publisher 和 Reconciler 可以通过 PostgreSQL Outbox + 独立 Worker 实现�
 
 | 门禁 | 本项目需要的真实证据 | 当前 |
 |---|---|---|
-| STD-CP1 范围与采用 | Manifest、能力触发、Owner/风险/ADR 具名批准 | NOT_RUN |
+| STD-CP1 范围与采用 | Manifest、能力触发、采用情况与风险、ADR 的状态，由仓库所有者决定 | NOT_RUN |
 | STD-CP2 领域与事实 | 权威表、Context Map、模型、不变量与反例 | 设计稿待评审 |
 | STD-CP3 契约与恢复 | 真实 ExtAuthZ、Broker、gRPC/REST、故障恢复实测 | NOT_RUN |
 | STD-CP4 专业体验 | 本项目已有 Gateway Console；必须执行任务、可访问性、角色与权限测试 | NOT_RUN，不能 N/A |
 | STD-CP5 工程与质量 | 构建、测试、安全、性能、故障注入、镜像和 SBOM | NOT_RUN |
 | STD-CP6 发布与运营 | 运行手册、审批、演练、发布及发布后证据 | NOT_RUN |
 
-**不允许**将离线 JSON/YAML 解析检查等价为 CP5 PASS。CP4 不能未经审批自动标 N/A；CP6 的发布后验证未发生时必须保留 NOT_RUN。
+**不允许**将离线 JSON/YAML 解析检查等价为 CP5 PASS。CP4 不能未经仓库所有者决定自动标 N/A；CP6 的发布后验证未发生时必须保留 NOT_RUN。
 
 ## 9. 参考资料
 

@@ -3,7 +3,8 @@
   "baseline_version": "1.0.0",
   "date": "2026-11-10",
   "status": "DESIGN_DRAFT",
-  "approval": "NOT_APPROVED",
+  "approval": "NOT_USED",
+  "approval_rule": "2026-11-19, repository owner: no separate executor and approver, no named approval or formal sign-off. The repository owner decides; a status changes when evidence that can be checked is in the repository (what was run, on which commits and images, what was seen), not when someone signs.",
   "gate_status": {
     "STD-CP1": "NOT_RUN",
     "STD-CP2": "NOT_RUN",
@@ -28,7 +29,7 @@
       ],
       "report": "tests/acceptance/blackbox/README.md",
       "agentgateway_versions_run": ["1.7.0"],
-      "agentgateway_version_targeted": "1.7.0 (pinned in deploy/agentgateway/agentgateway.lock.json: the upstream container image by digest, and the SHA-256 of the binary inside it, which is the build the suites start; origin, licence and known vulnerabilities checked once on 2026-11-11 as recorded in deploy/agentgateway/README.md; image signature not verified; named approval per G05 §7 not done)",
+      "agentgateway_version_targeted": "1.7.0 (pinned in deploy/agentgateway/agentgateway.lock.json: the upstream container image by digest, and the SHA-256 of the binary inside it, which is the build the suites start; origin, licence and known vulnerabilities checked once on 2026-11-11 as recorded in deploy/agentgateway/README.md; image signature not verified; no separate approval step)",
       "gatekeeper": "MOCK (no Gatekeeper implementation was available; mutual TLS to the mock is real)",
       "local_broker": "MOCK",
       "provider": "MOCK",
@@ -47,26 +48,25 @@
         "new console pages or UX cases"
       ],
       "lift_when": [
-        "open findings in tests/acceptance/blackbox/README.md are resolved or explicitly accepted",
-        "ADR-0008 is approved by named owners",
-        "a named product owner confirms whether the console is in delivery scope"
+        "open findings in tests/acceptance/blackbox/README.md are resolved or explicitly accepted by the repository owner",
+        "the repository owner decides ADR-0008",
+        "the repository owner decides whether the console is in delivery scope"
       ],
-      "decided_by": "UNASSIGNED-GOV"
+      "decided_by": "repository owner"
     }
   },
   "profile_notes": {
     "AI": "TRIGGERED because AI traffic is in declared scope; verify detailed applicability and actual implementation",
     "BENTO_GO": "Not selected/verified; only include after actual component and version confirmation"
   },
-  "blocking_manifest_placeholders": [
-    "legal_entities",
-    "jurisdictions",
-    "toolchain",
-    "owners"
+  "manifest_placeholders_left_open_on_purpose": [
+    "owners (UNASSIGNED-*): this project does not assign the eight responsible-party roles",
+    "legal_entities, jurisdictions (UNRESOLVED-*): not invented",
+    "toolchain: to be filled when the Go toolchain is pinned"
   ],
   "warnings": [
-    "Manifest passes official JSON Schema shape, but contains explicit unresolved placeholders: cannot pass semantic adoption or CP1.",
-    "No ADR formally approved; decisions array intentionally empty.",
-    "No runtime acceptance evidence is claimed. The P1 PoC under \"poc\" ran against a mock Gatekeeper and a mock provider and is not acceptance evidence."
+    "The manifest keeps the structure of IDP-SCG-STD-001 and passes its JSON Schema; the UNASSIGNED-* and UNRESOLVED-* placeholders are left open on purpose and do not block anything.",
+    "All ADRs referred to by the baseline are still Proposed; the repository owner decides their status. The decisions array is intentionally empty.",
+    "No gate or acceptance case has been re-evaluated against its evidence yet: the statuses above are unchanged. The P1 PoC under \"poc\" ran against a mock Gatekeeper and a mock provider; later suites (tests/integration/gatekeeper, tests/integration/wanbexpress) used a real Gatekeeper and a real carrier sandbox, see docs/governance/README.md."
   ]
 }

@@ -16,7 +16,7 @@
 | V2 | 认证与策略 | Gatekeeper 真/测试 JWT、真实 Gateway ExtAuthZ 对接 | 正负请求、认证决策、Secret 泄密检查 |
 | V3 | 真实 Provider Sandbox | 2 租户/2 账户/创建与查询操作 | Trace、Provider correlation、外部确认 |
 | V4 | 高可用与性能 | 多副本、故障注入、负载生成器 | 资源、延迟分布、错误率、持续时间 |
-| V5 | 安全与发布 | SSRF、账户越权、密钥轮换、生产发布恢复 | 具名批准、PoC 证据、运维演练 |
+| V5 | 安全与发布 | SSRF、账户越权、密钥轮换、生产发布恢复 | PoC 证据、运维演练 |
 
 V0 不包含企业级漏洞扫描、网关运行测试、服务认证性能或生产条件。若某项因契约变化失效，应按变更影响重验，不要求所有无关测试机械重跑。
 
@@ -55,7 +55,9 @@ V0 不包含企业级漏洞扫描、网关运行测试、服务认证性能或�
 - **Provider Sandbox**：真实 Provider 沙箱账号、两个独立账户、隔离 token，测试数据合法；不可在不具备合同授权时自行模拟成官方 API。
 - **Pre-Production**：与生产一致的网关配置发布方式、硬件/SLO、故障域和回滚机制。
 
-必须在测试报告记录 `agentgateway image digest`、`Gatekeeper commit`、`Gateway adapter commit`、`Policy digest`、`Env`、`Clock`、`Dataset`、`Operator`、`Evidence URIs`。没有这些元数据无法复现时，证据状态为不充分而不是 PASS。
+必须在测试报告记录 `agentgateway image digest`、`Gatekeeper commit`、`Gateway adapter commit`、`Policy digest`、`Env`、`Clock`、`Dataset`、`Evidence URIs`。没有这些元数据无法复现时，证据状态为不充分而不是 PASS。
+
+2026-11-19 仓库所有者定：本项目不要求执行人与批准人分离，不记执行人，也没有具名批准或正式签核；一项验证算不算做过，看这些可以核对的证据，由仓库所有者决定（见 [governance/README.md](governance/README.md)）。同一天他说现在是开发阶段，不考虑生产部署，所以下面 D3、D4 现在不在工作范围里。
 
 ## 5. 安全测试与外部权限
 
@@ -69,7 +71,7 @@ V0 不包含企业级漏洞扫描、网关运行测试、服务认证性能或�
 | D1 功能 PoC | D0 已评审/必要风险已确认 | JWT/AuthZ、L7、Token 负向测试真实通过 | NOT_RUN |
 | D2 Provider Sandbox | D1 通过 | 多租户账户、失效/刷新、结果不确定真实通过 | NOT_RUN |
 | D3 生产候选 | D2 通过 | 性能/安全/HA/回滚/运维实测达批准 SLO | NOT_RUN |
-| D4 正式发布 | STD-CP1–CP5 适用门禁有效 | 有权审批 + 受控发布 + 发布后真实验证 | NOT_RUN |
+| D4 正式发布 | STD-CP1–CP5 适用门禁有效 | 仓库所有者决定 + 受控发布 + 发布后真实验证 | NOT_RUN |
 
 ## 7. 交付包目录与审查清单
 
@@ -77,7 +79,7 @@ V0 不包含企业级漏洞扫描、网关运行测试、服务认证性能或�
 - **ADR**：明确选型、Ingress/Egress/AI 分池、Gatekeeper 认证/凭证、Fabric 发布边界、BIP 取消、Runtime/失败策略、ACL。
 - **机器资产**：Gatekeeper OpenAPI、RouteIntent JSON Schema、AuthZ Decision Schema、Policy 样例、agentgateway 本地示例、Mock 数据。
 - **测试**：`tests/acceptance/acceptance_matrix.csv`、安全与契约离线测试、真实测试证据目录 `tests/evidence/`。
-- **Manifest**：技术 Profile 采用及六门禁的候选状态，**具名责任人与审批不得虚构**。
+- **Manifest**：技术 Profile 采用及六门禁的候选状态，`UNASSIGNED-*` 占位有意留着，不虚构责任人、法人、法域，也不虚构批准。
 - **引用资料**：官方文档来源、规范版本、依赖和技术适用性保留条件。
 
 ## 8. 当前版本已验证与未验证
@@ -125,7 +127,7 @@ V0 不包含企业级漏洞扫描、网关运行测试、服务认证性能或�
 | C. Traffic/Protocol | 配额、并发、健康/熔断、HTTP/gRPC/SSE、异常处理 | 异常状态可区分且可恢复 |
 | D. Rollout/Resilience | Canary、Partial/Unknown、漂移、故障回滚 | 恢复有效批准快照并重新观察 |
 | E. Observability/Security | 四阶段证据采集精度、脱敏前拦截、服务端 ABAC | 禁止未授权正文泄露 |
-| F. Formal Signoff | STD-CP1–CP6 具名门禁与运营接收 | 无签核不得生产 |
+| F. Release Decision | STD-CP1–CP6 各自的证据与运营接收，由仓库所有者决定 | 证据不全不得生产 |
 
 
 ## Message Inspector Request / Response 专项验收

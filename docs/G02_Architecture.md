@@ -1,6 +1,6 @@
 # G02 — IDP Gateway 系统架构、DDD 边界与部署设计
 
-> **编号** G02 · Architecture · **版本** V1.0 · 2026-11-10 · **状态** DESIGN_DRAFT / 架构批准 NOT_RUN  
+> **编号** G02 · Architecture · **版本** V1.0 · 2026-11-10 · **状态** DESIGN_DRAFT / 架构决定 NOT_RUN（由仓库所有者决定）  
 > **关联** G01 范围、G03 路由、G04 安全、G05 工程、G06 验收；上位标准 IDP-SCG-STD-001。
 
 ## 0. 不可混淆的三个平面
@@ -106,7 +106,7 @@ agentgateway 1.7.x 官方提供 HTTP/TCP 路由、JWT/JWKS、ExtAuthZ、Backend 
 
 ## 8. 架构依赖治理与 ADR
 
-参照 `docs/adr/ADR-0001` 至 `ADR-0007`（均为 **Proposed**），由架构/安全/业务/运维具名批准后才能转为 Accepted。参考上游官方文档的 URL 见 G05 末尾。G02 为设计基线，不得被理解为已存在真正部署的 Gateway/Gatekeeper/Token Broker。
+参照 `docs/adr/ADR-0001` 至 `ADR-0007`（均为 **Proposed**），由仓库所有者决定后才转为 Accepted。参考上游官方文档的 URL 见 G05 末尾。G02 为设计基线，不得被理解为已存在真正部署的 Gateway/Gatekeeper/Token Broker。
 
 
 ## 9. Gateway Operations 管理界面架构补充（G02 · V1.0 同版更新）

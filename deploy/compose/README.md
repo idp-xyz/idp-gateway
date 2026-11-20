@@ -1,6 +1,6 @@
 # 单机上的一个网关池（docker compose）
 
-运行平台的第一期是单机上的 docker compose（[ADR-0010](../../docs/adr/ADR-0010.md) 第 10 条；这篇 ADR 是建议，待具名批准）。这个目录是它的部署文件：一台机器上的一个池，池里一个网关实例。
+运行平台的第一期是单机上的 docker compose（[ADR-0010](../../docs/adr/ADR-0010.md) 第 10 条；这篇 ADR 是建议，仍是 Proposed）。这个目录是它的部署文件：一台机器上的一个池，池里一个网关实例。
 
 > **单点。** 这台机器或它的 docker 停了，经它出去的调用全部中断。作为第一期可以接受；G01 要的分池和高可用，要到多机或 Kubernetes 才谈得上。  
 > **验证到哪一步。** [`tests/integration/compose`](../../tests/integration/compose/README.md) 跑的就是这里的 `compose.yml`，看守也是对着它跑的。其中"断电"是把容器强行杀掉来模拟的：真的重启一台机器没有做过。两个 systemd 单元没有装到哪台机器上跑过：它们之间的关系在用户级的 systemd 里用替身跑过，它们里面写的命令不经 systemd 原样跑过。见文末"没有验证的"。
