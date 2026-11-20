@@ -45,7 +45,7 @@ V0 不包含企业级漏洞扫描、网关运行测试、服务认证性能或�
 | 出站网络 | SSRF、重定向、DNS 重绑定、内网/IPv6 | Block P2 |
 | gRPC HTTP | Streaming、超时、Header/Body、Provider Error | 按已承诺协议阻断 |
 | 异步及故障 | 重试副作用、代理失效、配置漂移、Broker 超时 | Block 生产 |
-| 效率与 SLO | direct vs gateway 三类基线 | 超出经批准预算阻断 |
+| 效率与 SLO | direct vs gateway 三类基线 | 超出仓库所有者定的预算阻断 |
 | 运营 | 发布/回滚、Secret 轮换、值守 | Block CP6 |
 
 ## 4. 验收所需环境
@@ -70,7 +70,7 @@ V0 不包含企业级漏洞扫描、网关运行测试、服务认证性能或�
 | D0 文档候选基线 | G01–G06 与机器契约成形 | 文档 QA 成功，ADR/Manifest 仍可 Proposed | 静态检查可执行，设计待审 |
 | D1 功能 PoC | D0 已评审/必要风险已确认 | JWT/AuthZ、L7、Token 负向测试真实通过 | NOT_RUN |
 | D2 Provider Sandbox | D1 通过 | 多租户账户、失效/刷新、结果不确定真实通过 | NOT_RUN |
-| D3 生产候选 | D2 通过 | 性能/安全/HA/回滚/运维实测达批准 SLO | NOT_RUN |
+| D3 生产候选 | D2 通过 | 性能/安全/HA/回滚/运维实测达仓库所有者定的 SLO | NOT_RUN |
 | D4 正式发布 | STD-CP1–CP5 适用门禁有效 | 仓库所有者决定 + 受控发布 + 发布后真实验证 | NOT_RUN |
 
 ## 7. 交付包目录与审查清单
