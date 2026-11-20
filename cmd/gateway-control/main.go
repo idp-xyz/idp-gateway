@@ -35,7 +35,14 @@
 //
 // 它不改配置文件，也不改锁定的镜像。结局和退出码在 reimage.go 的开头。
 //
-// 它们的结局和退出码在 revoke.go、history.go、jwks.go、compile.go、reimage.go 的开头写着；下面说的退出码是前五条命令的，加上 rollback。
+// 另有一条签发或轮换发布器出示给回读口的客户端证书（issue_publisher_cert.go，ADR-0010 V1.10）：
+//
+//	gateway-control issue-publisher-cert --ca-cert <pem> --ca-key <pem> --identity <spiffe URI> --out-cert <path> --out-key <path> [--days 30]
+//
+// 它只写这对叶子。网关信任的 CA 不变，所以不用改网关配置，也不用重启网关；锁定的镜像不动。
+// 正在跑的进程不重载 TLS。结局和退出码在 issue_publisher_cert.go 的开头。
+//
+// 它们的结局和退出码在 revoke.go、history.go、jwks.go、compile.go、reimage.go、issue_publisher_cert.go 的开头写着；下面说的退出码是前五条命令的，加上 rollback。
 //
 // publish 把一份网关配置发布到池里，网关不重启。restart 发布一份要重启网关才能全部生效的配置
 // （启动设置变了的那种），会让这个池中断一下；不给 --snapshot 时，用的是这个池上最后一次得到确认的那一份。
@@ -173,9 +180,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, docker do
 	if len(args) > 0 && args[0] == commandReimage {
 		return runReimage(ctx, args[1:], stdout, stderr, docker)
 	}
+	if len(args) > 0 && args[0] == commandIssuePublisherCert {
+		return runIssuePublisherCert(args[1:], stdout, stderr)
+	}
 	if len(args) == 0 || !known[args[0]] {
 		fmt.Fprintln(stderr, "usage: gateway-control publish|restart|reconcile|place|keep [flags]   (gateway-control <command> --help lists them)")
 		fmt.Fprintln(stderr, "       gateway-control reimage --image <repository>@sha256:<64 hex> --container <name> --config-dir <abs> --mount <container path> --compose-file <file> --compose-env-file <file> --service agentgateway --read-back <host:port> --read-back-name <name> --tls-cert --tls-key --tls-ca")
+		fmt.Fprintln(stderr, "       gateway-control issue-publisher-cert --ca-cert <pem> --ca-key <pem> --identity <spiffe URI> --out-cert <path> --out-key <path> [--days 30]")
 		fmt.Fprintln(stderr, "       gateway-control compile --spec <file> --output-gateway <file> --output-policy <file>")
 		fmt.Fprintln(stderr, "       gateway-control compile --preflight-only --intents <file> [--provider-registry <file>]")
 		fmt.Fprintln(stderr, "       gateway-control revoke|restore|revocations [flags]   (revoke or lift the revocation of a Provider account in gateway-authz, or read its table)")

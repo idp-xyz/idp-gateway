@@ -3,6 +3,7 @@
 //
 // 身份是证书 subjectAltName 里的 URI（SPIFFE 风格）。这里不接 SPIFFE Workload API，
 // 证书和 CA 在启动时从文件读一次，没有轮换，也不查吊销。
+// IssuePublisherCert 把新叶子写到文件里给下一次进程读，不在这个进程里重载。
 package workloadtls
 
 import (
