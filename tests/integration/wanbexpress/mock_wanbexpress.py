@@ -22,12 +22,16 @@ an Accept that is not application/json is refused with 406 (the sandbox answers 
 Other assumptions of ours:
   - a DELETE of a confirmed parcel is HTTP 200, Succeeded false, Error.Code 0x100002;
   - the body of a create is checked for ReferenceId (a string), ShippingAddress (an object) and a non-empty ItemDetails only.
+Faults, for the cases that need the carrier to misbehave (default: none; each is for the next create only, then it is gone):
+  POST /admin/fault?kind=slow&seconds=N   the next create is made, and its answer is held back for N seconds;
+  POST /admin/fault?kind=cut              the next create is made, and the answer is cut off half way through its body (connection closed).
+GET /admin/parcels lists what exists: [{reference_id, process_code, status}], no account and no body.
 Every request is recorded as the mock received it (method, raw target, every header in order, body length and hash,
 ReferenceId), for the suite to read at /admin/hits with the admin secret. The recorded headers hold the credential;
 the mock writes nothing to stderr, and the suite keeps the records out of its own output.
 """
 from __future__ import annotations
-import argparse, hashlib, json, re, threading, time
+import argparse, hashlib, json, re, socket, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -38,6 +42,7 @@ PARCELS: dict[str, dict] = {}      # process code -> {account, reference, status
 REFERENCES: dict[str, str] = {}    # reference id -> process code: unique across accounts
 LOCK = threading.Lock()
 CFG: dict = {}
+FAULT: dict = {}                   # the fault for the next create, or empty
 SERIAL = [38000]
 
 
@@ -52,8 +57,10 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
-    def _send(self, status: int, payload: dict | None):
+    def _send(self, status: int, payload: dict | None, fault: dict | None = None):
         body = b'' if payload is None else json.dumps(payload).encode()
+        if fault and fault['kind'] == 'slow':
+            time.sleep(fault['seconds'])
         self.send_response(status)
         if payload is not None:
             self.send_header('Content-Type', 'application/json; charset=utf-8')
@@ -61,8 +68,17 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('X-Mock-Provider', 'wanbexpress')
         # What a provider must not be able to do to the caller (tests the gateway's response header removal).
         self.send_header('Set-Cookie', 'carrier_session=mock; Path=/')
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.end_headers()
+            if fault and fault['kind'] == 'cut':
+                self.wfile.write(body[:len(body) // 2])
+                self.wfile.flush()
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_RDWR)
+            else:
+                self.wfile.write(body)
+        except OSError:       # the caller (the gateway) gave up on a held-back answer: nothing to say
+            self.close_connection = True
 
     def _handle(self):
         length = int(self.headers.get('Content-Length') or 0)
@@ -75,6 +91,17 @@ class Handler(BaseHTTPRequestHandler):
             if parts.path == '/admin/reset':
                 with LOCK:
                     HITS.clear()
+                    FAULT.clear()
+                return self._send(200, {'ok': True})
+            if parts.path == '/admin/parcels':
+                with LOCK:
+                    return self._send(200, {'parcels': [{'reference_id': p['reference'], 'process_code': c, 'status': p['status']} for c, p in PARCELS.items()]})
+            if parts.path == '/admin/fault':
+                query = dict(q.split('=', 1) for q in parts.query.split('&') if '=' in q)
+                with LOCK:
+                    FAULT.clear()
+                    if query.get('kind') in ('slow', 'cut'):
+                        FAULT.update(kind=query['kind'], seconds=float(query.get('seconds') or 0))
                 return self._send(200, {'ok': True})
             return self._send(404, {})
         reference = None
@@ -120,21 +147,25 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, failure('0x100000', 'Invalid parcel'))
         reference = parsed['ReferenceId']
         with LOCK:
+            fault = dict(FAULT) or None       # the answer is sent outside the lock: a held-back one must not stop the other requests
+            FAULT.clear()
             if reference in REFERENCES:
                 known = PARCELS[REFERENCES[reference]]
                 if known['body'] == parsed:    # measured at the sandbox: the same body is answered with the parcel that exists
-                    return self._send(200, {'Data': {'ProcessCode': REFERENCES[reference], 'ReferenceId': reference, 'Status': known['status']},
-                                            'Succeeded': True, 'Error': None})
-                answer = failure('0x100005', f'ReferenceId {reference} already exists, process code {REFERENCES[reference]}')
-                return self._send(200, answer)
-            SERIAL[0] += 1
-            code = f'SBXPAA{SERIAL[0]:010d}YQ'
-            status = 'Confirmed' if parsed.get('AutoConfirm') is True else 'Original'
-            REFERENCES[reference] = code
-            PARCELS[code] = {'account': account, 'reference': reference, 'status': status, 'body': parsed}
-        return self._send(200, {'Data': {'ProcessCode': code, 'IndexNumber': f'9001{SERIAL[0]:010d}', 'ReferenceId': reference,
-                                         'TrackingNumber': '', 'IsVirtualTrackingNumber': False, 'SortCode': '',
-                                         'IsRemoteArea': False, 'Status': status}, 'Succeeded': True, 'Error': None})
+                    answer = {'Data': {'ProcessCode': REFERENCES[reference], 'ReferenceId': reference, 'Status': known['status']},
+                              'Succeeded': True, 'Error': None}
+                else:
+                    answer = failure('0x100005', f'ReferenceId {reference} already exists, process code {REFERENCES[reference]}')
+            else:
+                SERIAL[0] += 1
+                code = f'SBXPAA{SERIAL[0]:010d}YQ'
+                status = 'Confirmed' if parsed.get('AutoConfirm') is True else 'Original'
+                REFERENCES[reference] = code
+                PARCELS[code] = {'account': account, 'reference': reference, 'status': status, 'body': parsed}
+                answer = {'Data': {'ProcessCode': code, 'IndexNumber': f'9001{SERIAL[0]:010d}', 'ReferenceId': reference,
+                                   'TrackingNumber': '', 'IsVirtualTrackingNumber': False, 'SortCode': '',
+                                   'IsRemoteArea': False, 'Status': status}, 'Succeeded': True, 'Error': None}
+        return self._send(200, answer, fault)
 
     def _one(self, account: str, code: str):
         with LOCK:

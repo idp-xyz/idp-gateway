@@ -344,7 +344,10 @@ def main() -> int:
     parser.add_argument('--sandbox-credentials')
     parser.add_argument('--control', choices=['no-egress', 'no-pdp-tls'], help='a deliberate break, stand-in only')
     parser.add_argument('--mutate', choices=sorted(wb.MUTATIONS))
+    parser.add_argument('--evidence', action='store_true', help='write tests/integration/wanbexpress/evidence/pool-{sandbox,standin}.json (only with this flag)')
     args = parser.parse_args()
+    if args.evidence and (args.control or args.mutate):
+        die('--evidence is for a run of the real configuration, not for a control')
     if args.sandbox != bool(args.sandbox_credentials):
         die('--sandbox and --sandbox-credentials go together')
     if args.sandbox and (args.control or args.mutate):
@@ -412,7 +415,10 @@ def run(args, made: dict, sandbox: bool, reported: dict) -> int:
         return 1
 
     wb.HOOKS.update(second_authorization_reaches_the_gateway=False, gateway_port=PORT['front'], mock_port=PORT['mock'], decisions=pool_decisions, peers=pool_peers,
-                    skip_wb09='the pool runs the product build of gateway-authz; WB-09 swaps in the acceptance build')
+                    skip_wb09='the pool runs the product build of gateway-authz; WB-09 swaps in the acceptance build',
+                    skip_extra={'WB-12': 'the pool starts gateway-authz without --revocations and --revoker-identity (deploy/compose/gateway-authz.yml does not wire them), so gateway-control has nothing to revoke through; the pool\'s deployment files are not changed for this case',
+                                'WB-13': 'the pool gives the stand-in one token per account in a state file at start and gateway-authz its credentials in a mount of its own, not the way the rig does; the pool\'s deployment files are not changed for this case',
+                                'WB-14': 'the stand-in\'s fault switch is used through the rig\'s admin call only; not exercised in the pool, whose deployment files are not changed for this case'})
     wb.MOCK_SECRET = made['mock_secret']
     tok_blue = gk.token_for(state['blue']['client'])
     # ready: past 401 (the JWKS is read from the file at once), and an answer from gateway-authz (403: allowed, refused by the path rule)
@@ -471,8 +477,16 @@ def run(args, made: dict, sandbox: bool, reported: dict) -> int:
         wb.say(f"    {c['case']:6} {c['call']:55} {c['status']}  {c['ms']}")
     if uncleaned:
         wb.say('\n' + '!' * 70 + f'\n!! PARCELS THAT WERE CREATED AND NOT DELETED: {uncleaned}\n!! Delete them by hand at the carrier.\n' + '!' * 70)
+    kept = True
+    if args.evidence:
+        egress = record.get('egress') or {}
+        upstream = record['upstream'] | {'name_resolved_and_pinned_by_the_egress_rules_to': (egress.get('pinned') or {}).get(egress.get('upstream_name'))}
+        kept = wb.write_evidence(f"pool-{'sandbox' if sandbox else 'standin'}.json",
+                                 wb.evidence_document('pool: deploy/compose with gateway-authz.yml, the configuration published by gateway-control, callers through front, the egress rules in force; the PDP is the local Gatekeeper stack',
+                                                      sandbox, started_at, record['finished_at'], reported, results, upstream,
+                                                      {'in_the_containers': proxies, 'present_in_the_containers': any(proxies.values())}, GATEWAY_IMAGE), made, state)
     wb.say(f"\n{len(results.cases) - len(failed)}/{len(results.cases)} ({mode}); results in {name}")
-    return int(bool(failed) or bool(uncleaned))
+    return int(bool(failed) or bool(uncleaned) or not kept)
 
 
 if __name__ == '__main__':

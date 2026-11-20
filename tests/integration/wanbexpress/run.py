@@ -14,7 +14,7 @@ imported and used as it is (it is not changed). Ports are the same set, so this 
 Files the processes need are written to tests/integration/gatekeeper/.run/ (ignored); results go to tests/integration/wanbexpress/.run/.
 """
 from __future__ import annotations
-import argparse, atexit, datetime, shutil, tempfile, http.client, importlib.util, ipaddress, json, os, re, secrets, socket, stat, subprocess, sys, time
+import argparse, atexit, datetime, email.utils, hashlib, shutil, tempfile, http.client, importlib.util, ipaddress, json, os, re, secrets, socket, stat, subprocess, sys, time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -53,7 +53,17 @@ MUTATIONS = {
     'no-accept': ("        set:\n          accept: application/json\n", '', 4),
     'no-header-filter': (HEADER_FILTER, '', 4),
     'delete-any-method': ("    method: DELETE\n", '', 1),
+    # The create route with a retry policy (agentgateway 1.7.0 has `retry`): WB-14 has to fail, the carrier receives more than one POST.
+    'create-retry': ("    # No retry policy on purpose. A create that times out has an unknown result; the same ReferenceId answers 0x100005 if it did go through.\n"
+                     "    timeout:\n      requestTimeout: 9s\n",
+                     "    retry:\n      attempts: 2\n      codes: [502, 503, 504]\n    timeout:\n      requestTimeout: 9s\n      backendRequestTimeout: 4s\n", 1),
 }
+# Controls that do not change the configuration file: gateway-authz is started without --revocations (WB-12 has to fail).
+OTHER_CONTROLS = ('no-revocations',)
+REVOCATIONS = RUN / 'wanbexpress.revocations.json'      # gateway-authz's own table of revoked accounts (ADR-0012)
+NOTHING_REVOKED = '{"epoch": 0, "revoked_accounts": {}}\n'
+USE_REVOCATIONS = [True]
+EVIDENCE = HERE / 'evidence'
 
 OUTPUT: list[str] = []
 
@@ -142,8 +152,8 @@ def write(name: str, content: str) -> Path:
     return path
 
 
-def build(tags: list[str], target: str):
-    done = subprocess.run([GO, 'build', '-trimpath', *tags, '-o', str(RUN / target), './cmd/gateway-authz'], cwd=ROOT, capture_output=True, text=True)
+def build(tags: list[str], target: str, package: str = './cmd/gateway-authz'):
+    done = subprocess.run([GO, 'build', '-trimpath', *tags, '-o', str(RUN / target), package], cwd=ROOT, capture_output=True, text=True)
     if done.returncode != 0:
         die('gateway-authz build failed:\n' + done.stderr[-1500:])
 
@@ -204,7 +214,7 @@ def gateway_config(sandbox: bool, mutation: str | None, pool: bool = False) -> s
     changes = [] if pool else list(RIG_VALUES)
     if not sandbox:
         changes.append((UPSTREAM, POOL_STANDIN if pool else STANDIN, 4))
-    if mutation:
+    if mutation in MUTATIONS:
         changes.append(MUTATIONS[mutation])
     for old, new, times in changes:
         if text.count(old) != times:
@@ -221,6 +231,8 @@ def start_authz(binary: str, extra_env: dict | None = None):
             '--gatekeeper-url', gk.PDP_URL, '--gatekeeper-token-file', str(RUN / 'pdp-token'),
             '--gatekeeper-tls-cert', str(gk.TLS / 'gateway-authz.crt'), '--gatekeeper-tls-key', str(gk.TLS / 'gateway-authz.key'),
             '--gatekeeper-tls-ca', str(gk.TLS / 'ca.crt'), '--gatekeeper-name', gk.PDP_NAME]
+    if USE_REVOCATIONS[0]:
+        argv += ['--revocations', str(REVOCATIONS), '--revoker-identity', pki.ID['revoker']]
     gk.start('gateway-authz', argv, gk.PORTS['authz'], env={**os.environ, **(extra_env or {})})
 
 
@@ -296,8 +308,8 @@ def req(method: str, path: str, token: str | None = None, body=None, headers=(),
             conn.putheader('Content-Length', str(len(data)))
         conn.endheaders(data)
         response = conn.getresponse()
+        answer.update(status=response.status, headers=[(k.lower(), v) for k, v in response.getheaders()], received_at=time.time())
         raw = response.read()
-        answer.update(status=response.status, headers=[(k.lower(), v) for k, v in response.getheaders()])
         try:
             answer['json'] = json.loads(raw)
         except ValueError:
@@ -305,7 +317,7 @@ def req(method: str, path: str, token: str | None = None, body=None, headers=(),
         if sample_peers:
             PEERS.update((HOOKS['peers'] or gateway_peers)())
         conn.close()
-    except OSError as e:
+    except (OSError, http.client.HTTPException) as e:      # a connection cut off, or an answer that ends before its Content-Length
         answer['error'] = type(e).__name__
     answer['ms'] = round((time.perf_counter() - started) * 1000, 1)
     shown = re.sub(r'/parcels/[^/?]+', '/parcels/{processCode}', path.split('?')[0]) if len(path) < 80 else '(long path)'
@@ -326,6 +338,40 @@ def standin_hits() -> list:
 
 def standin_reset():
     gk.call('POST', f"http://127.0.0.1:{HOOKS['mock_port']}/admin/reset", headers={'X-Poc-Admin': MOCK_SECRET}, form={})
+
+
+def standin_fault(kind: str, seconds: float = 0):
+    """The stand-in's fault for the next create only: 'slow' (hold the answer back) or 'cut' (cut it off half way)."""
+    gk.call('POST', f"http://127.0.0.1:{HOOKS['mock_port']}/admin/fault?kind={kind}&seconds={seconds}", headers={'X-Poc-Admin': MOCK_SECRET}, form={})
+
+
+def standin_parcels() -> list:
+    status, body = gk.call('GET', f"http://127.0.0.1:{HOOKS['mock_port']}/admin/parcels", headers={'X-Poc-Admin': MOCK_SECRET})
+    return body['parcels'] if status == 200 else die('cannot read the stand-in\'s parcels')
+
+
+CONTROL_BINARY = RUN / 'gateway-control'
+CLOCK: dict = {}          # the carrier's Date header of one answer and how far it is from this machine's clock
+
+
+def control(*args: str) -> dict:
+    """gateway-control, the product's own command, against this run's gateway-authz, under the revoker's certificate.
+    -> {'code', 'json'}; json is None unless standard output is exactly one line of JSON. What it prints is not kept."""
+    argv = [str(CONTROL_BINARY), *args, '--authz', f"127.0.0.1:{gk.PORTS['authz']}", '--authz-name', pki.GATEKEEPER_NAME,
+            '--tls-cert', str(gk.TLS / 'revoker.crt'), '--tls-key', str(gk.TLS / 'revoker.key'), '--tls-ca', str(gk.TLS / 'ca.crt'), '--timeout', '5s']
+    done = subprocess.run(argv, cwd=ROOT, capture_output=True, text=True, timeout=60)
+    parsed = None
+    if done.stdout.count('\n') == 1:
+        try:
+            parsed = json.loads(done.stdout)
+        except ValueError:
+            pass
+    return {'code': done.returncode, 'json': parsed if isinstance(parsed, dict) else None, 'said': done.stderr.strip().splitlines()[-1][:160] if done.stderr.strip() else ''}
+
+
+def outcome(result: dict, name: str, **fields) -> bool:
+    j = result['json'] or {}
+    return result['code'] == 0 and j.get('outcome') == name and all(j.get(k) == v for k, v in fields.items())
 
 
 def header_values(hit: dict, name: str) -> list:
@@ -360,7 +406,7 @@ def new_reference() -> str:
 # What differs when the gateway runs in the pool (pool.py): where the caller's requests go, where the stand-in's records are read,
 # where gateway-authz's decisions are read, what WB-09 does, how the gateway's connections are sampled, which logs are scanned.
 HOOKS = {'gateway_port': gk.PORTS['gateway'], 'mock_port': gk.PORTS['provider'], 'decisions': gk.decisions, 'skip_wb09': None,
-         'peers': None, 'logs': None, 'second_authorization_reaches_the_gateway': True}
+         'peers': None, 'logs': None, 'second_authorization_reaches_the_gateway': True, 'skip_extra': None}
 CREATED: dict[str, str] = {}      # process code -> 'created' | 'deleted' : parcels this run made at the carrier
 MOCK_SECRET = ''
 TOKENS_FILE = RUN / 'wanbexpress.developer-tokens.json'
@@ -412,6 +458,13 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
     r.case('WB-01', 'whoami: the blue tenant\'s real Gatekeeper token, through the gateway, answers with that account')
     mark = fresh()
     answer = req('GET', f'{BASE}/whoami', tok['blue'], sample_peers=True)
+    date = dict(answer['headers']).get('date')
+    if date and answer.get('received_at'):
+        try:
+            CLOCK.update(carrier_response_date=date, offset_seconds=round(email.utils.parsedate_to_datetime(date).timestamp() - answer['received_at'], 1),
+                         resolution_seconds=1, taken_from='the answer to the first whoami (WB-01), as it reached the caller')
+        except (TypeError, ValueError):
+            pass
     r.check('status 200', answer['status'] == 200)
     r.check('Succeeded is true', data(answer).get('Succeeded') is True)
     r.check('Data is the account number of the blue tenant\'s account (value not recorded)', data(answer).get('Data') == accounts[BLUE_ACCOUNT][0])
@@ -597,11 +650,159 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
         hits = standin_hits()
         r.note('GET /parcels/{processCode}?note=q reaches the carrier as', [h['raw_target'] for h in hits])
 
+    def skipped_here(cid: str) -> bool:
+        reason = (HOOKS['skip_extra'] or {}).get(cid)
+        if reason:
+            r.skip('every check of this case', reason)
+        return bool(reason)
+
+    def blue_whoami_at_the_carrier(label_token: str = 'blue'):
+        """One whoami as blue on the stand-in -> (the answer, the token the carrier received as a (number, token) pair or None)."""
+        standin_reset()
+        answer = req('GET', f'{BASE}/whoami', tok[label_token])
+        hits = standin_hits()
+        given = header_values(hits[0], 'authorization') if len(hits) == 1 else []
+        match = re.fullmatch(r'Hc-OweDeveloper ([^; ]+);([^; ]+);[A-Za-z0-9_-]+', given[0]) if len(given) == 1 else None
+        return answer, (match.group(1), match.group(2)) if match else None
+
+    def authz_process():
+        entry = next((p for p in gk.PROCS if p[0] == 'gateway-authz'), None)
+        return (entry[1].pid, entry[1].poll() is None) if entry else (None, False)
+
+    def extra_cases():
+        # WB-12
+        STATE['label'] = 'WB-12'
+        r.case('WB-12', 'revocation through gateway-control: blue is refused on its next request, gateway-authz is not replaced, green is not touched; restored, blue is served again')
+        if not skipped_here('WB-12'):
+            pid = authz_process()
+            if sandbox:
+                r.skip('before: blue is served (one whoami to the carrier)', 'the sandbox is not asked for more than it has to be: the confirming whoami comes after the restore')
+            else:
+                standin_reset()
+                r.check('before: blue is served (whoami 200)', req('GET', f'{BASE}/whoami', tok['blue'])['status'] == 200)
+            revoked = {'code': None, 'json': None, 'said': ''}
+            try:
+                revoked = control('revoke', '--account', BLUE_ACCOUNT, '--reason', 'wanbexpress rig: WB-12')
+                r.note('gateway-control revoke', {'exit': revoked['code'], 'outcome': (revoked['json'] or {}).get('outcome'), 'said': revoked['said']})
+                r.check('gateway-control revoke: exit 0, REVOKED, the account is revoked and it changed',
+                        outcome(revoked, 'REVOKED', command='revoke', account=BLUE_ACCOUNT, revoked=True, changed=True))
+                if not sandbox:
+                    standin_reset()
+                mark = len(HOOKS['decisions']())
+                answer = req('GET', f'{BASE}/whoami', tok['blue'])
+                r.note('blue\'s next request', {'status': answer['status'], 'reason_code': data(answer).get('reason_code'), 'gateway-authz decided': reason_since(mark)})
+                r.check('blue\'s next request: 403', answer['status'] == 403)
+                r.check('the reason is ACCOUNT_REVOKED, in the answer and in gateway-authz\'s decision', data(answer).get('reason_code') == 'ACCOUNT_REVOKED' and reason_since(mark) == 'ACCOUNT_REVOKED')
+                nothing_at_the_carrier('blue\'s request after the revocation: the carrier received nothing')
+                if sandbox:
+                    r.skip('green is not affected by blue\'s revocation', 'there is one sandbox account')
+                else:
+                    green_answer = req('GET', f'{BASE}/whoami', tok['green'])
+                    r.check('green is not affected: whoami 200 and Data is the green account number',
+                            green_answer['status'] == 200 and data(green_answer).get('Data') == accounts[GREEN_ACCOUNT][0])
+                listed = control('revocations')
+                rows = (listed['json'] or {}).get('revoked_accounts') or []
+                r.check('gateway-control revocations: LISTED, blue\'s account is in the table and no other',
+                        outcome(listed, 'LISTED') and [x.get('account_id') for x in rows] == [BLUE_ACCOUNT])
+            finally:
+                lifted = control('restore', '--account', BLUE_ACCOUNT) if revoked['json'] else {'code': None, 'json': None, 'said': ''}
+            r.check('gateway-control restore: exit 0, LIFTED, the account is not revoked and it changed',
+                    outcome(lifted, 'LIFTED', command='restore', account=BLUE_ACCOUNT, revoked=False, changed=True))
+            if not sandbox:
+                standin_reset()
+            again = req('GET', f'{BASE}/whoami', tok['blue'], sample_peers=sandbox)
+            r.check('after the restore blue is served again: whoami 200, Succeeded true', again['status'] == 200 and data(again).get('Succeeded') is True)
+            if not sandbox:
+                r.check('...and the carrier received that one request', len(standin_hits()) == 1)
+            r.check('gateway-authz is the same process throughout (same pid, still running)', authz_process() == pid and pid[0] is not None)
+
+        # WB-13
+        STATE['label'] = 'WB-13'
+        r.case('WB-13', 'credential rotation (stand-in only): the credentials file is replaced the way gateway-authz asks; the next request leaves with the new token; a file that does not load changes nothing')
+        if sandbox:
+            r.skip('every check of this case', 'the sandbox has one valid token; sending a real carrier an invalid credential is not a normal request')
+        elif not skipped_here('WB-13'):
+            pid = authz_process()
+            account, old = accounts[BLUE_ACCOUNT]
+            new = made['rotated_token']
+
+            def replace_file(blue_token: str):
+                """The way gateway-authz asks for: a new file next to the old one, then renamed over it."""
+                table = {f'{BINDING}/{a}': {'account': n, 'token': blue_token if a == BLUE_ACCOUNT else t} for a, (n, t) in accounts.items()}
+                staged = TOKENS_FILE.with_name(TOKENS_FILE.name + '.next')
+                staged.write_text(json.dumps(table), encoding='utf-8')
+                os.chmod(staged, 0o600)
+                os.replace(staged, TOKENS_FILE)
+            try:
+                answer, seen = blue_whoami_at_the_carrier()
+                r.check('before: the carrier receives the old token', answer['status'] == 200 and seen == (account, old))
+                replace_file(new)
+                answer, seen = blue_whoami_at_the_carrier()
+                r.check('the file is replaced: the very next request leaves with the new token', answer['status'] == 200 and seen == (account, new))
+                green_answer, green_seen = blue_whoami_at_the_carrier('green')
+                r.check('green, whose entry did not change, is served as before', green_answer['status'] == 200 and green_seen == accounts[GREEN_ACCOUNT])
+                replace_file('not a token; it has spaces and a semicolon')
+                answer, seen = blue_whoami_at_the_carrier()
+                r.check('replaced by a file that does not load: the next request leaves with the last token that loaded (as P1-DT-04 saw it)',
+                        answer['status'] == 200 and seen == (account, new))
+            finally:
+                replace_file(old)
+            answer, seen = blue_whoami_at_the_carrier()
+            r.check('the first file is put back: the next request leaves with the first token again', answer['status'] == 200 and seen == (account, old))
+            r.check('gateway-authz is the same process throughout (same pid, still running)', authz_process() == pid and pid[0] is not None)
+
+        # WB-14
+        STATE['label'] = 'WB-14'
+        r.case('WB-14', 'a create whose result is unknown (stand-in only): after a timeout and after an answer cut off half way the carrier received one POST, none is replayed; the same ReferenceId and body again gives the parcel that exists')
+        if sandbox:
+            r.skip('every check of this case', 'the sandbox cannot be made to be slow or to cut an answer; faults are the stand-in\'s')
+        elif not skipped_here('WB-14'):
+            def create_posts() -> list:
+                return [h for h in standin_hits() if h['method'] == 'POST' and h['raw_target'] == '/api/parcels']
+            for label, kind, seconds in (('timeout', 'slow', 11), ('cut-off answer', 'cut', 0)):
+                reference = new_reference()
+                standin_reset()
+                standin_fault(kind, seconds)
+                started = time.time()
+                answer = req('POST', f'{BASE}/parcels', tok['blue'], parcel_body(reference))
+                took = time.time() - started
+                if kind == 'slow':
+                    time.sleep(max(0.0, seconds + 1.5 - took))      # the stand-in has answered by then, and any replay has had its time
+                else:
+                    time.sleep(1.5)
+                r.note(f'{label}: what the caller got', {'status': answer['status'], 'error': answer.get('error'), 'seconds': round(took, 1),
+                                                        'reason': (data(answer).get('Error') or {}).get('Code') if isinstance(data(answer).get('Error'), dict) else None})
+                from_gateway = 'x-mock-provider' not in dict(answer['headers'])
+                if kind == 'slow':
+                    r.check(f'{label}: the caller gets the gateway\'s own timeout answer (5xx, not the carrier\'s) after about the route\'s 9 seconds',
+                            answer['status'] is not None and 500 <= answer['status'] <= 599 and from_gateway and 8.5 <= took <= 9.8)
+                else:
+                    # What the gateway does with an answer that is cut off after its headers went out is not known beforehand: the status is recorded
+                    # in the note. The check is that the caller does not get a whole answer: a 5xx, or a body that ends before its Content-Length.
+                    r.check(f'{label}: the caller does not get a complete answer (a 5xx, or a body that ends before its Content-Length: the status is in the note)',
+                            answer['status'] is not None and (500 <= answer['status'] <= 599 or answer.get('error') == 'IncompleteRead') and data(answer).get('Succeeded') is not True)
+                r.check(f'{label}: the carrier received exactly one POST (no replay)', len(create_posts()) == 1)
+                exists = [p for p in standin_parcels() if p['reference_id'] == reference]
+                r.check(f'{label}: the carrier did make the parcel (that is why the result is unknown)', len(exists) == 1)
+                for p in exists:
+                    CREATED[p['process_code']] = 'created'
+                repeat = req('POST', f'{BASE}/parcels', tok['blue'], parcel_body(reference))
+                code = (data(repeat).get('Data') or {}).get('ProcessCode') if isinstance(data(repeat).get('Data'), dict) else None
+                if code:
+                    CREATED[code] = 'created'
+                r.check(f'{label}: the same ReferenceId and body again: HTTP 200, Succeeded true, the parcel that exists (nothing new)',
+                        repeat['status'] == 200 and data(repeat).get('Succeeded') is True and len(exists) == 1 and code == exists[0]['process_code'])
+                r.check(f'{label}: the carrier now has one parcel for that ReferenceId and received two POSTs in all', len([p for p in standin_parcels() if p['reference_id'] == reference]) == 1
+                        and len(create_posts()) == 2)
+                for p in exists:
+                    r.check(f'{label}: the parcel is deleted', data(delete_parcel(p['process_code'])).get('Succeeded') is True)
+
     # WB-09
     STATE['label'] = 'WB-09'
     r.case('WB-09', 'gateway-authz allows and releases no credential: the gateway itself refuses; a caller\'s own Authorization does not take its place')
     if HOOKS['skip_wb09']:
         r.skip('every check of this case', HOOKS['skip_wb09'])
+        extra_cases()
         return
     stop_authz = lambda: gk.stop('gateway-authz')
     secret = secrets.token_urlsafe(24)
@@ -646,15 +847,23 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
         stop_authz()
         start_authz('gateway-authz')
     r.check('the product build of gateway-authz is back and allows again', req('GET', f'{BASE}/whoami', tok['blue'], sample_peers=sandbox)['status'] == 200)
+    extra_cases()
+
+
+def secret_list(made: dict, state: dict) -> list:
+    """Every secret of this run: [(what it is, the value)]. The values are never written anywhere."""
+    found = []
+    for account, token in made['accounts'].values():
+        found += [(f'token of {account}', token), (f'credential of {account}', f'{account};{token}')]
+    if made.get('rotated_token'):
+        found.append(('rotated token of the blue account', made['rotated_token']))
+    found += [('PDP token', gk.ENV['GK_PDP_AUTH_TOKEN'])] + [(f'client secret of {k}', state[k]['client']['client_secret']) for k in state]
+    return found + [(f'Gatekeeper token {i}', t) for i, t in enumerate(made.get('tokens', []))]
 
 
 def scan(made: dict, state: dict, result_text: str, logs: dict | None = None) -> tuple[dict, list]:
     """Where could a secret be: the logs of the two processes, this run's own output, and the result file. -> {where: found?}, [what was looked for, no values]"""
-    secrets_found = []
-    for account, token in made['accounts'].values():
-        secrets_found += [(f'token of {account}', token), (f'credential of {account}', f'{account};{token}')]
-    secrets_found += [('PDP token', gk.ENV['GK_PDP_AUTH_TOKEN'])] + [(f'client secret of {k}', state[k]['client']['client_secret']) for k in state]
-    secrets_found += [(f'Gatekeeper token {i}', t) for i, t in enumerate(made.get('tokens', []))]
+    secrets_found = secret_list(made, state)
     texts = {**(logs or {'gateway log': (RUN / 'gateway.log').read_text(errors='replace'), 'gateway-authz log': (RUN / 'gateway-authz.log').read_text(errors='replace')}),
              'standard output': '\n'.join(OUTPUT), 'result file': result_text}
     outcome = {}
@@ -664,12 +873,80 @@ def scan(made: dict, state: dict, result_text: str, logs: dict | None = None) ->
     return outcome, [what for what, _ in secrets_found]
 
 
+# ---- the evidence files (--evidence), written by this suite and by pool.py --------------------------------------------------
+NO_ROLES = ('Not recorded. The repository owner decided on 2026-11-19 (development plan 1.6) that this technical software has no operator and '
+            'approver kept apart: this file records what was run, on which commits and images, and what was seen. It is a record of verification, '
+            'not a gate decision.')
+EVIDENCE_FIELDS = ('kind', 'upstream_kind', 'operator_and_approver', 'agentgateway', 'gatekeeper_commit', 'repository', 'registry_sha256',
+                   'gateway_configuration_sha256', 'environment', 'started_at_utc', 'finished_at_utc', 'clock', 'dataset', 'upstream',
+                   'gateway_proxy_variables', 'cases', 'summary')
+SECRET_SHAPES = (re.compile(r'Hc-OweDeveloper [^;\s"\']+;'), re.compile(r'Bearer [A-Za-z0-9._~+/=-]{16,}'))
+
+
+def sha256_of(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def git_out(*argv: str, where: Path | None = None) -> str:
+    return subprocess.run(['git', '-C', str(where or ROOT), *argv], capture_output=True, text=True).stdout.strip()
+
+
+def evidence_document(kind: str, sandbox: bool, started_at: str, finished_at: str, reported: dict, results: 'Results', upstream: dict,
+                      proxy_variables, image: str, binary: str | None = None) -> dict:
+    """What the file says. No token, no Authorization value, no client secret, no account number: write_evidence looks again before it keeps the file."""
+    checks = [k for c in results.cases for k in c['checks']]
+    cases = [{'id': c['id'], 'title': c['title'], 'result': 'fail' if any(k['ok'] is False for k in c['checks']) else
+              ('skipped' if c['checks'] and all(k['ok'] is None for k in c['checks']) else 'pass'),
+              'checks': [{'check': k['check'], 'result': 'pass' if k['ok'] else ('fail' if k['ok'] is False else 'skipped'), **({'reason': k['skipped']} if k['ok'] is None else {})}
+                         for k in c['checks']], 'notes': c['notes']} for c in results.cases]
+    kept = [code for code, state in CREATED.items() if state == 'deleted']
+    return {
+        'kind': kind, 'upstream_kind': 'the carrier\'s sandbox' if sandbox else 'stand-in', 'operator_and_approver': NO_ROLES,
+        'agentgateway': {'version': reported['version'], 'image': image, **({'local_binary_sha256': sha256_of(Path(binary))} if binary else {})},
+        'gatekeeper_commit': git_out('rev-parse', '--short', 'HEAD', where=Path(os.environ.get('GK_SRC', str(Path.home() / '.local/src/idp-gatekeeper')))),
+        'repository': {'commit': git_out('rev-parse', '--short', 'HEAD'),
+                       'uncommitted_files': len([l for l in git_out('status', '--porcelain', '--', '.', ':!tests/integration/wanbexpress/evidence').splitlines() if l.strip()])},
+        'registry_sha256': sha256_of(POLICY_EXAMPLE),
+        'registry_note': 'the example register; each run fills its placeholders with that run\'s tenant and client ids, so the filled copy differs from run to run',
+        'gateway_configuration_sha256': sha256_of(CONFIG),
+        'environment': sorted({row['environment'] for row in json.loads(POLICY_EXAMPLE.read_text())['registered_operations']}),
+        'started_at_utc': started_at, 'finished_at_utc': finished_at,
+        'clock': CLOCK or {'carrier_response_date': None, 'note': 'no Date header on the answer to the first whoami'},
+        'dataset': {'reference_prefix': f"IDPGW-{datetime.datetime.now(datetime.timezone.utc):%Y%m%d}-", 'data': 'the example request of the carrier\'s documentation' + ('' if sandbox else ', synthetic accounts'),
+                    'parcels_created_and_deleted': sorted(kept), 'parcels_left_undeleted': sorted(c for c, s in CREATED.items() if s != 'deleted')},
+        'upstream': upstream, 'gateway_proxy_variables': proxy_variables, 'cases': cases,
+        'summary': {'cases': len(cases), 'cases_failed': sum(1 for c in cases if c['result'] == 'fail'), 'cases_skipped': sum(1 for c in cases if c['result'] == 'skipped'),
+                    'checks': len(checks), 'checks_passed': sum(1 for k in checks if k['ok']), 'checks_failed': sum(1 for k in checks if k['ok'] is False),
+                    'checks_skipped': sum(1 for k in checks if k['ok'] is None)},
+    }
+
+
+def write_evidence(name: str, document: dict, made: dict, state: dict) -> bool:
+    """Write tests/integration/wanbexpress/evidence/<name>, then read it back and look for what must not be in it (a token, the carrier's
+    Authorization, a client secret, a Gatekeeper token, an account number). Found: the file is deleted. -> True when the file is kept."""
+    EVIDENCE.mkdir(exist_ok=True)
+    path = EVIDENCE / name
+    path.write_text(json.dumps(document, ensure_ascii=False, indent=1) + '\n', encoding='utf-8')
+    text = path.read_text(encoding='utf-8')
+    looked_for = secret_list(made, state) + [(f'account number of {a}', n) for a, (n, _t) in made['accounts'].items()]
+    found = [what for what, value in looked_for if value and value in text] + [f'a value of shape {shape.pattern}' for shape in SECRET_SHAPES if shape.search(text)]
+    if found:
+        path.unlink()
+        say(f'EVIDENCE NOT KEPT: the file held {found} (what it was, not the value); it was deleted')
+        return False
+    say(f'evidence written: {path.relative_to(ROOT)}')
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='deploy/providers/wanbexpress on the Gatekeeper integration rig')
     parser.add_argument('--sandbox', action='store_true', help='upstream is the carrier\'s real sandbox (plain HTTP, port 80); needs --sandbox-credentials')
     parser.add_argument('--sandbox-credentials', help='with --sandbox: a file {"account": ..., "token": ...} (0600, outside the repository)')
-    parser.add_argument('--mutate', choices=sorted(MUTATIONS), help='deliberately break the configuration in one place (stand-in only)')
+    parser.add_argument('--mutate', choices=sorted(MUTATIONS) + list(OTHER_CONTROLS), help='deliberately break one thing (stand-in only)')
+    parser.add_argument('--evidence', action='store_true', help='write tests/integration/wanbexpress/evidence/rig-{sandbox,standin}.json (only with this flag)')
     args = parser.parse_args()
+    if args.evidence and args.mutate:
+        die('--evidence is for a run of the real configuration, not for a control')
     if args.sandbox != bool(args.sandbox_credentials):
         die('--sandbox and --sandbox-credentials go together')
     if args.sandbox and args.mutate:
@@ -697,15 +974,22 @@ def main() -> int:
         made['accounts'] = {BLUE_ACCOUNT: (account, token)}
     else:
         made['accounts'] = {a: ('WB' + secrets.token_hex(4).upper(), secrets.token_hex(20)) for a in (BLUE_ACCOUNT, GREEN_ACCOUNT)}
+        made['rotated_token'] = secrets.token_hex(20)      # the stand-in accepts it for the blue account as well: WB-13 rotates to it
         TOKENS_FILE = write('wanbexpress.developer-tokens.json', json.dumps({f'{BINDING}/{a}': {'account': n, 'token': t} for a, (n, t) in made['accounts'].items()}))
     MOCK_SECRET = secrets.token_urlsafe(24)
-    write('wanbexpress.mock-state.json', json.dumps({'admin_secret': MOCK_SECRET, 'accounts': {f'{n};{t}': n for n, t in made['accounts'].values()}}))
+    mock_accounts = {f'{n};{t}': n for n, t in made['accounts'].values()}
+    if made.get('rotated_token'):
+        mock_accounts[f"{made['accounts'][BLUE_ACCOUNT][0]};{made['rotated_token']}"] = made['accounts'][BLUE_ACCOUNT][0]
+    write('wanbexpress.mock-state.json', json.dumps({'admin_secret': MOCK_SECRET, 'accounts': mock_accounts}))
+    USE_REVOCATIONS[0] = args.mutate != 'no-revocations'
+    write('wanbexpress.revocations.json', NOTHING_REVOKED)
     write('wanbexpress.policy.json', policy_for(state, args.sandbox))
     write('pdp-token', gk.ENV['GK_PDP_AUTH_TOKEN'] + '\n')
     config = gateway_config(args.sandbox, args.mutate)
     write('wanbexpress.agentgateway.yaml', config)
     build([], 'gateway-authz')
     build(['-tags', 'acceptance'], 'gateway-authz-acceptance')
+    build([], 'gateway-control', './cmd/gateway-control')
 
     env, proxy_names = clean_proxy_env()
     env['SESSION_KEY'] = secrets.token_hex(32)
@@ -760,6 +1044,7 @@ def main() -> int:
     for where, found in scanned.items():
         results.check(f'{where}: none of the {len(looked_for)} secrets of this run, and no value of the carrier\'s authorization scheme',
                       not found['secret found'] and not found['Authorization value of the carrier\'s scheme found'])
+    results.cases.sort(key=lambda c: int(c['id'][3:]))
     record['cases'], failed = results.cases, results.failed()
     record['passed'], record['failed'] = [c['id'] for c in results.cases if c not in failed], [c['id'] for c in failed]
     final = json.dumps(record, ensure_ascii=False, indent=1)
@@ -775,10 +1060,18 @@ def main() -> int:
         say('  calls to the gateway (case, call, status, ms):')
         for c in CALLS:
             say(f"    {c['case']:6} {c['call']:55} {c['status']}  {c['ms']}")
+    kept = True
+    if args.evidence:
+        upstream = record['upstream'] | ({'name_resolved_to_at_the_start': resolved} if args.sandbox else {})
+        kept = write_evidence(f"rig-{'sandbox' if args.sandbox else 'standin'}.json",
+                              evidence_document('rig: the real local Gatekeeper, agentgateway 1.7.0 as a local binary, gateway-authz as a local process', args.sandbox, started_at,
+                                                record['finished_at'], reported, results, upstream, {'proxy_variables_removed_from_the_gateway_process': proxy_names,
+                                                                                                     'present_in_the_gateway_process': False},
+                                                pin.image_reference(pin.lock()), binary), made, state)
     if uncleaned:
         say('\n' + '!' * 70 + f'\n!! PARCELS THAT WERE CREATED AND NOT DELETED: {uncleaned}\n!! Delete them by hand at the carrier.\n' + '!' * 70)
     say(f"\n{len(results.cases) - len(failed)}/{len(results.cases)} ({mode}); results in {name}")
-    return int(bool(failed) or bool(uncleaned) or not clean)
+    return int(bool(failed) or bool(uncleaned) or not clean or not kept)
 
 
 if __name__ == '__main__':

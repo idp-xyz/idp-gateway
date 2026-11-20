@@ -138,6 +138,42 @@ class GatewayAuthzOverlay(unittest.TestCase):
         self.assertNotIn('gateway-authz', base['services'])
         self.assertEqual(self.SERVICE['image'], base['x-gateway-control']['image'])
 
+class EvidenceFiles(unittest.TestCase):
+    """tests/integration/wanbexpress/evidence/: what `run.py --evidence` and `pool.py --evidence` leave. With no file there, every test passes."""
+    FILES = sorted((R / 'tests/integration/wanbexpress/evidence').glob('*.json'))
+    NAMES = {'rig-sandbox.json', 'rig-standin.json', 'pool-sandbox.json', 'pool-standin.json'}
+    FIELDS = ('kind', 'upstream_kind', 'operator_and_approver', 'agentgateway', 'gatekeeper_commit', 'repository', 'registry_sha256',
+              'gateway_configuration_sha256', 'environment', 'started_at_utc', 'finished_at_utc', 'clock', 'dataset', 'upstream',
+              'gateway_proxy_variables', 'cases', 'summary')
+    SHAPES = (re.compile(r'Hc-OweDeveloper [^;\s"\']+;'), re.compile(r'Bearer [A-Za-z0-9._~+/=-]{16,}'))
+
+    def test_each_file_is_one_of_the_four_and_has_every_field(self):
+        for path in self.FILES:
+            with self.subTest(file=path.name):
+                self.assertIn(path.name, self.NAMES)
+                document = json.loads(path.read_text(encoding='utf-8'))
+                self.assertEqual([f for f in self.FIELDS if f not in document], [])
+                self.assertTrue({'version', 'image'} <= set(document['agentgateway']))
+                self.assertIn('@sha256:', document['agentgateway']['image'])
+                self.assertTrue({'commit', 'uncommitted_files'} <= set(document['repository']))
+                self.assertTrue({'reference_prefix', 'parcels_created_and_deleted', 'parcels_left_undeleted'} <= set(document['dataset']))
+                self.assertRegex(document['registry_sha256'], r'^[0-9a-f]{64}$')
+                self.assertRegex(document['gateway_configuration_sha256'], r'^[0-9a-f]{64}$')
+                self.assertTrue(document['cases'])
+                for case in document['cases']:
+                    self.assertIn(case['result'], ('pass', 'fail', 'skipped'))
+                    for check in case['checks']:
+                        self.assertIn(check['result'], ('pass', 'fail', 'skipped'))
+                        self.assertEqual('reason' in check, check['result'] == 'skipped')
+                self.assertIn('Not recorded', document['operator_and_approver'])
+
+    def test_no_token_authorization_value_or_secret_shape(self):
+        for path in self.FILES:
+            with self.subTest(file=path.name):
+                body = path.read_text(encoding='utf-8')
+                for shape in self.SHAPES:
+                    self.assertIsNone(shape.search(body), shape.pattern)
+
 
 if __name__ == '__main__':
     unittest.main()

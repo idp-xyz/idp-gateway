@@ -54,6 +54,31 @@ tests/integration/gatekeeper/stack.sh up                                   # 本
 | WB-08 | 没有路由的方法（`PUT`、`PATCH`、`POST`/`DELETE` 到 `whoami`、`PUT /parcels`）：网关答 404，`gateway-authz` 没有被问；路径不对（`bags`、列表、搜索、`/parcels/`、更深的路径、`..`、`%2e%2e`、`%2f`、`%252e`、`;x=1`、`%00`、`//`、承运商自己的 `/api/whoami`、别的 Provider）和方法对但形状不对（`POST /parcels/X`、`DELETE /parcels`）：都被拒（>= 400），替身没收到。另记一条不判的观察：`GET /parcels/X?note=q` 的查询串原样到了承运商 |
 | WB-09 | 见下 |
 | WB-10 | 扫描，见上 |
+| WB-11 | 只在池上：出口规则（见"单机池上"） |
+| WB-12 | 撤销（计划 3.4）。`gateway-authz` 带 `--revocations`、`--revoker-identity` 起（联调架子上一直这样起）；产品自己的 `gateway-control revoke` 撤销 blue 的账户：退出码 0、`REVOKED`；blue 的下一个请求 403、原因 `ACCOUNT_REVOKED`（应答里和 `gateway-authz` 的判定里都是）；`gateway-control revocations` 只列出 blue 的账户；`restore` 之后 blue 又是 200；`gateway-authz` 的进程号不变、仍在运行。替身另看：被拒的请求承运商什么都没收到，green 照常（whoami 200、是 green 的账号），恢复之后承运商收到那一个请求。`--sandbox`：被拒的请求到不了沙箱，所以照跑；撤销之前的 whoami 和 green 的检查跳过，恢复之后用一次 `whoami` 确认 |
+| WB-13 | 凭证轮换（只在替身上）。替身认 blue 账户的两个令牌；先用旧的；按 `gateway-authz` 要的办法（写新文件再改名）换成新的：下一个请求承运商收到的是新令牌、`gateway-authz` 是同一个进程、green 不变；换成读不成的文件（令牌里有空格和分号，照黑盒 `P1-DT-04`）：下一个请求仍是上一个读得成的令牌；放回第一个文件：又是旧令牌 |
+| WB-14 | 写操作的结果未知，不重放（只在替身上）。两遍：替身把创建做了，应答拖过路由的 9 秒（替身拖 11 秒），和应答发到一半断开连接。每一遍：调用方得不到完整的应答；承运商收到的创建 `POST` 恰好一个；替身确实建了那个包裹；之后同一个客单号、同一份正文再下：HTTP 200、`Succeeded` 真、就是已有的处理号，没有多建，替身一共收到两个 `POST`；包裹删掉 |
+
+### 哪些用例在哪种跑法下跳过
+
+| | 替身（`run.py`） | `--sandbox`（`run.py`） | 池（`pool.py`，替身或 `--sandbox`） |
+|---|---|---|---|
+| WB-01 到 08、10 | 全做 | 只在替身上看得到的检查跳过 | 同 `run.py` 的相应跑法（WB-04 有一处不同，见上） |
+| WB-09 | 做 | 做，两处跳过 | 整个跳过 |
+| WB-11 | 不做 | 不做 | 做 |
+| WB-12 撤销 | 做 | 做；撤销前的 whoami 和 green 的检查跳过 | 整个跳过：池里的 `gateway-authz` 没有接 `--revocations`、`--revoker-identity`，不为它改池的部署文件 |
+| WB-13 轮换 | 做 | 整个跳过：沙箱只有一个有效的令牌，往真实承运商发一个无效的凭证不是正常请求 | 整个跳过：令牌和替身的账户不是这样给的 |
+| WB-14 未知结果 | 做（约 25 秒，要等路由超时） | 整个跳过：沙箱不能被弄慢或在应答中途断开，开关是替身的 | 整个跳过：替身的开关不在池里用 |
+
+跳过在结果里记为 skipped，附原因，不是通过。
+
+### 替身的开关
+
+默认行为不变。管理口（`X-Poc-Admin`）上加了：`POST /admin/fault?kind=slow&seconds=N`（下一个创建做完，应答拖 N 秒）、`POST /admin/fault?kind=cut`（下一个创建做完，应答发到一半断开）；每个只管下一个创建，`/admin/reset` 也清掉；`GET /admin/parcels` 列出现有的包裹（客单号、处理号、状态，没有账号和正文）。账户的表里 blue 可以有两个令牌（WB-13）。
+
+### 证据（`--evidence`）
+
+`run.py --evidence`、`pool.py --evidence`：只有带它才写 `tests/integration/wanbexpress/evidence/` 下的文件（`rig-sandbox.json`、`pool-sandbox.json`；对着替身是 `rig-standin.json`、`pool-standin.json`），平常跑不弄脏工作区；和 `--mutate`、`--control` 不能一起用。每个用例和每项检查的结果（通过、不通过、跳过及原因），加上 [G06](../../../docs/G06_Testing_and_Acceptance.md) 第 4 节要的元数据里对得上的：agentgateway 的版本和镜像摘要（联调架子上加本机二进制的 SHA-256）、Gatekeeper 的提交、本仓库的提交和未提交文件数、登记表的 SHA-256、`agentgateway.yaml` 的 SHA-256、环境、起止时刻（UTC）、承运商应答的 `Date` 头与本机时钟的差、数据集（客单号前缀、创建并删除的处理号、没删掉的）、上游（名字、解析到的地址）、网关有没有代理变量。不写执行人和批准人，文件里有一句话说明（计划 1.6）。不写令牌、`Authorization` 的值、客户端密钥、Gatekeeper 的令牌、账号；写完套件自己再读一遍文件找这些，找到就删掉文件、退出码非零。契约测试（`tests/contracts/test_wanbexpress_config.py`）看有的文件。
 
 ### WB-09：PDP 放行却没给凭证
 
@@ -79,6 +104,10 @@ tests/integration/gatekeeper/stack.sh up                                   # 本
 | `no-accept` | 去掉写 `Accept` 的那一处 | WB-01、02、03、04、06、09（4/10）：调用方没带 `Accept`，替身（我们的假设）答 406；WB-04 里调用方带 `text/html` 时它原样到了上游 |
 | `no-header-filter` | 去掉后端上过滤请求头的名单 | 只有 WB-04：`X-Evil-Probe` 到了上游（按名字去掉的那几个仍被去掉） |
 | `delete-any-method` | `DELETE` 路由改成不限方法 | 只有 WB-08：`PUT`、`PATCH` 到了 `gateway-authz`。承运商仍什么都没收到：登记表的方法对不上，`gateway-authz` 拒绝。也就是说路由上的方法限制不是唯一的一道，WB-08 查的是"网关自己先拦"这一层 |
+| `no-revocations`（3.4） | `gateway-authz` 不带 `--revocations` 起 | 只有 WB-12：`gateway-control revoke` 退出码 3、`NO_REVOKER_CONFIGURED`（"没有配撤销，没有撤销接口（404）"），blue 的下一个请求是 200、判定 `ACTIVE_ACCOUNT_GRANT`，没被撤销 |
+| `create-retry`（3.4） | 创建那条路由加 `retry`（`attempts: 2`，`codes: [502, 503, 504]`）。agentgateway 1.7.0 有这个路由策略：二进制的校验认它，字段是 `attempts`、`backoff`、`codes`、`precondition`、`condition` | 只加这一条：13/13，**没有不通过**：路由的 9 秒超时不重试，替身仍只收到一个 `POST`。再加 `timeout.backendRequestTimeout: 4s`（每次尝试的超时）才重试：只有 WB-14，超时那一遍替身收到两个 `POST`（调用方看到的是 403、用时 4 秒：第二个 `POST` 到了替身，替身答 403，它拒绝重复的随机数，所以重试带的应是同一个随机数）。重试发生在网关里，没有别的拦它：这份配置没有这两条，所以不重放 |
+
+在 `bearer-prefix` 和 `no-accept` 下，新用例 WB-12、13、14 也不通过：整条请求路径都被破坏了，它们依赖路径通。
 
 ## 单机池上（`pool.py`，第二步）
 
@@ -94,7 +123,7 @@ tests/integration/gatekeeper/stack.sh up
 
 - **PDP**：测试叠加里 `gateway-authz` 加入联调栈的 docker 网络 `idp-gateway-gk_default`（external），按服务名 `pdp-mtls:8443` 找 PDP，带客户端证书。没有改 `tests/integration/gatekeeper/` 下的东西。
 - **替身**：叠加里的服务 `wanb-mock`（profile `standin`），配置里的后端换成 `wanb-mock:8000`，所以出口规则钉的是它。另有 `outsider`：配置里没有它，网关的命名空间里应连不上。
-- **用例**：WB-01 到 WB-08、WB-10 原样用；WB-09 跳过并写明原因（要把 `gateway-authz` 换成验收构建，池里跑的是产品构建）；WB-04 有一处不同：`front` 对带两个 `Authorization` 头的请求自己答 400，请求到不了网关，所以不再塞第二个头，改查 `front` 的 400 和承运商什么都没收到；日志扫描扫的是 `agentgateway`、`gateway-authz`、`front` 三个容器的日志。
+- **用例**：WB-01 到 WB-08、WB-10 原样用；WB-12 到 WB-14（计划 3.4）跳过并写明原因（见上面的表，不为它们改池的部署文件）；WB-09 跳过并写明原因（要把 `gateway-authz` 换成验收构建，池里跑的是产品构建）；WB-04 有一处不同：`front` 对带两个 `Authorization` 头的请求自己答 400，请求到不了网关，所以不再塞第二个头，改查 `front` 的 400 和承运商什么都没收到；日志扫描扫的是 `agentgateway`、`gateway-authz`、`front` 三个容器的日志。
 - **WB-11（只在池上）**：出口规则在起作用。从 `netns` 的网络命名空间里（一个临时容器接在它上面）：规则里钉的地址就是上游名字解析到的那些（替身：钉的恰是 `wanb-mock` 的地址；沙箱：非空，且是该名字解析出的地址之内，结果里记下）；配置登记的上游地址和端口连得上，`gateway-authz` 的地址和端口、回环 `8081` 连得上；`outsider`、登记地址上的另一个端口、`gateway-authz` 的另一个端口、网关的指标端口连不上（被规则拒绝，`113`）。不往公网发探测；`--sandbox` 下对沙箱的地址只做一次 TCP 连接，不发任何内容，也没有凭证。
 - **结果里另记**：池里各容器的环境里有没有名字带 `proxy` 的变量；上游名字解析到的地址和规则里钉的地址；每个调用的耗时；`gateway-control publish` 的结局。
 - **结束时**无论成败，`docker compose down -v` 自己的项目，删临时目录。只动自己的项目和 `idp-gateway-gk`。
@@ -137,3 +166,11 @@ tests/integration/gatekeeper/stack.sh up
 - 耗时（经网关）：第 1 遍的第一次创建 8.5 秒，是唯一一次超过 1 秒的；其余的创建 105 到 275 毫秒，取 50 到 360 毫秒，删除 73 到 102 毫秒，验证授权 50 到 200 毫秒。
 - 沙箱的行为与文档不同或文档没写的几处，是另外直接对着沙箱量的（不经网关，一个包裹，用完删除），写在上面"替身的假设"和 [deploy/providers/wanbexpress/README.md](../../../deploy/providers/wanbexpress/README.md) 里。
 - **这里没有验的**：承运商实际收到的头（只在替身上看得到）；两个账户之间的隔离（只有一个沙箱账号）；到承运商的 TLS（沙箱只有明文 HTTP）；从 compose 池里发出去（这里的网关是本机进程，没有出口规则）。这些结果算不算验收证据（开发计划 1.6）没有定。
+
+### 计划 3.4 这一遍（待仓库所有者填，日期：）
+
+（`run.py --sandbox --evidence` 和 `pool.py --sandbox --evidence` 的结果写在这里；证据文件 `evidence/rig-sandbox.json`、`evidence/pool-sandbox.json`。）
+
+### 计划 3.4 补的用例，对着替身（2026-11-19）
+
+`run.py` 连跑几遍 13/13；`pool.py` 14 个用例，原来的 WB-01 到 WB-11 结果不变，WB-09、12、13、14 跳过。看到的：撤销后 blue 是 403、`ACCOUNT_REVOKED`；写操作超时，调用方得到网关的 **504**（用时 9.0 秒）、替身收到一个 `POST`；应答发到一半断开，调用方得到的是 **HTTP 200 加一个读不完的正文**（网关已把承运商的状态行和头转给调用方，之后连接断了；不是网关的 5xx），替身收到一个 `POST`；两遍之后用同一个客单号和同一份正文再下，都是已有的包裹。这是联调，不是验收证据。
