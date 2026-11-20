@@ -1,8 +1,8 @@
 """deploy/providers/sfintl: the configuration, the register example and the Go code they depend on say the same thing.
 
-OFFLINE; nothing here starts a gateway or the signer. There is no suite that runs the configuration yet (tests/integration/sfintl).
+OFFLINE; nothing here starts a gateway or the signer. The suite in tests/integration/sfintl runs the configuration.
 """
-import json, re, unittest
+import ast, json, re, unittest
 from pathlib import Path
 import yaml
 
@@ -151,6 +151,58 @@ class PoolValues(unittest.TestCase):
                 self.assertEqual(ext['includeRequestHeaders'], ['x-provider-account'])
                 self.assertEqual(ext['policies']['http'], {'requestTimeout': '1s'})
                 self.assertEqual(ext['protocol']['http']['includeResponseHeaders'], ['authorization'])
+
+
+class RigReplacements(unittest.TestCase):
+    """The rig suite puts the pool's values back with exact replacements. Each still occurs as often as that suite says."""
+    RAW = text('deploy/providers/sfintl/agentgateway.yaml')
+
+    def test_the_replacements_of_the_rig_suite_still_fit(self):
+        tree = ast.parse(text('tests/integration/sfintl/run.py'))
+        values = next(n.value for n in tree.body if isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', None) == 'RIG_VALUES')
+        self.assertGreaterEqual(len(values.elts), 10)
+        for element in values.elts:
+            old, times = ast.literal_eval(element.elts[0]), ast.literal_eval(element.elts[2])
+            with self.subTest(replaced=old.strip()):
+                self.assertEqual(self.RAW.count(old), times)
+
+
+class EvidenceFiles(unittest.TestCase):
+    """tests/integration/sfintl/evidence/: what `run.py --evidence` leaves. With no file there, every test passes."""
+    DIRECTORY = R / 'tests/integration/sfintl/evidence'
+    FILES = sorted(DIRECTORY.glob('*.json')) if DIRECTORY.is_dir() else []
+    NAMES = {'rig-sandbox.json', 'rig-standin.json', 'pool-sandbox.json', 'pool-standin.json'}
+    FIELDS = ('kind', 'upstream_kind', 'operator_and_approver', 'agentgateway', 'gatekeeper_commit', 'repository', 'registry_sha256',
+              'gateway_configuration_sha256', 'environment', 'started_at_utc', 'finished_at_utc', 'clock', 'dataset', 'upstream',
+              'gateway_proxy_variables', 'cases', 'summary')
+    SHAPES = (re.compile(r'Sf-OpenApi [^;\s"\']+;'), re.compile(r'auth_[A-Za-z0-9_-]{8,}'), re.compile(r'Bearer [A-Za-z0-9._~+/=-]{16,}'))
+
+    def test_each_file_is_one_of_the_four_and_has_every_field(self):
+        for path in self.FILES:
+            with self.subTest(file=path.name):
+                self.assertIn(path.name, self.NAMES)
+                document = json.loads(path.read_text(encoding='utf-8'))
+                self.assertEqual([f for f in self.FIELDS if f not in document], [])
+                self.assertTrue({'version', 'image'} <= set(document['agentgateway']))
+                self.assertIn('@sha256:', document['agentgateway']['image'])
+                self.assertTrue({'commit', 'uncommitted_files'} <= set(document['repository']))
+                self.assertTrue({'reference_prefix', 'orders_created_and_cancelled', 'orders_left_uncancelled'} <= set(document['dataset']))
+                self.assertRegex(document['registry_sha256'], r'^[0-9a-f]{64}$')
+                self.assertRegex(document['gateway_configuration_sha256'], r'^[0-9a-f]{64}$')
+                self.assertTrue(document['cases'])
+                for case in document['cases']:
+                    self.assertIn(case['result'], ('pass', 'fail', 'skipped'))
+                    for check in case['checks']:
+                        self.assertIn(check['result'], ('pass', 'fail', 'skipped'))
+                        self.assertEqual('reason' in check, check['result'] == 'skipped')
+                self.assertIn('Not recorded', document['operator_and_approver'])
+
+    def test_no_token_authorization_value_or_secret_shape(self):
+        for path in self.FILES:
+            with self.subTest(file=path.name):
+                body = path.read_text(encoding='utf-8')
+                for shape in self.SHAPES:
+                    self.assertIsNone(shape.search(body), shape.pattern)
 
 
 if __name__ == '__main__':

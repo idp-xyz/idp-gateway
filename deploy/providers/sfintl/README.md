@@ -2,9 +2,9 @@
 
 [开发计划](../../../docs/development-plan.md) 1.1 的第二家承运商：一份手写的 agentgateway 配置和一份登记表，照[万邦那一份](../wanbexpress/README.md)的样子，值也是[单机池](../../compose/README.md)的。这家的协议要加密正文、对密文签名，网关做不了，所以路由的上游不是承运商，而是签名适配器 `provider-signer`（[ADR-0014](../../../docs/adr/ADR-0014.md)）。
 
-**这份配置还没有对着替身或沙箱跑过；套件在下一步（`tests/integration/sfintl`，还没有）。单机池里还没有 `provider-signer` 这个服务。**
+**这份配置已经在联调架子上对着替身跑过**（[tests/integration/sfintl](../../../tests/integration/sfintl/README.md)）。还没有对着真实沙箱跑，也没有在单机池里跑。单机池里还没有 `provider-signer` 这个服务。
 
-现在查过的只有两样：锁定的 agentgateway 1.7.0 的 `--validate-only` 接受这份文件；离线的[契约测试](../../../tests/contracts/test_sfintl_config.py)查配置、登记表和 Go 代码里的几个常量互相对得上（操作表、凭证前缀、适配器的默认超时）。
+现在查过的：锁定的 agentgateway 1.7.0 的 `--validate-only` 接受这份文件；离线的[契约测试](../../../tests/contracts/test_sfintl_config.py)查配置、登记表和 Go 代码里的几个常量互相对得上（操作表、凭证前缀、适配器的默认超时），并查联调套件的替换还在；联调套件把这份文件换上联调的地址后，经网关、`gateway-authz` 和 `provider-signer` 对着替身跑过，结果在套件的 README 里。
 
 ```
 调用方 → 网关 → provider-signer（双向 TLS）→ 承运商
@@ -98,17 +98,17 @@
 
 九项的说明在[黑盒报告](../../../tests/acceptance/blackbox/README.md)。这家的上游是 `provider-signer`，到承运商的请求由它自己做，所以第 1 项和第 9 项与万邦不同：网关的名单保护的是到 `provider-signer` 的这一跳。
 
-| # | 项 | 这份配置里 |
-|---|---|---|
-| 1 | Host 原样转发 | 每条路由 `urlRewrite.authority` 写成 `provider-signer.idp.test`。到承运商的 `Host` 由 `provider-signer` 按 `--carrier-url` 自己写，调用方的 `Host` 到不了那里 |
-| 2 | 路径不做规范性检查 | 每条路由的 `authorization` 规则 `request.path == "..."` 只放行本操作的那一个路径（完全相等），`gateway-authz` 再按同一条规范路径规则判一次，`provider-signer` 的操作表再按方法和路径完全相等查一次。比评审配置里的规则更严，替代了它 |
-| 3 | PDP 放行却没给凭证 | 后端规则，前缀 `Sf-OpenApi `。`provider-signer` 另外要求恰好一个 `Authorization` 头、三段都有，不然答 403 `credential_malformed`，不联系承运商 |
-| 4 | `Location`、`Set-Cookie` 回给调用方 | `responseHeaderModifier.remove`，与万邦同文。`provider-signer` 的答复头是它自己写的，不取自承运商的答复 |
-| 5 | `Cookie`、`X-Forwarded-*`、`Forwarded` 到承运商 | 后端 `requestHeaderModifier.remove`，与万邦同文。到承运商的请求头是 `provider-signer` 自己写的，没有一个取自调用方 |
-| 6 | 没有会话密钥时网关改写配置文件 | 文件里没有 `config.session.key`，部署时用环境变量 `SESSION_KEY`；契约测试查文件里没有 `session` |
-| 7 | 管理接口能改配置 | `config.storage.mode: readOnly`；契约测试查这一行在 |
-| 8 | 业务监听开在所有网卡 | `bindAddress: 127.0.0.1`；契约测试查这一行在 |
-| 9 | 调用方自己的请求头到承运商 | 后端用同一份名单重建请求头（名单与评审配置同文，契约测试对着它查），发给 `provider-signer`；`provider-signer` 不把调用方的任何请求头带到承运商，所以名单保护的是到 `provider-signer` 的这一跳 |
+| # | 项 | 这份配置里 | 看着的用例 |
+|---|---|---|---|
+| 1 | Host 原样转发 | 每条路由 `urlRewrite.authority` 写成 `provider-signer.idp.test`。到承运商的 `Host` 由 `provider-signer` 按 `--carrier-url` 自己写，调用方的 `Host` 到不了那里 | **这份配置上没有用例判 `host` 的值**。SF-03 只记下承运商看到的头名（里面有 `host`），并查调用方自己的头没有到 |
+| 2 | 路径不做规范性检查 | 每条路由的 `authorization` 规则 `request.path == "..."` 只放行本操作的那一个路径（完全相等），`gateway-authz` 再按同一条规范路径规则判一次，`provider-signer` 的操作表再按方法和路径完全相等查一次。比评审配置里的规则更严，替代了它 | SF-07 |
+| 3 | PDP 放行却没给凭证 | 后端规则，前缀 `Sf-OpenApi `。`provider-signer` 另外要求恰好一个 `Authorization` 头、三段都有，不然答 403 `credential_malformed`，不联系承运商 | SF-09（对照见套件 README） |
+| 4 | `Location`、`Set-Cookie` 回给调用方 | `responseHeaderModifier.remove`，与万邦同文。`provider-signer` 的答复头是它自己写的，不取自承运商的答复 | SF-01、SF-03、SF-09、SF-14（替身发 `Set-Cookie`，不发 `Location`，所以只看到了 `Set-Cookie` 被去掉） |
+| 5 | `Cookie`、`X-Forwarded-*`、`Forwarded` 到承运商 | 后端 `requestHeaderModifier.remove`，与万邦同文。到承运商的请求头是 `provider-signer` 自己写的，没有一个取自调用方 | SF-03。这套架子上没有「去掉名单」的对照：签名器本来就不转发调用方的头，承运商的记录显示不出来名单在不在 |
+| 6 | 没有会话密钥时网关改写配置文件 | 文件里没有 `config.session.key`，部署时用环境变量 `SESSION_KEY`；契约测试查文件里没有 `session` | **这份配置上没有用例**：文字与评审配置相同，黑盒的 `P1-CF-01` 对评审配置看着；这里只有契约测试查文件里没有 `session` |
+| 7 | 管理接口能改配置 | `config.storage.mode: readOnly`；契约测试查这一行在 | **这份配置上没有用例**：同上，黑盒的 `P1-CF-02`；契约测试查这一行在 |
+| 8 | 业务监听开在所有网卡 | `bindAddress: 127.0.0.1`；契约测试查这一行在 | **这份配置上没有用例**：黑盒的 `P1-NL-01`；契约测试查这一行在 |
+| 9 | 调用方自己的请求头到承运商 | 后端用同一份名单重建请求头（名单与评审配置同文，契约测试对着它查），发给 `provider-signer`；`provider-signer` 不把调用方的任何请求头带到承运商，所以名单保护的是到 `provider-signer` 的这一跳 | SF-03（`X-Evil-Probe` 没有到）。没有名单对照，原因同第 5 项 |
 
 另外：回读口（8443）和它的一条路由、`frontendPolicies.networkAuthorization` 照万邦那份留着，发布器要用；契约测试对着万邦的文件查这几处和 `config`、`gateways` 一字不差。
 
@@ -127,7 +127,7 @@
 - **面单**（`IECS_PRINT_ORDER`）和别的 `msgType`。操作表里只有上面三个。
 - **池上的 `provider-signer`**：单机池里还没有这个服务，也没有它的出口规则（它自己发起到承运商的连接）。
 - **到承运商的 TLS**：沙箱没有，没有验过。
-- **令牌刷新时旧令牌立刻作废**（承运商文档写的）：已经带着旧令牌在路上的请求可能被承运商拒绝；没有处理，也没有量过。
+- **令牌刷新时旧令牌立刻作废**（承运商文档写的）：`gateway-authz` 不知道承运商把缓存里的令牌作废了。SF-13 在替身上量到：作废之后的下一次请求，和接着的三次，都是 HTTP 200、承运商的 `apiResultCode` 500，原样给调用方；把应用文件里的 `key_version` 改掉（旁边写新文件，再改名盖上去）之后才重新取。已经带着旧令牌在路上的那一个请求没有单独量。
 - **几个 `gateway-authz` 实例会互相作废令牌**：一个应用只能有一个取令牌的进程。
-- **访问日志里 `provider_reference_id`、`provider_request_id` 两个字段**没有验证过会不会出现。
-- **查询串在网关上没有限制**，带了会被 `provider-signer` 以 400（`query_not_allowed`）拒绝。
+- **访问日志里 `provider_reference_id`、`provider_request_id`**：SF-01 看到创建那一行带着这两个字段，分别是这次的 `customerOrderNo` 和应答里的 `sfWaybillNo`。查询在这两处都没有东西，没有另查。
+- **查询串在网关上没有限制**。SF-07 看到 `POST /providers/sfintl/v1/orders?x=1` 被 `provider-signer` 以 400（`query_not_allowed`）拒绝，调用方看到的也是 400，承运商没有收到。网关自己没有拦。
