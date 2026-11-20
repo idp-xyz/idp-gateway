@@ -1,8 +1,8 @@
-"""The ingress compile spec is an input document, not a compiled gateway.
+"""The ingress compile spec is an input document.
 
-gateway-control compile still emits egress only. This test checks that the
-example is a legal ingress spec and that each route is a legal INGRESS
-RouteIntent. It does not run the compiler.
+The example is a legal ingress spec, and each route plus the pool and backend
+is a legal INGRESS RouteIntent. This test checks that contract. It does not
+run the compiler.
 """
 import json
 import unittest

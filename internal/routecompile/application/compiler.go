@@ -23,11 +23,21 @@ type Result struct {
 	NativeValidated bool
 }
 
-// Compile 编译规格。gatewayPath 或 policyPath 为空时不写对应的文件。
+// Compile 编译出站规格。gatewayPath 或 policyPath 为空时不写对应的文件。
 func (c Compiler) Compile(ctx context.Context, spec domain.CompileSpec, gatewayPath, policyPath, tlsDir, jwksFile string) (Result, error) {
 	art, err := domain.Compile(spec)
-	if err != nil {
-		return Result{}, err
+	return c.finish(ctx, art, err, gatewayPath, policyPath, tlsDir, jwksFile)
+}
+
+// CompileIngress 编译入口规格。写文件和原生校验与 Compile 相同。
+func (c Compiler) CompileIngress(ctx context.Context, spec domain.IngressSpec, gatewayPath, policyPath, tlsDir, jwksFile string) (Result, error) {
+	art, err := domain.CompileIngress(spec)
+	return c.finish(ctx, art, err, gatewayPath, policyPath, tlsDir, jwksFile)
+}
+
+func (c Compiler) finish(ctx context.Context, art domain.CompiledArtifacts, compileErr error, gatewayPath, policyPath, tlsDir, jwksFile string) (Result, error) {
+	if compileErr != nil {
+		return Result{}, compileErr
 	}
 	validated := false
 	if c.Validator != nil {

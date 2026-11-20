@@ -22,7 +22,7 @@
 //
 //	gateway-control sync-jwks --url <JWKS 地址> --output <文件> [--once] …
 //
-// 另有一条把出站编译规格编译成网关配置和 gateway-authz 登记表，或只做 RouteIntent 预检（compile.go）：
+// 另有一条把出站或入口编译规格编译成网关配置和策略 JSON，或只做 RouteIntent 预检（compile.go）：
 //
 //	gateway-control compile --spec <规格> --output-gateway <yaml> --output-policy <json> [--agentgateway <二进制>] [--lock-file <锁>] [--tls-dir <目录>]
 //	gateway-control compile --preflight-only --intents <意图.json> [--provider-registry <登记表>]

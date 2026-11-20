@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.idp.internal/gateway/ingress-compile-spec-1.0.json",
   "title": "Ingress compile spec",
-  "description": "Input to a future ingress compile. Every hostname, issuer, audience, and backend address is supplied by this document. The compiler does not embed a product hostname, a JWT issuer, or a backend.",
+  "description": "Input to ingress compile. Every hostname, issuer, audience, and backend address is supplied by this document. The compiler does not embed a product hostname, a JWT issuer, or a backend.",
   "type": "object",
   "additionalProperties": false,
   "required": ["traffic_class", "pool", "backend", "routes"],
@@ -26,6 +26,11 @@
         "public_hostname",
         "listen_port",
         "bind_address",
+        "admin_addr",
+        "stats_addr",
+        "readiness_addr",
+        "readback_port",
+        "publisher_identity",
         "tls_dir",
         "jwt_issuer",
         "jwt_audiences",
@@ -37,6 +42,11 @@
         "public_hostname": { "type": "string", "pattern": "^(?:[a-z0-9-]+\\.)+[a-z]{2,}$" },
         "listen_port": { "type": "integer", "minimum": 1, "maximum": 65535 },
         "bind_address": { "type": "string", "minLength": 1 },
+        "admin_addr": { "type": "string", "minLength": 1 },
+        "stats_addr": { "type": "string", "minLength": 1 },
+        "readiness_addr": { "type": "string", "minLength": 1 },
+        "readback_port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "publisher_identity": { "type": "string", "minLength": 1 },
         "tls_dir": { "type": "string", "minLength": 1 },
         "jwt_issuer": { "type": "string", "format": "uri" },
         "jwt_audiences": {
@@ -51,7 +61,7 @@
     "backend": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["backend_service_ref", "upstream_host", "upstream_port", "upstream_tls"],
+      "required": ["backend_service_ref", "upstream_host", "upstream_port", "upstream_tls", "route_timeout"],
       "properties": {
         "backend_service_ref": {
           "type": "string",

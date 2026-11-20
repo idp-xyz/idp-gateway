@@ -76,6 +76,67 @@ func TestCompileCommandRefusesAndPreflight(t *testing.T) {
 	}
 }
 
+func TestCompileIngressExample(t *testing.T) {
+	root := repoRoot(t)
+	dir := t.TempDir()
+	spec := filepath.Join(root, "contracts/gateway/ingress-compile-spec.example.json")
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{
+		"compile", "--spec", spec,
+		"--output-gateway", filepath.Join(dir, "gateway.yaml"),
+		"--output-policy", filepath.Join(dir, "policy.json"),
+	}, &stdout, &stderr, nil)
+	if code != exitActive {
+		t.Fatalf("code %d out %s err %s", code, stdout.String(), stderr.String())
+	}
+	var line map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &line); err != nil {
+		t.Fatal(err)
+	}
+	if line["outcome"] != "COMPILED" || line["routes"] != float64(2) || line["native_validated"] != false {
+		t.Fatalf("line %#v", line)
+	}
+	gw, err := os.ReadFile(filepath.Join(dir, "gateway.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(gw), "name: 'public-shipments-get-get'") || !strings.Contains(string(gw), "name: 'public-shipments-get-head'") {
+		t.Fatalf("gateway yaml missing example routes:\n%s", gw)
+	}
+}
+
+func TestCompileIngressExampleNative(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(home, ".local", "opt", "agentgateway", "1.7.0", "agentgateway")
+	if _, err := os.Stat(binary); err != nil {
+		t.Skip("pinned agentgateway 1.7.0 is not installed")
+	}
+	root := repoRoot(t)
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{
+		"compile",
+		"--spec", filepath.Join(root, "contracts/gateway/ingress-compile-spec.example.json"),
+		"--output-gateway", filepath.Join(dir, "gateway.yaml"),
+		"--output-policy", filepath.Join(dir, "policy.json"),
+		"--agentgateway", binary,
+		"--lock-file", filepath.Join(root, "deploy", "agentgateway", "agentgateway.lock.json"),
+	}, &stdout, &stderr, nil)
+	if code != exitActive {
+		t.Fatalf("code %d out %s err %s", code, stdout.String(), stderr.String())
+	}
+	var line map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &line); err != nil {
+		t.Fatal(err)
+	}
+	if line["native_validated"] != true || line["routes"] != float64(2) {
+		t.Fatalf("line %#v", line)
+	}
+}
+
 func loadFile(t *testing.T, path string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(path)

@@ -1,10 +1,14 @@
 package main
 
-// compile 把一份出站编译规格变成 agentgateway 配置和 gateway-authz 登记表，
+// compile 把一份出站编译规格或入口编译规格变成 agentgateway 配置和一份策略 JSON，
 // 或者只做 RouteIntent 预检（scripts/preflight_intents.py 的 Go 版）。
 //
 //	gateway-control compile --spec <规格> --output-gateway <yaml> --output-policy <json> [--agentgateway <二进制>] [--lock-file <锁>] [--tls-dir <目录>]
 //	gateway-control compile --preflight-only --intents <意图.json> [--provider-registry <登记表>]
+//
+// --spec 的文件是出站规格，或是入口规格（traffic_class 为字符串 INGRESS）。
+// 没有这个字段的文档仍走出站解析，出站标志的行为不变。入口写出网关 YAML，
+// 以及一份没有承运商操作的策略文件。--output-policy 仍然必填。
 //
 // 编译成功时标准输出一行 JSON：outcome 为 COMPILED，带着路由条数和两份摘要。
 // native_validated 只在给了 --agentgateway 并且 --validate-only 通过时为 true。校验不过就不写文件。
@@ -52,7 +56,7 @@ func runCompile(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	)
 	flags := flag.NewFlagSet("gateway-control compile", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	flags.StringVar(&specPath, "spec", "", "编译规格 JSON：池、承运商、调用方和路由")
+	flags.StringVar(&specPath, "spec", "", "编译规格 JSON：出站规格（egress spec）或入口规格（ingress spec）")
 	flags.StringVar(&gatewayOut, "output-gateway", "", "写出的 agentgateway YAML")
 	flags.StringVar(&policyOut, "output-policy", "", "写出的 gateway-authz 登记表 JSON")
 	flags.StringVar(&binary, "agentgateway", "", "用来 --validate-only 的 agentgateway 二进制；不给就不做原生校验")
@@ -110,17 +114,26 @@ func runCompile(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		fmt.Fprintln(stderr, "gateway-control:", err)
 		return exitError
 	}
-	spec, err := domain.ParseSpec(data)
-	if err != nil {
-		return compileError(err, stdout, stderr)
-	}
 	compiler := application.Compiler{}
 	if binary != "" {
 		compiler.Validator = binaryvalidator.Validator{Binary: binary, LockFile: lockFile}
 	}
 	vctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	result, err := compiler.Compile(vctx, spec, gatewayOut, policyOut, tlsDir, "")
+	var result application.Result
+	if domain.IngressDocument(data) {
+		spec, parseErr := domain.ParseIngressSpec(data)
+		if parseErr != nil {
+			return compileError(parseErr, stdout, stderr)
+		}
+		result, err = compiler.CompileIngress(vctx, spec, gatewayOut, policyOut, tlsDir, "")
+	} else {
+		spec, parseErr := domain.ParseSpec(data)
+		if parseErr != nil {
+			return compileError(parseErr, stdout, stderr)
+		}
+		result, err = compiler.Compile(vctx, spec, gatewayOut, policyOut, tlsDir, "")
+	}
 	if err != nil {
 		return compileError(err, stdout, stderr)
 	}
