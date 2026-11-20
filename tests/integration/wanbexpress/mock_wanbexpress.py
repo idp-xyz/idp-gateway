@@ -158,10 +158,11 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, required=True)
+    parser.add_argument('--host', default='127.0.0.1', help='the pool runs it in a container: 0.0.0.0')
     parser.add_argument('--state', required=True, help='JSON: {"admin_secret": ..., "accounts": {"AccountNo;Token": "AccountNo"}}')
     args = parser.parse_args()
     CFG.update(json.load(open(args.state)))
-    ThreadingHTTPServer(('127.0.0.1', args.port), Handler).serve_forever()
+    ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()
 
 
 if __name__ == '__main__':

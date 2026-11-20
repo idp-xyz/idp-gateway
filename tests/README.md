@@ -6,7 +6,7 @@
 | `acceptance/acceptance_matrix.csv` 等三张矩阵 | 正式验收用例（95 个场景：GW-AT 50、GW-NAT 19、GW-ST 26）、协议兼容清单、故障演练清单。全部 **NOT_RUN** | 尚未执行 |
 | `acceptance/blackbox/` | 对着真实 agentgateway 的黑盒用例，被测的 PDP 是本仓的 `gateway-authz` | 见该目录 README |
 | `integration/gatekeeper/` | 与真实 Gatekeeper 的联调：在本机起一套 Gatekeeper，真实的 M2M 令牌经 agentgateway 到 `gateway-authz`，再由它去问 Gatekeeper 的 PDP | 见该目录 README；需要 docker |
-| `integration/wanbexpress/` | `deploy/providers/wanbexpress/` 的配置在联调架子上跑：真实的 Gatekeeper、网关和 `gateway-authz`，承运商是替身（`--sandbox` 另可对着真实的沙箱，`--mutate` 做对照） | 见该目录 README；与联调共用端口 |
+| `integration/wanbexpress/` | `deploy/providers/wanbexpress/` 的配置在联调架子上跑：真实的 Gatekeeper、网关和 `gateway-authz`，承运商是替身（`--sandbox` 另可对着真实的沙箱，`--mutate` 做对照）；`pool.py` 在 `deploy/compose` 的单机池上跑同一份配置，用 `gateway-control publish` 发布，并看出口规则 | 见该目录 README；与联调共用端口 |
 | `integration/kubernetes/` | 在本机的一个 kind 集群里验证 ADR-0010 的做法：锁定的上游镜像，多个副本；每份快照一个不可变的 ConfigMap，发布是滚动替换；经网关的回读口逐个副本回读 | 见该目录 README；需要 kind、kubectl 和 docker |
 | `integration/compose/` | 在本机用 docker compose 验证 ADR-0010 在单机上的做法，跑的就是 `deploy/compose` 的部署文件：锁定的上游镜像跑在容器里，配置目录挂载进去；发布是把目录里的配置文件整份换掉，网关不重启，经网关的回读口确认；启动时先把确认过的那一份放到位，回读对上了才收请求；池里的容器死了，看守（`gateway-control keep`）把它们起回来，平时定时对账，并给出指标。`cmd/gateway-control` 的五条命令、看守的指标和一份 Prometheus 规则都在这里对着真的网关跑。同一个目录里的 `units.py` 另看 `deploy/compose` 的两个 systemd 单元之间的关系：用户级的 systemd，命令换成替身 | 见该目录 README；需要 docker 和 go（`units.py` 只要用户级的 systemd） |
 | `contracts/` | 契约之间、契约与黑盒配置之间的一致性；RouteIntent 预检与诊断事件的反例；agentgateway 版本锁定与项目清单一致；`scripts/agentgateway_release.py` 的判断逻辑（用固定数据，不联网） | `python -m unittest discover -s tests/contracts -p 'test_*.py'` |

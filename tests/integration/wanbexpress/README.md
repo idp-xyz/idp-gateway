@@ -1,8 +1,8 @@
 # WanbExpress：`deploy/providers/wanbexpress` 在联调架子上跑
 
-[开发计划](../../../docs/development-plan.md) 3.2 的第一步。读的是 `deploy/providers/wanbexpress/agentgateway.yaml` 本身，不是另抄一份。不改 Go，不改 `tests/integration/gatekeeper/run.py`：那一套的 `run.py` 被原样当模块用（取令牌、`seed`、签证书、起进程、停进程、读判定记录都是它的），所以它仍是 12/12，没有重跑的必要。
+[开发计划](../../../docs/development-plan.md) 3.2。第一步（`run.py`）在联调架子上，第二步（`pool.py`）在单机池上，见下面"单机池上"。读的是 `deploy/providers/wanbexpress/agentgateway.yaml` 本身，不是另抄一份。不改 Go，不改 `tests/integration/gatekeeper/run.py`：那一套的 `run.py` 被原样当模块用（取令牌、`seed`、签证书、起进程、停进程、读判定记录都是它的），所以它仍是 12/12，没有重跑的必要。
 
-> 已发布的 `gk.idp.xyz` 是生产环境，这里不访问它。真实沙箱那一遍（`--sandbox`）由仓库所有者带着自己的凭证跑，**代码没有对着真实的沙箱跑过**。
+> 已发布的 `gk.idp.xyz` 是生产环境，这里不访问它。真实沙箱那一遍（`--sandbox`）由仓库所有者带着自己的凭证跑，`run.py` 对着真实沙箱的结果在下面，`pool.py --sandbox` 没有跑过。
 
 ## 怎么跑
 
@@ -20,7 +20,7 @@ tests/integration/gatekeeper/stack.sh up                                   # 本
 | 真的 | 本机的 Gatekeeper（令牌、JWKS、PDP 和 OpenFGA，PDP 经 27623 要客户端证书）、锁定的 agentgateway 1.7.0、`gateway-authz`（产品构建）、`deploy/providers/wanbexpress/agentgateway.yaml` 和由 `policy.example.json` 填出来的登记表 |
 | 假的 | 承运商（`mock_wanbexpress.py`）、工作负载证书（每次现做的 CA）。WB-09 里 `gateway-authz` 换成带 `acceptance` 标签的构建，只为了能让它"放行却不给凭证"；它还是问着真实的 PDP |
 
-对着替身时，配置只换一处：四条路由后端的 `host: api-sbx.wanbexpress.com:80` 换成替身的地址（精确字符串替换，出现次数不是 4 就不跑）。`urlRewrite.authority` 不换，所以替身看到的 `Host` 就是沙箱的名字。
+`deploy/providers/wanbexpress/agentgateway.yaml` 写的是池的值，联调架子上用精确字符串替换（`run.py` 的 `RIG_VALUES`，每一处核对出现次数，不对就不跑）把它们换回联调的：三个本机端口（管理、指标、就绪 `15000/15020/15021` → `27614/27615/27616`）、业务监听和回读口（`8081`、`8443` → `27611`、`27619`，含 `networkAuthorization` 里的两处）、`gateway-authz:9443` → `127.0.0.1:27613`（4 处）、证书路径 `tls/` → `.run/tls/`（`cert`、`key`、`root` 各 5 处）、JWKS 的 `file: tls/jwks.json` → 本机 Hydra 的 URL、回读路由转给的 `127.0.0.1:15000` → `27614`。对着替身时另把四条路由后端的 `host: api-sbx.wanbexpress.com:80` 换成替身的地址（出现次数不是 4 就不跑）。`urlRewrite.authority` 不换，所以替身看到的 `Host` 就是沙箱的名字。
 
 ## 两种跑法
 
@@ -79,6 +79,48 @@ tests/integration/gatekeeper/stack.sh up                                   # 本
 | `no-accept` | 去掉写 `Accept` 的那一处 | WB-01、02、03、04、06、09（4/10）：调用方没带 `Accept`，替身（我们的假设）答 406；WB-04 里调用方带 `text/html` 时它原样到了上游 |
 | `no-header-filter` | 去掉后端上过滤请求头的名单 | 只有 WB-04：`X-Evil-Probe` 到了上游（按名字去掉的那几个仍被去掉） |
 | `delete-any-method` | `DELETE` 路由改成不限方法 | 只有 WB-08：`PUT`、`PATCH` 到了 `gateway-authz`。承运商仍什么都没收到：登记表的方法对不上，`gateway-authz` 拒绝。也就是说路由上的方法限制不是唯一的一道，WB-08 查的是"网关自己先拦"这一层 |
+
+## 单机池上（`pool.py`，第二步）
+
+```bash
+tests/integration/gatekeeper/stack.sh up
+.venv/bin/python tests/integration/wanbexpress/pool.py                                        # 上游是替身，约半分钟
+.venv/bin/python tests/integration/wanbexpress/pool.py --sandbox --sandbox-credentials FILE   # 上游是真实沙箱
+.venv/bin/python tests/integration/wanbexpress/pool.py --control no-egress                    # 对照：出口规则的两个服务什么都不装
+.venv/bin/python tests/integration/wanbexpress/pool.py --control no-pdp-tls                   # 对照：gateway-authz 缺 --gatekeeper-tls-*，和缺一个变量
+```
+
+跑的是 `deploy/compose/compose.yml` 加 `deploy/compose/gateway-authz.yml` 加测试用的叠加文件 `pool.yml`，都不改。**搭法**：compose 项目 `idp-gateway-wanb-pool`，本机端口 `27631`（`front`，调用方从这里进）、`27632`（回读口）、`27633`（发布器离线加载用的临时容器）、`27634`（替身的管理口，只在替身跑法里）；池的目录、证书、`.env`、`gateway-authz` 的文件都在一个 `tempfile.mkdtemp` 的临时目录里（`gateway-control` 和 `gateway-authz` 现场静态构建）；证书用联调架子本次做的那一套，因为本机栈里 PDP 前面的 nginx 信的是这一套 CA。起的先后同"头一次安装"：先放一份只有回读口的配置，`up -d agentgateway gateway-authz outsider [wanb-mock]`，再用 `gateway-control publish` 把 `deploy/providers/wanbexpress/agentgateway.yaml`（只换后端；`--sandbox` 时原样）发布上去，再 `up -d`，`confirm` 对上了 `front` 才开。JWKS 是 `tls/jwks.json`，取自本机 Hydra，只留现在签令牌的那把（原因见 `deploy/providers/wanbexpress/README.md` "发布到池"）。
+
+- **PDP**：测试叠加里 `gateway-authz` 加入联调栈的 docker 网络 `idp-gateway-gk_default`（external），按服务名 `pdp-mtls:8443` 找 PDP，带客户端证书。没有改 `tests/integration/gatekeeper/` 下的东西。
+- **替身**：叠加里的服务 `wanb-mock`（profile `standin`），配置里的后端换成 `wanb-mock:8000`，所以出口规则钉的是它。另有 `outsider`：配置里没有它，网关的命名空间里应连不上。
+- **用例**：WB-01 到 WB-08、WB-10 原样用；WB-09 跳过并写明原因（要把 `gateway-authz` 换成验收构建，池里跑的是产品构建）；WB-04 有一处不同：`front` 对带两个 `Authorization` 头的请求自己答 400，请求到不了网关，所以不再塞第二个头，改查 `front` 的 400 和承运商什么都没收到；日志扫描扫的是 `agentgateway`、`gateway-authz`、`front` 三个容器的日志。
+- **WB-11（只在池上）**：出口规则在起作用。从 `netns` 的网络命名空间里（一个临时容器接在它上面）：规则里钉的地址就是上游名字解析到的那些（替身：钉的恰是 `wanb-mock` 的地址；沙箱：非空，且是该名字解析出的地址之内，结果里记下）；配置登记的上游地址和端口连得上，`gateway-authz` 的地址和端口、回环 `8081` 连得上；`outsider`、登记地址上的另一个端口、`gateway-authz` 的另一个端口、网关的指标端口连不上（被规则拒绝，`113`）。不往公网发探测；`--sandbox` 下对沙箱的地址只做一次 TCP 连接，不发任何内容，也没有凭证。
+- **结果里另记**：池里各容器的环境里有没有名字带 `proxy` 的变量；上游名字解析到的地址和规则里钉的地址；每个调用的耗时；`gateway-control publish` 的结局。
+- **结束时**无论成败，`docker compose down -v` 自己的项目，删临时目录。只动自己的项目和 `idp-gateway-gk`。
+
+### 结果（2026-11-19，替身，两遍）
+
+两遍都是 11/11。每遍 108 项检查，其中 1 项是 WB-09 整个跳过，别的没有跳过。`publish` 都是 `ACTIVE`。容器里没有代理变量（`agentgateway`、`front`、`netns`、`gateway-authz` 都查了）。`WB-11` 钉住的是 `127.0.0.1:15000`、`gateway-authz:9443`、`wanb-mock:8000`，各是对应容器的地址。
+
+| 对照 | 结果 |
+|---|---|
+| `--control no-egress` | 10/11：只有 WB-11 不通过。没有钉住任何地址，`outsider`、替身的另一个端口、`gateway-authz` 的另一个端口、网关的指标端口都连得上（WB-01 到 WB-10 照常通过：出口规则不影响正常的调用，这一条只有 WB-11 看得见） |
+| `--control no-pdp-tls` | `gateway-authz` 缺 `--gatekeeper-tls-*` 起不来，退出码 1：`--gatekeeper-url is not a loopback address, so --gatekeeper-tls-cert, --gatekeeper-tls-key, --gatekeeper-tls-ca and --gatekeeper-name are required: this hop may not rest on a shared token alone`。缺一个变量（`GATEWAY_AUTHZ_PDP_CA`）：`docker compose config` 退出码 1，`required variable GATEWAY_AUTHZ_PDP_CA is missing a value: see gateway-authz.env.example` |
+
+`--pool --sandbox` 的代码路径用一次性的办法（上游是池里的替身、凭证是造的）走通过，没有对真实的沙箱跑；那一遍里 WB-11 在沙箱那一支按预期不通过（钉的是替身，不是沙箱的名字），别的通过，临时目录和容器结束后都不在，造的令牌在结果和日志里是 0 处。
+
+### 池上真实沙箱的结果
+
+2026-11-19，在开发机上，`pool.py --sandbox`，凭证文件同上。连跑两遍都是 11/11：98 项检查，65 项通过，33 项跳过（只有替身上看得到的那些，和整个 `WB-09`），没有不通过的。
+
+- 万邦的快照经 `gateway-control publish` 发布到池上，两遍都是 `ACTIVE`；调用方经 `front` 进来，`gateway-authz` 是池里另一个容器，带客户端证书问 Gatekeeper 的 PDP；请求从带着出口规则的命名空间里出去，到了沙箱。验证授权、创建、取回、删除都成了，包裹都删了。
+- 出口规则钉住的：沙箱的名字在 80 端口上的两个地址（`47.106.164.236`、`47.107.36.179`，与命名空间里解析到的相同），`gateway-authz:9443` 的容器地址，回环上的回读路由。从命名空间里连：这几处连得上；网络上另一个容器、`gateway-authz` 的另一个端口、网关的指标端口被规则拒绝。没有往公网发探测。
+- 四个容器（`agentgateway`、`front`、`netns`、`gateway-authz`）的环境里都没有代理变量。
+- 令牌和这种认证头的值，在标准输出、结果文件和三个容器的日志里都是 0 处。
+- 耗时（经 `front`）：创建 274 到 459 毫秒，取 214 到 293 毫秒，删除 236 到 293 毫秒。每一种都比联调架子上（网关是本机进程）慢 150 到 200 毫秒，原因没有查。
+- **这里没有验的**：承运商实际收到的头和两个账户的隔离（同上，只在替身上）；到承运商的 TLS；沙箱的地址换了之后出口规则怎样（两遍里解析到的都是这两个）；两把密钥的 JWKS（见下一条）；装到另一台机器上。
+- **发布器的一个毛病，在这里绕开了**：JWKS 里有两把密钥时，网关报告的密钥顺序每次启动不同，发布器的摘要对顺序敏感，`publish` 大约三次里有一次对不上而退回（`RESTORED`）。套件在池的 JWKS 里只放签令牌的那一把。这是 Sonnet 做这一步时看到的，我还没有单独复现；修它要改 Go。
 
 ## 真实沙箱的结果
 

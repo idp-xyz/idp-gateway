@@ -1,0 +1,57 @@
+# gateway-authz in the pool. An overlay: use it with compose.yml, which it does not change.
+#
+#   docker compose -f compose.yml -f gateway-authz.yml up -d
+#
+# (the variables it needs are in gateway-authz.env.example; put them in the same .env). A pool has a gateway that asks
+# for a decision and a credential on every request (extAuthz), and this is what it asks.
+#
+# gateway-authz is a service of its own, in the project's default network, with its own network namespace. It is NOT
+# in the namespace of netns, where the gateway and front are: the gateway finds it by name, extAuthz.host
+# `gateway-authz:9443` in the published configuration, and that makes the hop one of the `host: name:port` that
+# pin-egress.sh pins, like a backend. Nothing is added to pin-egress.sh for it. The hop is mutual TLS: the gateway presents
+# its certificate (tls/gateway.crt in the pool's tls directory) and accepts only the certificate of this service.
+#
+# Hardened as place and confirm are (compose.yml, x-gateway-control): the image is a shell only, by digest; what
+# runs is the gateway-authz binary of the host, mounted in (static: CGO_ENABLED=0 go build -trimpath -o gateway-authz
+# ./cmd/gateway-authz); read-only root file system, no capability, no-new-privileges, not root. Everything it reads
+# is mounted read-only. The developer-token file is mounted as the directory that holds it: gateway-authz reads it again
+# when it is replaced by a rename, and a file mounted on its own would keep showing the old one.
+#
+# The PDP is not loopback, so gateway-authz needs all four of its --gatekeeper-tls-* arguments (a client certificate, its key,
+# the CA of the PDP's certificate, the name to check) and refuses to start without them. restart is "no" as for every
+# container of the pool.
+services:
+  gateway-authz:
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    image: ${FRONT_IMAGE:-public.ecr.aws/nginx/nginx-unprivileged:stable-alpine@sha256:c3fc8fa482be50ef709c6438eb1bc98d50dbfe5a9b48be90711b8814f4dfd701}
+    entrypoint: ["/usr/local/bin/gateway-authz"]
+    user: "${GATEWAY_AUTHZ_USER:?see gateway-authz.env.example}"
+    command:
+      - --listen=0.0.0.0:9443
+      - --tls-cert=/authz/server.crt
+      - --tls-key=/authz/server.key
+      - --client-ca=/authz/gateway-ca.crt
+      - --gateway-identity=${GATEWAY_AUTHZ_GATEWAY_IDENTITY:?see gateway-authz.env.example}
+      - --policy=/authz/policy.json
+      - --developer-tokens=/authz/credentials/developer-tokens.json
+      - --gatekeeper-url=${GATEWAY_AUTHZ_PDP_URL:?see gateway-authz.env.example}
+      - --gatekeeper-name=${GATEWAY_AUTHZ_PDP_NAME:?see gateway-authz.env.example}
+      - --gatekeeper-token-file=/authz/pdp-token
+      - --gatekeeper-tls-cert=/authz/pdp-client.crt
+      - --gatekeeper-tls-key=/authz/pdp-client.key
+      - --gatekeeper-tls-ca=/authz/pdp-ca.crt
+    volumes:
+      - "${GATEWAY_AUTHZ:?see gateway-authz.env.example}:/usr/local/bin/gateway-authz:ro"
+      - "${GATEWAY_AUTHZ_TLS_CERT:?see gateway-authz.env.example}:/authz/server.crt:ro"
+      - "${GATEWAY_AUTHZ_TLS_KEY:?see gateway-authz.env.example}:/authz/server.key:ro"
+      - "${GATEWAY_AUTHZ_GATEWAY_CA:?see gateway-authz.env.example}:/authz/gateway-ca.crt:ro"
+      - "${GATEWAY_AUTHZ_POLICY:?see gateway-authz.env.example}:/authz/policy.json:ro"
+      - "${GATEWAY_AUTHZ_CREDENTIALS_DIR:?see gateway-authz.env.example}:/authz/credentials:ro"
+      - "${GATEWAY_AUTHZ_PDP_TOKEN_FILE:?see gateway-authz.env.example}:/authz/pdp-token:ro"
+      - "${GATEWAY_AUTHZ_PDP_CERT:?see gateway-authz.env.example}:/authz/pdp-client.crt:ro"
+      - "${GATEWAY_AUTHZ_PDP_KEY:?see gateway-authz.env.example}:/authz/pdp-client.key:ro"
+      - "${GATEWAY_AUTHZ_PDP_CA:?see gateway-authz.env.example}:/authz/pdp-ca.crt:ro"
+    stop_grace_period: 5s

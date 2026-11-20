@@ -9,30 +9,32 @@
 #   GET    /providers/wanbexpress/v1/parcels/{processCode} -> GET    /api/parcels/{processCode}
 #   DELETE /providers/wanbexpress/v1/parcels/{processCode} -> DELETE /api/parcels/{processCode}
 #
-# Values that change with the deployment are written here as the values of the integration rig
-# (tests/integration/gatekeeper): the issuer and its JWKS, gateway-authz's address and the
-# certificate paths (relative to the directory the gateway is started in). The upstream is the carrier's sandbox:
-# api-sbx.wanbexpress.com, port 80, PLAIN HTTP. The developer token is therefore sent in clear over the
-# public internet. That is acceptable for the sandbox only; an upstream for the production
-# environment must be https, and nothing here has checked TLS towards the carrier.
+# The values are those of the single-host pool described by deploy/compose (compose.yml, gateway-authz.yml):
+# the callers' listener on 8081 (front forwards to it), the read-back listener on 8443, admin, stats and readiness on
+# 15000, 15020 and 15021 (loopback), certificates as tls/<file> under the pool's tls directory, the JWKS of the issuer
+# as the file tls/jwks.json (a file the operator puts there: the pool's egress rules let the gateway reach only the
+# hosts this file names, so it does not fetch it), and gateway-authz as the pool's own service gateway-authz:9443,
+# found by name so that the egress rules cover this hop too. The issuer is the one that signs the callers' tokens.
+# The upstream is the carrier's sandbox: api-sbx.wanbexpress.com, port 80, PLAIN HTTP. The developer token is
+# therefore sent in clear over the public internet. That is acceptable for the sandbox only; an upstream for the
+# production environment must be https, and nothing here has checked TLS towards the carrier.
 # The environment is TEST: the token has no env claim, so it is a constant of the route.
 #
-# Run from a copy, with the session key in the SESSION_KEY environment variable and no
-# config.session.key in this file (the reviewed configuration's note on item 6 applies unchanged).
-# Ports 27611-27620 as in the reviewed configuration: 27611 callers (loopback), 27613 gateway-authz,
-# 27614 admin, 27615 stats, 27616 readiness, 27619 read-back.
+# The session key is not in this file: the pool gives it to the gateway in the environment variable SESSION_KEY.
+# Each route's timeout is 9 seconds: front (nginx) waits for the gateway at most 10 seconds (deploy/compose README),
+# and a longer timeout here would show the caller nginx's 504 instead of the gateway's answer.
 config:
-  adminAddr: 127.0.0.1:27614
-  statsAddr: 127.0.0.1:27615
-  readinessAddr: 127.0.0.1:27616
+  adminAddr: 127.0.0.1:15000
+  statsAddr: 127.0.0.1:15020
+  readinessAddr: 127.0.0.1:15021
   storage:
     mode: readOnly
 
 frontendPolicies:
   networkAuthorization:
     rules:
-    - allow: 'destination.port == 27611'
-    - allow: 'destination.port == 27619 && source.spiffeId == "spiffe://idp.test/gateway-control/publisher"'
+    - allow: 'destination.port == 8081'
+    - allow: 'destination.port == 8443 && source.spiffeId == "spiffe://idp.test/gateway-control/publisher"'
 
   # One access-log line per call, with the numbers that tie it to gateway-authz's decision and to the
   # carrier's own numbers (same expressions as the reviewed configuration; see its comments).
@@ -47,13 +49,13 @@ frontendPolicies:
 
 gateways:
   read-back:
-    port: 27619
+    port: 8443
     tls:
-      cert: .run/tls/gateway-readback.crt
-      key: .run/tls/gateway-readback.key
-      root: .run/tls/ca.crt
+      cert: tls/gateway-readback.crt
+      key: tls/gateway-readback.key
+      root: tls/ca.crt
   egress-test:
-    port: 27611
+    port: 8081
     bindAddress: 127.0.0.1
     protocol: HTTP
     jwtAuth:
@@ -61,7 +63,7 @@ gateways:
       issuer: http://127.0.0.1:27621
       audiences: [idp-egress-gateway]
       jwks:
-        url: http://127.0.0.1:27621/.well-known/jwks.json
+        file: tls/jwks.json
 
 routes:
 - name: wanbexpress-whoami-get
@@ -81,16 +83,16 @@ routes:
       rules:
       - allow: 'request.path == "/providers/wanbexpress/v1/whoami"'
     extAuthz:
-      host: 127.0.0.1:27613
+      host: gateway-authz:9443
       failureMode:
         denyWithStatus: 503
       includeRequestHeaders:
       - x-provider-account
       policies:
         backendTLS:
-          cert: .run/tls/gateway.crt
-          key: .run/tls/gateway.key
-          root: .run/tls/ca.crt
+          cert: tls/gateway.crt
+          key: tls/gateway.key
+          root: tls/ca.crt
           hostname: gatekeeper.idp.test
         http:
           requestTimeout: 1s
@@ -124,7 +126,7 @@ routes:
       - x-idp-decision-id
     # No retry policy on purpose. The gateway does not repeat a request.
     timeout:
-      requestTimeout: 15s
+      requestTimeout: 9s
   backends:
   - host: api-sbx.wanbexpress.com:80
     policies:
@@ -169,16 +171,16 @@ routes:
       rules:
       - allow: 'request.path == "/providers/wanbexpress/v1/parcels"'
     extAuthz:
-      host: 127.0.0.1:27613
+      host: gateway-authz:9443
       failureMode:
         denyWithStatus: 503
       includeRequestHeaders:
       - x-provider-account
       policies:
         backendTLS:
-          cert: .run/tls/gateway.crt
-          key: .run/tls/gateway.key
-          root: .run/tls/ca.crt
+          cert: tls/gateway.crt
+          key: tls/gateway.key
+          root: tls/ca.crt
           hostname: gatekeeper.idp.test
         http:
           requestTimeout: 1s
@@ -212,7 +214,7 @@ routes:
       - x-idp-decision-id
     # No retry policy on purpose. A create that times out has an unknown result; the same ReferenceId answers 0x100005 if it did go through.
     timeout:
-      requestTimeout: 15s
+      requestTimeout: 9s
   backends:
   - host: api-sbx.wanbexpress.com:80
     policies:
@@ -257,16 +259,16 @@ routes:
       rules:
       - allow: 'request.path.matches("^/providers/wanbexpress/v1/parcels/[A-Za-z0-9][A-Za-z0-9._-]*$")'
     extAuthz:
-      host: 127.0.0.1:27613
+      host: gateway-authz:9443
       failureMode:
         denyWithStatus: 503
       includeRequestHeaders:
       - x-provider-account
       policies:
         backendTLS:
-          cert: .run/tls/gateway.crt
-          key: .run/tls/gateway.key
-          root: .run/tls/ca.crt
+          cert: tls/gateway.crt
+          key: tls/gateway.key
+          root: tls/ca.crt
           hostname: gatekeeper.idp.test
         http:
           requestTimeout: 1s
@@ -300,7 +302,7 @@ routes:
       - x-idp-decision-id
     # No retry policy on purpose. The gateway does not repeat a request.
     timeout:
-      requestTimeout: 15s
+      requestTimeout: 9s
   backends:
   - host: api-sbx.wanbexpress.com:80
     policies:
@@ -345,16 +347,16 @@ routes:
       rules:
       - allow: 'request.path.matches("^/providers/wanbexpress/v1/parcels/[A-Za-z0-9][A-Za-z0-9._-]*$")'
     extAuthz:
-      host: 127.0.0.1:27613
+      host: gateway-authz:9443
       failureMode:
         denyWithStatus: 503
       includeRequestHeaders:
       - x-provider-account
       policies:
         backendTLS:
-          cert: .run/tls/gateway.crt
-          key: .run/tls/gateway.key
-          root: .run/tls/ca.crt
+          cert: tls/gateway.crt
+          key: tls/gateway.key
+          root: tls/ca.crt
           hostname: gatekeeper.idp.test
         http:
           requestTimeout: 1s
@@ -388,7 +390,7 @@ routes:
       - x-idp-decision-id
     # No retry policy on purpose. A DELETE that is sent again is harmless to the carrier but the gateway does not do it.
     timeout:
-      requestTimeout: 15s
+      requestTimeout: 9s
   backends:
   - host: api-sbx.wanbexpress.com:80
     policies:
@@ -430,4 +432,4 @@ routes:
     timeout:
       requestTimeout: 2s
   backends:
-  - host: 127.0.0.1:27614
+  - host: 127.0.0.1:15000

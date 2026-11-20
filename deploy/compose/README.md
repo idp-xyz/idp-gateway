@@ -321,6 +321,20 @@ scrape_configs:
 - 没有对着真的看守让规则响过的：`RESTART_PENDING`、`UNKNOWN`、`UNCONFIRMED`，看守没看成，看守不再看。
 - 告警送出去（Alertmanager）没有跑过。测试里的 Prometheus 每秒读一次，平时是 15 秒：两次读之间发生又过去的事它看不到，除了那两条数次数的。
 
+## gateway-authz（叠加文件）
+
+池里的网关每个请求都要向 `gateway-authz` 要判定和凭证（配置里的 `extAuthz`）。`gateway-authz.yml` 是它的部署文件，是一个叠加文件，不改 `compose.yml`：
+
+```bash
+docker compose -f compose.yml -f gateway-authz.yml up -d
+```
+
+- **一个独立的服务，不在 `netns` 里。** 它在项目的默认网络上，有自己的网络命名空间。网关在配置里按名字找它，`extAuthz.host: gateway-authz:9443`，所以到它这一跳也是 `pin-egress.sh` 钉住的一个 `host: 名字:端口`，和后端一样；`pin-egress.sh` 不用改。到它仍是双向 TLS：网关出示 `tls/gateway.crt`，只认这个服务的证书（配置里 `backendTLS.hostname` 写的名字）。
+- **加固照 `place` 和 `confirm`**：镜像按摘要引用，只是个壳；跑的是本机上的 `gateway-authz`，挂进去（静态链接：`CGO_ENABLED=0 go build -trimpath -o gateway-authz ./cmd/gateway-authz`）；`read_only`、`cap_drop: ALL`、`no-new-privileges`、不是 root、`restart: "no"`。读的文件都是只读挂进去的。
+- **变量**写在 [`gateway-authz.env.example`](gateway-authz.env.example)，抄进同一个 `.env`；它们没有放进 `.env.example`，因为只有这个叠加文件读它们。缺了哪个，`docker compose` 会说是哪一个：`GATEWAY_AUTHZ`（二进制）、`GATEWAY_AUTHZ_USER`、`GATEWAY_AUTHZ_POLICY`（登记表）、`GATEWAY_AUTHZ_CREDENTIALS_DIR`（放 `developer-tokens.json` 的**目录**，在仓库之外；挂目录是因为文件被改名换掉之后 `gateway-authz` 才重读，单挂文件会一直看到旧的）、`GATEWAY_AUTHZ_TLS_CERT` 和 `_TLS_KEY`（它的服务端证书）、`GATEWAY_AUTHZ_GATEWAY_CA`、`GATEWAY_AUTHZ_GATEWAY_IDENTITY`（网关证书的身份）、`GATEWAY_AUTHZ_PDP_URL`、`_PDP_NAME`、`_PDP_TOKEN_FILE`、`_PDP_CERT`、`_PDP_KEY`、`_PDP_CA`。
+- **到 PDP**：地址不是回环，所以 `--gatekeeper-tls-cert`、`-key`、`-ca` 和 `--gatekeeper-name` 四个都要给，缺一个它不启动（2.3 的规则）。
+- **还没有的**：撤销（`--revocations`）没有接；看守和开机的两个单元跑的是只有 `compose.yml` 的命令，要带上叠加文件得改那两个单元；`.env` 里除 `docker compose` 外还有看守读，上面几项照它的写法。这个叠加文件和万邦的配置一起，在 [`tests/integration/wanbexpress/pool.py`](../../tests/integration/wanbexpress/README.md) 里跑过，没有装到别的机器上。
+
 ## 停
 
 看守在跑时先停它，不然停下的容器会被它起回来。装了两个单元时：`systemctl stop idp-gateway-pool.service`，它先停看守，再跑 `docker compose stop`。

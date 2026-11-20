@@ -18,10 +18,10 @@
 | `contracts/` | OpenAPI 与 JSON Schema |
 | `deploy/agentgateway/` | 数据面的版本锁定（`agentgateway.lock.json`：上游 1.7.0 的容器镜像，按摘要）与原生配置（目前只有一份示意样例） |
 | `deploy/providers/wanbexpress/` | 为 1.1 的承运商万邦速达的沙箱手写的一份 agentgateway 配置和一份登记表样例，四个操作；对着替身在联调架子上跑过，没有碰过真实的沙箱，也没有发布到 compose 池（开发计划 3.2 的第一步） |
-| `deploy/compose/` | 单机上一个池的部署文件（docker compose）：网关、它前面的 nginx，和启动的先后；`pin-egress.sh` 装出口的规则；另有两个 systemd 单元，一个在开机时启动这个池，一个是看守；另有一份 Prometheus 告警规则，看的是看守给出的指标。两个单元没有装到哪台机器上跑过，告警送到谁那里也没有做，真的重启一台机器也没有验证过，见该目录 README |
+| `deploy/compose/` | 单机上一个池的部署文件（docker compose；`gateway-authz.yml` 是 `gateway-authz` 的叠加文件）：网关、它前面的 nginx，和启动的先后；`pin-egress.sh` 装出口的规则；另有两个 systemd 单元，一个在开机时启动这个池，一个是看守；另有一份 Prometheus 告警规则，看的是看守给出的指标。两个单元没有装到哪台机器上跑过，告警送到谁那里也没有做，真的重启一台机器也没有验证过，见该目录 README |
 | `tests/acceptance/` | 正式验收矩阵；`blackbox/` 是对着真实 agentgateway 跑的黑盒用例 |
 | `tests/integration/gatekeeper/` | 与本机起的一套真实 Gatekeeper 的联调 |
-| `tests/integration/wanbexpress/` | `deploy/providers/wanbexpress/` 的配置在联调架子上的套件：真实的 Gatekeeper、网关和 `gateway-authz`，承运商是替身；`--sandbox` 另可对着真实的沙箱跑（凭证文件在仓库之外），`--mutate` 做对照 |
+| `tests/integration/wanbexpress/` | `deploy/providers/wanbexpress/` 的配置在联调架子上的套件：真实的 Gatekeeper、网关和 `gateway-authz`，承运商是替身；`--sandbox` 另可对着真实的沙箱跑（凭证文件在仓库之外），`--mutate` 做对照；`pool.py` 把同一份配置发布到 `deploy/compose` 的单机池上跑，并看出口规则 |
 | `tests/integration/kubernetes/` | 在本机的一个 kind 集群里验证 ADR-0010 在 Kubernetes 上的发布方式：不可变的快照，滚动替换，逐个副本回读 |
 | `tests/integration/compose/` | 在本机用 docker compose 验证 ADR-0010 在单机上的做法，跑的就是 `deploy/compose` 的部署文件。发布：换掉挂载目录里的配置文件，网关不重启，经回读口确认。启动：先把确认过的那一份放到位，回读对上了才收请求。容器死了：看守把它们起回来。`cmd/gateway-control` 的五条命令都在这里对着真的网关跑，看守的指标和一个真的 Prometheus 也在这里；两个 systemd 单元之间的关系另由 `units.py` 在用户级的 systemd 里用替身命令跑；出口的规则是不是装上了，也由套件看（`SH-22`） |
 | `tests/integration/egressnet/` | 在一个隔离的 docker 网络里看锁定的 agentgateway 1.7.0 按名字找后端、名字后来指到别处时去哪里，再看 `deploy/compose/pin-egress.sh` 拦不拦得住。解析器和服务器都是替身 |

@@ -1,0 +1,6 @@
+# Control, laid over the others by pool.py --control no-egress: the two services that install the egress rules do nothing.
+services:
+  egress:
+    entrypoint: ["/bin/true"]
+  egress-watch:
+    entrypoint: ["/bin/true"]

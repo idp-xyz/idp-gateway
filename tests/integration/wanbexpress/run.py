@@ -178,9 +178,32 @@ def policy_for(state: dict, sandbox: bool) -> str:
     return json.dumps(document)
 
 
-def gateway_config(sandbox: bool, mutation: str | None) -> str:
+# The deployment file is written with the values of the single-host pool. On the Gatekeeper rig these are put back to the
+# rig's: exact text replacements, each with the number of times it occurs (the suite stops when the file no longer says
+# what it expects).
+RIG_VALUES = [
+    ('  adminAddr: 127.0.0.1:15000\n', '  adminAddr: 127.0.0.1:27614\n', 1),
+    ('  statsAddr: 127.0.0.1:15020\n', '  statsAddr: 127.0.0.1:27615\n', 1),
+    ('  readinessAddr: 127.0.0.1:15021\n', '  readinessAddr: 127.0.0.1:27616\n', 1),
+    ("destination.port == 8081'", "destination.port == 27611'", 1),
+    ('destination.port == 8443 &&', 'destination.port == 27619 &&', 1),
+    ('    port: 8443\n', '    port: 27619\n', 1),
+    ('    port: 8081\n', '    port: 27611\n', 1),
+    ('      host: gateway-authz:9443\n', '      host: 127.0.0.1:27613\n', 4),
+    ('cert: tls/', 'cert: .run/tls/', 5),
+    ('key: tls/', 'key: .run/tls/', 5),
+    ('root: tls/', 'root: .run/tls/', 5),
+    ('        file: tls/jwks.json\n', '        url: http://127.0.0.1:27621/.well-known/jwks.json\n', 1),
+    ('  - host: 127.0.0.1:15000\n', '  - host: 127.0.0.1:27614\n', 1),
+]
+POOL_STANDIN = '  - host: wanb-mock:8000\n'
+
+
+def gateway_config(sandbox: bool, mutation: str | None, pool: bool = False) -> str:
     text = CONFIG.read_text(encoding='utf-8')
-    changes = [] if sandbox else [(UPSTREAM, STANDIN, 4)]
+    changes = [] if pool else list(RIG_VALUES)
+    if not sandbox:
+        changes.append((UPSTREAM, POOL_STANDIN if pool else STANDIN, 4))
     if mutation:
         changes.append(MUTATIONS[mutation])
     for old, new, times in changes:
@@ -227,15 +250,23 @@ def gateway_peers() -> set:
                 inodes.add(link[8:-1])
     except OSError:
         return set()
-    found = set()
+    texts = {}
     for name in ('tcp', 'tcp6'):
         try:
-            lines = Path(f'/proc/net/{name}').read_text().splitlines()[1:]
+            texts[name] = Path(f'/proc/net/{name}').read_text()
         except OSError:
-            continue
-        for line in lines:
+            pass
+    return peers_from_tables(texts, inodes)
+
+
+def peers_from_tables(texts: dict, inodes: set | None = None) -> set:
+    """Non-loopback addresses (address:port) of established TCP connections in /proc/net/tcp and tcp6 texts; only the sockets
+    with these inodes when given (the pool reads the whole namespace of the gateway's network)."""
+    found = set()
+    for name, text in texts.items():
+        for line in text.splitlines()[1:]:
             fields = line.split()
-            if fields[9] not in inodes or fields[3] != '01':
+            if (inodes is not None and fields[9] not in inodes) or fields[3] != '01':
                 continue
             host, port = fields[2].split(':')
             raw = bytes.fromhex(host)
@@ -254,7 +285,7 @@ def req(method: str, path: str, token: str | None = None, body=None, headers=(),
     started = time.perf_counter()
     answer = {'status': None, 'json': None, 'headers': [], 'ms': 0.0}
     try:
-        conn = http.client.HTTPConnection('127.0.0.1', gk.PORTS['gateway'], timeout=30)
+        conn = http.client.HTTPConnection('127.0.0.1', HOOKS['gateway_port'], timeout=30)
         conn.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
         for name, value in pairs:
             conn.putheader(name, value)
@@ -272,7 +303,7 @@ def req(method: str, path: str, token: str | None = None, body=None, headers=(),
         except ValueError:
             answer['json'] = None
         if sample_peers:
-            PEERS.update(gateway_peers())
+            PEERS.update((HOOKS['peers'] or gateway_peers)())
         conn.close()
     except OSError as e:
         answer['error'] = type(e).__name__
@@ -289,12 +320,12 @@ def data(answer: dict):
 
 # ---- the stand-in's records ----------------------------------------------------------------------------------------------
 def standin_hits() -> list:
-    status, body = gk.call('GET', f"http://127.0.0.1:{gk.PORTS['provider']}/admin/hits", headers={'X-Poc-Admin': MOCK_SECRET})
+    status, body = gk.call('GET', f"http://127.0.0.1:{HOOKS['mock_port']}/admin/hits", headers={'X-Poc-Admin': MOCK_SECRET})
     return body['hits'] if status == 200 else die('cannot read the stand-in\'s records')
 
 
 def standin_reset():
-    gk.call('POST', f"http://127.0.0.1:{gk.PORTS['provider']}/admin/reset", headers={'X-Poc-Admin': MOCK_SECRET}, form={})
+    gk.call('POST', f"http://127.0.0.1:{HOOKS['mock_port']}/admin/reset", headers={'X-Poc-Admin': MOCK_SECRET}, form={})
 
 
 def header_values(hit: dict, name: str) -> list:
@@ -326,6 +357,10 @@ def new_reference() -> str:
 
 
 # ---- the cases ---------------------------------------------------------------------------------------------------------------
+# What differs when the gateway runs in the pool (pool.py): where the caller's requests go, where the stand-in's records are read,
+# where gateway-authz's decisions are read, what WB-09 does, how the gateway's connections are sampled, which logs are scanned.
+HOOKS = {'gateway_port': gk.PORTS['gateway'], 'mock_port': gk.PORTS['provider'], 'decisions': gk.decisions, 'skip_wb09': None,
+         'peers': None, 'logs': None, 'second_authorization_reaches_the_gateway': True}
 CREATED: dict[str, str] = {}      # process code -> 'created' | 'deleted' : parcels this run made at the carrier
 MOCK_SECRET = ''
 TOKENS_FILE = RUN / 'wanbexpress.developer-tokens.json'
@@ -343,14 +378,14 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
     def fresh() -> int:
         if not sandbox:
             standin_reset()
-        return len(gk.decisions())
+        return len(HOOKS['decisions']())
 
     def reason_since(mark: int):
-        new = gk.decisions()[mark:]
+        new = HOOKS['decisions']()[mark:]
         return new[-1]['reason'] if new else None
 
     def asked_since(mark: int) -> int:
-        return len(gk.decisions()) - mark
+        return len(HOOKS['decisions']()) - mark
 
     def nothing_at_the_carrier(what: str):
         if sandbox:
@@ -380,7 +415,7 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
     r.check('status 200', answer['status'] == 200)
     r.check('Succeeded is true', data(answer).get('Succeeded') is True)
     r.check('Data is the account number of the blue tenant\'s account (value not recorded)', data(answer).get('Data') == accounts[BLUE_ACCOUNT][0])
-    last = gk.decisions()[-1] if len(gk.decisions()) > mark else {}
+    last = HOOKS['decisions']()[-1] if len(HOOKS['decisions']()) > mark else {}
     r.check('gateway-authz decided ACTIVE_ACCOUNT_GRANT for whoami.get', last.get('reason') == 'ACTIVE_ACCOUNT_GRANT' and last.get('operation_id') == 'whoami.get')
     if sandbox:
         r.skip('no Set-Cookie from the carrier reaches the caller', 'the real sandbox sets none to be removed; the stand-in does')
@@ -463,7 +498,9 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
         planted = 'Hc-OweDeveloper PLANTED-BY-CALLER;planted-by-caller;' + '0' * 32
         sent = [('Accept', 'text/html'), ('X-Provider-Account', BLUE_ACCOUNT), ('Cookie', 'session=caller-session'), ('X-Forwarded-For', '10.1.2.3'),
                 ('X-Forwarded-Host', 'internal.idp.test'), ('X-Forwarded-Proto', 'https'), ('Forwarded', 'for=10.1.2.3;host=internal.idp.test'),
-                ('X-Evil-Probe', 'caller'), ('Authorization', planted)]
+                ('X-Evil-Probe', 'caller')]
+        if HOOKS['second_authorization_reaches_the_gateway']:
+            sent.append(('Authorization', planted))
         answers = [req('GET', f'{BASE}/whoami', tok['blue'], headers=sent) for _ in range(3)]
         hits = standin_hits()
         r.check('all three answered 200 and the carrier received three requests', [a['status'] for a in answers] == [200] * 3 and len(hits) == 3)
@@ -483,6 +520,12 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
         flat = json.dumps(hits)
         r.check('the caller\'s Gatekeeper token and the Authorization the caller planted are nowhere in what arrived', tok['blue'] not in flat and 'PLANTED-BY-CALLER' not in flat)
         r.note('header names the carrier saw', sorted(names))
+        if not HOOKS['second_authorization_reaches_the_gateway']:
+            # Behind front (nginx) a request with two Authorization headers does not get as far as the gateway.
+            standin_reset()
+            twice = req('GET', f'{BASE}/whoami', tok['blue'], headers=[('Authorization', planted)])
+            r.check(f'a second Authorization header from the caller is refused by front ({twice["status"]}) and the carrier receives nothing',
+                    twice['status'] is not None and twice['status'] >= 400 and len(standin_hits()) == 0)
         r.check('no Set-Cookie from the carrier reaches the caller', all('set-cookie' not in dict(a['headers']) for a in answers))
 
     # WB-05
@@ -557,6 +600,9 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
     # WB-09
     STATE['label'] = 'WB-09'
     r.case('WB-09', 'gateway-authz allows and releases no credential: the gateway itself refuses; a caller\'s own Authorization does not take its place')
+    if HOOKS['skip_wb09']:
+        r.skip('every check of this case', HOOKS['skip_wb09'])
+        return
     stop_authz = lambda: gk.stop('gateway-authz')
     secret = secrets.token_urlsafe(24)
     stop_authz()
@@ -602,14 +648,14 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
     r.check('the product build of gateway-authz is back and allows again', req('GET', f'{BASE}/whoami', tok['blue'], sample_peers=sandbox)['status'] == 200)
 
 
-def scan(made: dict, state: dict, result_text: str) -> tuple[dict, list]:
+def scan(made: dict, state: dict, result_text: str, logs: dict | None = None) -> tuple[dict, list]:
     """Where could a secret be: the logs of the two processes, this run's own output, and the result file. -> {where: found?}, [what was looked for, no values]"""
     secrets_found = []
     for account, token in made['accounts'].values():
         secrets_found += [(f'token of {account}', token), (f'credential of {account}', f'{account};{token}')]
     secrets_found += [('PDP token', gk.ENV['GK_PDP_AUTH_TOKEN'])] + [(f'client secret of {k}', state[k]['client']['client_secret']) for k in state]
     secrets_found += [(f'Gatekeeper token {i}', t) for i, t in enumerate(made.get('tokens', []))]
-    texts = {'gateway log': (RUN / 'gateway.log').read_text(errors='replace'), 'gateway-authz log': (RUN / 'gateway-authz.log').read_text(errors='replace'),
+    texts = {**(logs or {'gateway log': (RUN / 'gateway.log').read_text(errors='replace'), 'gateway-authz log': (RUN / 'gateway-authz.log').read_text(errors='replace')}),
              'standard output': '\n'.join(OUTPUT), 'result file': result_text}
     outcome = {}
     for where, text in texts.items():

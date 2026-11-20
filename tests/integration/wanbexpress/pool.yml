@@ -1,0 +1,44 @@
+# Laid over deploy/compose/compose.yml and deploy/compose/gateway-authz.yml by pool.py. The pool is not changed; this adds
+# what the test needs around it.
+#
+# wanb-mock: the carrier's stand-in (profile "standin": not started when the upstream is the real sandbox). The
+#            configuration's backends are replaced by wanb-mock:8000, so the egress rules pin the stand-in.
+# outsider:  a listener that the configuration does not name: from the gateway's namespace it must not be reachable.
+# gateway-authz joins the network of the local Gatekeeper stack (external, made by tests/integration/gatekeeper/stack.sh)
+#            and finds the PDP's mutual-TLS front, pdp-mtls, by its service name.
+services:
+  wanb-mock:
+    profiles: ["standin"]
+    image: ${TOOLS_IMAGE:?}
+    command: ["python", "-u", "/scripts/mock.py", "--host", "0.0.0.0", "--port", "8000", "--state", "/state/state.json"]
+    user: "${GATEWAY_USER:?}"
+    ports:
+      - "127.0.0.1:${MOCK_HOST_PORT:?}:8000"
+    volumes:
+      - "${MOCK_SCRIPT:?}:/scripts/mock.py:ro"
+      - "${MOCK_STATE:?}:/state/state.json:ro"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 2s
+
+  outsider:
+    image: ${TOOLS_IMAGE:?}
+    command: ["python", "-m", "http.server", "8000", "--bind", "0.0.0.0", "--directory", "/tmp"]
+    user: "65534:65534"
+    tmpfs:
+      - /tmp
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 2s
+
+  gateway-authz:
+    networks:
+      - default
+      - gatekeeper
+
+networks:
+  gatekeeper:
+    name: idp-gateway-gk_default
+    external: true

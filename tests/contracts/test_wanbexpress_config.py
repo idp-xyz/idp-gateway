@@ -2,7 +2,7 @@
 
 OFFLINE; nothing here starts a gateway. The suite in tests/integration/wanbexpress runs the configuration.
 """
-import json, re, unittest
+import ast, json, re, unittest
 from pathlib import Path
 import yaml
 
@@ -66,6 +66,77 @@ class WanbExpressConfiguration(unittest.TestCase):
         self.assertNotIn('session', CONFIG.get('config', {}), 'the session key comes from SESSION_KEY')
         self.assertEqual(CONFIG['config']['storage'], {'mode': 'readOnly'})
         self.assertEqual(CONFIG['gateways']['egress-test']['bindAddress'], '127.0.0.1')
+
+
+class PoolValues(unittest.TestCase):
+    """The file describes the single-host pool (deploy/compose); the suites put the rig's values back with exact replacements."""
+    RAW = text('deploy/providers/wanbexpress/agentgateway.yaml')
+
+    def test_ports_and_paths_are_the_pools(self):
+        self.assertEqual(CONFIG['gateways']['egress-test']['port'], 8081, 'front hands the callers\' requests to 127.0.0.1:8081')
+        self.assertEqual(CONFIG['gateways']['read-back']['port'], 8443)
+        self.assertEqual({CONFIG['config'][k] for k in ('adminAddr', 'statsAddr', 'readinessAddr')},
+                         {'127.0.0.1:15000', '127.0.0.1:15020', '127.0.0.1:15021'})
+        self.assertEqual(CONFIG['gateways']['egress-test']['jwtAuth']['jwks'], {'file': 'tls/jwks.json'})
+        self.assertNotIn('.run/', self.RAW)
+        for route in ROUTES:
+            ext = route['policies']['extAuthz']
+            with self.subTest(route=route['name']):
+                self.assertEqual(ext['host'], 'gateway-authz:9443', 'found by name: the pool\'s egress rules pin it')
+                self.assertEqual(ext['policies']['backendTLS'], {'cert': 'tls/gateway.crt', 'key': 'tls/gateway.key', 'root': 'tls/ca.crt', 'hostname': 'gatekeeper.idp.test'})
+
+    def test_route_timeouts_are_shorter_than_what_front_waits(self):
+        front = text('deploy/compose/front.nginx.conf')
+        self.assertIn('proxy_read_timeout 10s;', front)
+        for route in ROUTES:
+            with self.subTest(route=route['name']):
+                self.assertLess(int(route['policies']['timeout']['requestTimeout'].rstrip('s')), 10)
+
+    def test_the_replacements_of_the_rig_suite_still_fit(self):
+        tree = ast.parse(text('tests/integration/wanbexpress/run.py'))
+        values = next(n.value for n in tree.body if isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', None) == 'RIG_VALUES')
+        self.assertGreaterEqual(len(values.elts), 10)
+        for element in values.elts:
+            old, times = ast.literal_eval(element.elts[0]), ast.literal_eval(element.elts[2])
+            with self.subTest(replaced=old.strip()):
+                self.assertEqual(self.RAW.count(old), times)
+
+
+class GatewayAuthzOverlay(unittest.TestCase):
+    """deploy/compose/gateway-authz.yml: a service of its own, hardened like place and confirm, every variable required."""
+    OVERLAY = yaml.safe_load(text('deploy/compose/gateway-authz.yml'))
+    SERVICE = OVERLAY['services']['gateway-authz']
+
+    def test_only_one_service_is_added_and_it_is_not_in_the_namespace_of_netns(self):
+        self.assertEqual(set(self.OVERLAY), {'services'})
+        self.assertEqual(set(self.OVERLAY['services']), {'gateway-authz'})
+        self.assertNotIn('network_mode', self.SERVICE)
+        self.assertNotIn('depends_on', self.SERVICE)
+
+    def test_hardened(self):
+        self.assertEqual((self.SERVICE['read_only'], self.SERVICE['cap_drop'], self.SERVICE['security_opt'], self.SERVICE['restart']),
+                         (True, ['ALL'], ['no-new-privileges:true'], 'no'))
+        self.assertEqual(self.SERVICE['user'], '${GATEWAY_AUTHZ_USER:?see gateway-authz.env.example}')
+        self.assertIn('@sha256:', self.SERVICE['image'])
+        self.assertTrue(all(v.endswith(':ro') for v in self.SERVICE['volumes']))
+
+    def test_the_pdp_is_not_loopback_so_all_four_gatekeeper_tls_arguments_are_given(self):
+        given = {a.split('=', 1)[0] for a in self.SERVICE['command']}
+        self.assertTrue({'--gatekeeper-tls-cert', '--gatekeeper-tls-key', '--gatekeeper-tls-ca', '--gatekeeper-name', '--gatekeeper-url'} <= given)
+
+    def test_every_variable_is_required_and_listed_in_the_example(self):
+        raw = text('deploy/compose/gateway-authz.yml')
+        found = re.findall(r'\$\{([A-Z0-9_]+)(:?[-?]?)([^}]*)\}', raw)
+        self.assertEqual(len(found), raw.count('${'))
+        self.assertEqual({kind for name, kind, rest in found if name != 'FRONT_IMAGE'}, {':?'})
+        listed = re.findall(r'^([A-Z][A-Z0-9_]*)=$', text('deploy/compose/gateway-authz.env.example'), re.M)
+        self.assertEqual(sorted(set(listed)), sorted({n for n, _, _ in found if n != 'FRONT_IMAGE'}))
+        self.assertEqual(len(listed), len(set(listed)))
+
+    def test_it_is_a_plain_overlay_of_compose_yml(self):
+        base = yaml.safe_load(text('deploy/compose/compose.yml'))
+        self.assertNotIn('gateway-authz', base['services'])
+        self.assertEqual(self.SERVICE['image'], base['x-gateway-control']['image'])
 
 
 if __name__ == '__main__':
