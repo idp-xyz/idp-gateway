@@ -12,7 +12,7 @@
 //
 // 取令牌的请求是 GET，应用密钥在查询串里，而 net/http 的错误（*url.Error）带着完整的地址。所以本包返回的错误
 // 和写的日志里没有请求的地址和查询串、应用密钥、访问令牌、AES 密钥，也没有承运商应答的任何内容（包括
-// apiErrorMsg）：只有一个类别。
+// apiErrorMsg），也没有错误的原文：只有一个类别。传输层失败时日志再加一个 cause，是固定的一个词。
 //
 // 应用密钥来自一个文件，规矩与 oauthclient 和 filestore 里的凭证文件相同：权限 0600 或更严；启动时读不成
 // 就不启动；修改时间变了就整份重读；新文件读不成或校验不过，继续用上一份，并记一条不含秘密的错误。
@@ -237,13 +237,17 @@ func (c *Client) usable(s *slot) bool {
 func (c *Client) fetch(e *entry, s *slot, f *flight) {
 	started := c.now()
 	begun := time.Now()
-	token, expiresIn, result, err := c.request(e)
+	token, expiresIn, result, cause, err := c.request(e)
 	elapsed := time.Since(begun)
 
 	attrs := []any{"handle", e.handle, "result", result, "elapsed_ms", elapsed.Milliseconds()}
 	if err == nil {
 		c.logger.Info("sf openapi token fetched", append(attrs, "expires_in", expiresIn)...)
 	} else {
+		// 答错、状态不是 200、承运商拒绝都不是传输层失败，cause 为空，不写这个字段。
+		if cause != "" {
+			attrs = append(attrs, "cause", cause)
+		}
 		c.logger.Warn("sf openapi token not fetched", attrs...)
 	}
 
@@ -262,48 +266,50 @@ func (c *Client) fetch(e *entry, s *slot, f *flight) {
 	close(f.done)
 }
 
-// request 向令牌端点发一次 GET。返回的 result 是类别，错误里只有类别。
+// request 向令牌端点发一次 GET。返回的 result 是类别，cause 是传输层失败的种类（不是这类失败时为空），
+// 错误里只有类别。
 //
-// 请求的地址带着应用密钥（查询串）。http.Client.Do 返回的 *url.Error 带着完整的地址，所以它不往外传：
-// 只看它是不是超时，其余一律算连不上。
-func (c *Client) request(e *entry) (token ports.Secret, expiresIn int64, result string, err error) {
+// 请求的地址带着应用密钥（查询串）。http.Client.Do 和读正文返回的错误带着完整的地址，所以不往外传：
+// 类别仍只分超时和连不上。cause 另说是哪一种，见 exchangeCause。地址造不出来时 cause 是 other。
+func (c *Client) request(e *entry) (token ports.Secret, expiresIn int64, result, cause string, err error) {
 	query := url.Values{"appKey": {e.appKey}, "appSecret": {e.appSecret.Reveal()}}
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.tokenEndpoint+"?"+query.Encode(), nil)
 	if err != nil {
-		return ports.Secret{}, 0, resultUnreachable, failure(e.handle, resultUnreachable)
+		return ports.Secret{}, 0, resultUnreachable, "other", failure(e.handle, resultUnreachable)
 	}
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		var timeout interface{ Timeout() bool }
-		if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout()) {
-			return ports.Secret{}, 0, resultTimeout, failure(e.handle, resultTimeout)
+		cause = exchangeCause(err)
+		if timedOut(err) {
+			return ports.Secret{}, 0, resultTimeout, cause, failure(e.handle, resultTimeout)
 		}
-		return ports.Secret{}, 0, resultUnreachable, failure(e.handle, resultUnreachable)
+		return ports.Secret{}, 0, resultUnreachable, cause, failure(e.handle, resultUnreachable)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		result = "status " + strconv.Itoa(resp.StatusCode)
-		return ports.Secret{}, 0, result, failure(e.handle, result)
+		return ports.Secret{}, 0, result, "", failure(e.handle, result)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	if err != nil {
+		cause = exchangeCause(err)
 		if errors.Is(err, context.DeadlineExceeded) {
-			return ports.Secret{}, 0, resultTimeout, failure(e.handle, resultTimeout)
+			return ports.Secret{}, 0, resultTimeout, cause, failure(e.handle, resultTimeout)
 		}
-		return ports.Secret{}, 0, resultUnreachable, failure(e.handle, resultUnreachable)
+		return ports.Secret{}, 0, resultUnreachable, cause, failure(e.handle, resultUnreachable)
 	}
 	if len(body) > maxBody {
-		return ports.Secret{}, 0, resultBadAnswer, failure(e.handle, resultBadAnswer)
+		return ports.Secret{}, 0, resultBadAnswer, "", failure(e.handle, resultBadAnswer)
 	}
 	token, expiresIn, result, ok := parseAnswer(body)
 	if !ok {
-		return ports.Secret{}, 0, result, failure(e.handle, result)
+		return ports.Secret{}, 0, result, "", failure(e.handle, result)
 	}
-	return token, expiresIn, resultOK, nil
+	return token, expiresIn, resultOK, "", nil
 }
 
 func failure(handle, result string) error {
