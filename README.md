@@ -2,7 +2,7 @@
 
 出站（Egress）API 网关：数据面用 agentgateway，本仓库是围绕它的 Go 代码、契约、部署配置和测试。
 
-> **状态**：开发早期。95 条正式验收用例与六个 STD-CP 门禁全部 `NOT_RUN`；ADR-0001 至 0008 和 ADR-0010 至 0012 仍是 Proposed。  
+> **状态**：开发阶段。95 条正式验收用例与六个 STD-CP 门禁全部 `NOT_RUN`；三项运行验证（agentgateway、Gatekeeper 与 ExtAuthZ、Provider 沙箱）2026-11-19 起是 `RUN`，各自的保留见 [design-status.json](docs/governance/design-status.json)。ADR-0009 是 Accepted，其余 ADR-0001 至 0013 仍是 Proposed。  
 > 设计基线交付包与 PoC 的原貌在标签 `baseline-v1.0-poc`；之后的目录结构见 [ADR-0009](docs/adr/ADR-0009.md)。
 
 ## 目录
@@ -59,7 +59,7 @@ python3 scripts/agentgateway_release.py                                    # 锁
 
 ## 读设计文档时要知道的
 
-G01–G06 是 V1.0 设计基线的原文，只改过文件路径、两处提到的 agentgateway 版本（G03、G04；目标版本现在只有锁定的 1.7.0）和 G03 §7 里描述示例配置的一句话。其中提到的 `portal/`、`tests/ux`、`tests/evidence`、`validate_baseline.py`、`build_html.py` 和各 HTML 页面已随 ADR-0009 移出主干，要看请检出标签 `baseline-v1.0-poc`。
+G01–G06 是 V1.0 设计基线的原文，只改过文件路径、两处提到的 agentgateway 版本（G03、G04；目标版本现在只有锁定的 1.7.0）和 G03 §7 里描述示例配置的一句话；2026-11-19 又按仓库所有者的决定，把"具名批准""签核"一类管项目自身的措辞改成"由仓库所有者决定"（[governance/README.md](docs/governance/README.md)），产品功能里的批准没有动。其中提到的 `portal/`、`tests/ux`、`tests/evidence`、`validate_baseline.py`、`build_html.py` 和各 HTML 页面已随 ADR-0009 移出主干，要看请检出标签 `baseline-v1.0-poc`。
 
 | 文档 | 作用 |
 |---|---|
