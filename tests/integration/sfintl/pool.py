@@ -245,9 +245,14 @@ def read_back(path: str) -> dict:
         return {'status': None}
 
 
+def pool_authz_log() -> str:
+    """The gateway-authz log pool_decisions reads. Decisions keep only the egress-authorization lines."""
+    return compose('logs', '--no-color', '--no-log-prefix', 'gateway-authz').stdout
+
+
 def pool_decisions() -> list:
     out = []
-    for line in compose('logs', '--no-color', '--no-log-prefix', 'gateway-authz').stdout.splitlines():
+    for line in pool_authz_log().splitlines():
         try:
             entry = json.loads(line)
         except ValueError:
@@ -559,7 +564,7 @@ def run(args, made: dict, sandbox: bool, reported: dict) -> int:
         sf.say('the published configuration still names provider-signer:9444')
         return 1
     sf.HOOKS.update(second_authorization_reaches_the_gateway=False, gateway_port=PORT['front'], mock_port=PORT['mock'],
-                    signer_port=PORT['signer'], decisions=pool_decisions, signer_calls=pool_signer_calls, gateway_log=pool_gateway_log,
+                    signer_port=PORT['signer'], decisions=pool_decisions, authz_log=pool_authz_log, signer_calls=pool_signer_calls, gateway_log=pool_gateway_log,
                     peers=pool_peers, authz_identity=pool_authz_identity,
                     oversized_body_stopped_by_front=True,
                     skip_sf09='the pool runs the product build of gateway-authz; SF-09 swaps in the acceptance build',
@@ -615,7 +620,7 @@ def run(args, made: dict, sandbox: bool, reported: dict) -> int:
               'upstream': ({'kind': 'the carrier\'s sandbox', 'name': sf.SANDBOX_HOST, 'port': 80,
                             'addresses_the_signer_and_gateway_authz_held_connections_to': sorted(sf.PEERS)}
                            if sandbox else {'kind': 'stand-in', 'name': f'{CARRIER_NAME}:{IN_POOL["carrier"]}', 'signer': 'provider-signer:9444'}),
-              'calls': sf.CALLS,
+              'calls': sf.CALLS, 'cleanup_cancels': sf.CLEANUP_CANCELS,
               'orders_to_cancel_by_hand': [{'sfWaybillNo': waybill, 'customerOrderNo': sf.ORDER_OF.get(waybill)} for waybill in uncleaned]}
     if failure is not None:
         record['aborted'] = f'{type(failure).__name__}: {failure}'

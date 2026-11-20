@@ -374,12 +374,16 @@ def req(method: str, path: str, token: str | None = None, body=None, headers=(),
             answer['json'] = json.loads(blob) if blob else None
         except ValueError:
             answer['json'] = None
+        # Stop once the answer has been read. Sampling stays before close so a carrier connection
+        # still in the peer table can be seen; that work is not part of ms.
+        answer['ms'] = round((time.perf_counter() - started) * 1000, 1)
         if sample_peers:
             PEERS.update((HOOKS['peers'] or carrier_peers)())
         conn.close()
     except (OSError, http.client.HTTPException) as e:
         answer['error'] = type(e).__name__
-    answer['ms'] = round((time.perf_counter() - started) * 1000, 1)
+        if not answer['ms']:
+            answer['ms'] = round((time.perf_counter() - started) * 1000, 1)
     shown = path if len(path) < 90 else '(long path)'
     CALLS.append({'case': STATE['label'], 'call': f'{method} {shown}', 'status': answer['status'], 'ms': answer['ms']})
     return answer
@@ -446,6 +450,37 @@ def gateway_log_text() -> str:
         return reader()
     path = RUN / 'gateway.log'
     return path.read_text(encoding='utf-8', errors='replace') if path.exists() else ''
+
+
+def authz_log_text() -> str:
+    """gateway-authz's log, from the same place the decisions are read. The pool sets the hook; the rig reads the file."""
+    reader = HOOKS.get('authz_log')
+    if reader:
+        return reader()
+    path = RUN / 'gateway-authz.log'
+    return path.read_text(encoding='utf-8', errors='replace') if path.exists() else ''
+
+
+def token_fetch_notes() -> list:
+    """Token-fetch lines so far: msg, result, elapsed_ms, and cause when the line has one. Nothing else."""
+    found = []
+    for line in authz_log_text().splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict) or entry.get('msg') not in ('sf openapi token fetched', 'sf openapi token not fetched'):
+            continue
+        item = {}
+        for key in ('msg', 'result', 'elapsed_ms'):
+            value = entry.get(key)
+            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                item[key] = value
+        cause = entry.get('cause') if 'cause' in entry else None
+        if isinstance(cause, (str, int, float)) and not isinstance(cause, bool):
+            item['cause'] = cause
+        found.append(item)
+    return found
 
 
 def signer_calls(wait: bool = False) -> list:
@@ -534,6 +569,7 @@ def token_app_key(hit: dict):
 CONTROL_BINARY = RUN / 'gateway-control'
 CREATED: dict[str, str] = {}          # sfWaybillNo -> 'created' | 'cancelled'
 ORDER_OF: dict[str, str] = {}         # sfWaybillNo -> customerOrderNo
+CLEANUP_CANCELS: list = []            # what cancel_outstanding did, one record per order it tried
 
 
 def control(*args: str) -> dict:
@@ -598,7 +634,7 @@ def remember(order_no: str, waybill: str | None):
 
 # What differs when the gateway runs in the pool: where requests go, where records, decisions and logs are read.
 HOOKS = {'gateway_port': gk.PORTS['gateway'], 'mock_port': gk.PORTS['provider'], 'signer_port': SIGNER_PORT,
-         'decisions': gk.decisions, 'signer_calls': None, 'gateway_log': None, 'skip_sf09': None, 'peers': None, 'logs': None,
+         'decisions': gk.decisions, 'signer_calls': None, 'gateway_log': None, 'authz_log': None, 'skip_sf09': None, 'peers': None, 'logs': None,
          'second_authorization_reaches_the_gateway': True, 'skip_extra': None, 'authz_identity': None,
          'oversized_body_stopped_by_front': False}
 MOCK_SECRET = ''
@@ -675,17 +711,12 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
     def remember_answer(order_no: str, answer: dict):
         remember(order_no, waybill_of(answer))
 
-    def cancel_order(order_no: str, waybill: str, token: str = 'blue') -> tuple[dict, int]:
-        """Repeat a cancel that answers success false, up to 6 times. The 3 second gap is the one measured at the sandbox; the stand-in does not need it."""
-        last = {'status': None, 'json': None, 'headers': []}
-        for attempt in range(1, 7):
-            last = post(CANCELS, cancel_body(order_no, waybill), token)
-            if business(last).get('success') is True:
-                CREATED[waybill] = 'cancelled'
-                return last, attempt
-            if attempt < 6 and sandbox:
-                time.sleep(3)
-        return last, 6
+    def cancel_order(order_no: str, waybill: str, token: str = 'blue') -> tuple[dict, int, float]:
+        """One cancel, then the shared retry. Returns the last answer, the attempts, and the seconds the loop ran."""
+        last, attempts, seconds = cancel_repeated(lambda: post(CANCELS, cancel_body(order_no, waybill), token), sandbox)
+        if business(last).get('success') is True:
+            CREATED[waybill] = 'cancelled'
+        return last, attempts, seconds
 
     def replace_apps(document: dict):
         """The way gateway-authz asks for: a new file next to the old one, then renamed over it."""
@@ -761,6 +792,8 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
             last.get('reason') == 'ACTIVE_ACCOUNT_GRANT' and last.get('operation_id') == 'agent-numbers.query')
     if not (queried['status'] == 200 and envelope(queried).get('apiResultCode') == 0):
         note_answer('first query', queried)
+        if sandbox and queried['status'] != 200:
+            r.note('gateway-authz token fetches', token_fetch_notes())
 
     dmark, _ = marks()
     created = post(ORDERS, order_body(order_no, username))
@@ -803,8 +836,9 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
         query_decisions = [item for item in HOOKS['decisions']() if item.get('operation_id') == 'agent-numbers.query']
         r.check('the second query: gateway-authz decided ACTIVE_ACCOUNT_GRANT for agent-numbers.query',
                 len(query_decisions) >= 2 and query_decisions[-1].get('reason') == 'ACTIVE_ACCOUNT_GRANT')
-        cancelled, attempts = cancel_order(order_no, waybill)
+        cancelled, attempts, cancel_seconds = cancel_order(order_no, waybill)
         r.note('cancel attempts', attempts)
+        r.note('cancel seconds', cancel_seconds)
         r.check('cancel: HTTP 200, apiResultCode 0, success true, code 200',
                 cancelled['status'] == 200 and envelope(cancelled).get('apiResultCode') == 0 and business(cancelled).get('success') is True
                 and business(cancelled).get('code') == '200')
@@ -861,10 +895,12 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
         r.check('fault cancel-not-yet: the order still exists', order_active(order_no))
         if business(early).get('code') != '500':
             note_answer('cancel-not-yet', early)
-        late, _ = cancel_order(order_no, waybill)
+        late, _, _ = cancel_order(order_no, waybill)
         r.check('the cancel again succeeds: success true, code 200', business(late).get('success') is True and business(late).get('code') == '200')
     if waybill and CREATED.get(waybill) != 'cancelled':
-        done, _ = cancel_order(order_no, waybill)
+        done, attempts, cancel_seconds = cancel_order(order_no, waybill)
+        r.note('cancel attempts', attempts)
+        r.note('cancel seconds', cancel_seconds)
         r.check('the order made for this case is cancelled', business(done).get('success') is True)
 
     # SF-03
@@ -970,7 +1006,7 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
             r.check('green cannot cancel blue\'s order: business success is false (order ownership per app is the stand-in\'s assumption)',
                     denied['status'] == 200 and business(denied).get('success') is False)
             r.check('blue\'s order still exists after green\'s cancel', order_active(owned))
-            done, _ = cancel_order(owned, owned_bill)
+            done, _, _ = cancel_order(owned, owned_bill)
             r.check('blue then cancels that order', business(done).get('success') is True)
     dmark, smark = marks(reset=not sandbox)
     answer = post(QUERIES, query_body(new_order_no(), 'SF000000000000'), headers=[('X-Provider-Account', GREEN_ACCOUNT)])
@@ -1241,10 +1277,10 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
                         and bool(bill) and repeat_bill == bill)
                 r.check(f'{label}: two create dispatches in all', len(create_dispatches(number)) == 2)
                 if bill:
-                    done, _ = cancel_order(number, bill)
+                    done, _, _ = cancel_order(number, bill)
                     r.check(f'{label}: the order is cancelled', business(done).get('success') is True)
                 elif repeat_bill:
-                    done, _ = cancel_order(number, repeat_bill)
+                    done, _, _ = cancel_order(number, repeat_bill)
                     r.check(f'{label}: the order is cancelled', business(done).get('success') is True)
 
             slow_or_cut('slow', 'slow', 11)
@@ -1286,7 +1322,7 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
             r.check('undecryptable: the order exists', order_active(number) and bool(bill))
             if bill:
                 remember(number, bill)
-                done, _ = cancel_order(number, bill)
+                done, _, _ = cancel_order(number, bill)
                 r.check('undecryptable: the order is cancelled', business(done).get('success') is True)
 
         # SF-15
@@ -1398,9 +1434,75 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
     extra_cases()
 
 
+# A sandbox cancel the carrier refuses in its business answer (HTTP 200, apiResultCode 0, success false)
+# is repeated until it succeeds or SANDBOX_CANCEL_BUDGET seconds have passed since the first attempt.
+# 600 s is that budget because on 2026-11-20 some cancels were still refused about 5 minutes after the
+# create, and one was accepted only a couple of minutes after a 300 s budget had already stopped.
+# Nothing here says why the sandbox refuses for that long.
+# The gap after the first two such refusals stays 3 s, which is the gap this loop used to sleep every time;
+# the next gap is 6 s; every gap after that is 10 s. A gap that would finish after the budget is not slept.
+# Any other answer (a gateway 4xx/5xx, the signer's own error JSON, a non-zero apiResultCode, no answer)
+# is not waited on for that budget: at most 6 of them in a row, 3 s apart on the sandbox, and the loop
+# stops even sooner when the next 3 s would pass the budget. The stand-in never sleeps and stops after
+# 6 attempts, whatever the answers were. cancel_order and cancel_outstanding both call cancel_repeated.
+SANDBOX_CANCEL_BUDGET = 600
+SANDBOX_CANCEL_GAPS = (3, 3, 6)
+SANDBOX_CANCEL_GAP_THEN = 10
+CANCEL_OTHER_LIMIT = 6
+CANCEL_OTHER_GAP = 3
+
+
+def sandbox_cancel_gap(refusal_number: int) -> int:
+    """Seconds to wait after the n-th business refusal of this cancel. refusal_number is 1-based."""
+    if refusal_number <= len(SANDBOX_CANCEL_GAPS):
+        return SANDBOX_CANCEL_GAPS[refusal_number - 1]
+    return SANDBOX_CANCEL_GAP_THEN
+
+
+def carrier_business_refusal(answer: dict) -> bool:
+    """HTTP 200, envelope apiResultCode 0, business success false: the carrier refused, and may accept later."""
+    return (answer.get('status') == 200 and envelope(answer).get('apiResultCode') == 0
+            and business(answer).get('success') is False)
+
+
+def cancel_repeated(send, patient: bool) -> tuple[dict, int, float]:
+    """send() is one cancel. Returns the last answer, the number of attempts, and the seconds from the start of
+    the first attempt to the return of the attempt that ended the loop. patient is the sandbox."""
+    started = time.monotonic()
+    last = {'status': None, 'json': None, 'headers': []}
+    attempt = 0
+    refusals = 0
+    others_in_a_row = 0
+    while True:
+        attempt += 1
+        last = send()
+        elapsed = time.monotonic() - started
+        if business(last).get('success') is True:
+            return last, attempt, round(elapsed, 3)
+        if not patient:
+            if attempt >= CANCEL_OTHER_LIMIT:
+                return last, attempt, round(elapsed, 3)
+            continue
+        if carrier_business_refusal(last):
+            refusals += 1
+            others_in_a_row = 0
+            gap = sandbox_cancel_gap(refusals)
+            if elapsed + gap > SANDBOX_CANCEL_BUDGET:
+                return last, attempt, round(elapsed, 3)
+            time.sleep(gap)
+            continue
+        others_in_a_row += 1
+        if others_in_a_row >= CANCEL_OTHER_LIMIT or elapsed + CANCEL_OTHER_GAP > SANDBOX_CANCEL_BUDGET:
+            return last, attempt, round(elapsed, 3)
+        time.sleep(CANCEL_OTHER_GAP)
+
+
 def cancel_outstanding(state: dict):
-    """Every order this run learned a waybill for, and any the stand-in still calls active, is cancelled. A sandbox cancel that fails is retried."""
-    if not gk.port_open(gk.PORTS['gateway']):
+    """Every order this run learned a waybill for, and any the stand-in still calls active, is cancelled.
+    Each order still outstanding gets its own budget, the same one the cases use."""
+    # Requests are sent to HOOKS['gateway_port']. On the pool that is the published front, not the rig's 27611,
+    # so the rig's port being closed must not skip the cleanup.
+    if not gk.port_open(HOOKS['gateway_port']):
         return
     if gk.port_open(gk.PORTS['provider']) and MOCK_SECRET:
         try:
@@ -1419,18 +1521,19 @@ def cancel_outstanding(state: dict):
     if not token:
         return
     STATE['label'] = 'cleanup'
+    patient = bool(PLAIN_HTTP_HOST[0])
     for waybill in pending:
         order_no = ORDER_OF.get(waybill)
         if not order_no:
             continue
-        last = None
-        for attempt in range(1, 7):
-            last = req('POST', CANCELS, token, cancel_body(order_no, waybill), sample_peers=bool(PLAIN_HTTP_HOST[0]))
-            if business(last).get('success') is True:
-                CREATED[waybill] = 'cancelled'
-                break
-            if attempt < 6 and PLAIN_HTTP_HOST[0]:
-                time.sleep(3)
+
+        def send(order_no=order_no, waybill=waybill):
+            return req('POST', CANCELS, token, cancel_body(order_no, waybill), sample_peers=patient)
+
+        last, attempts, seconds = cancel_repeated(send, patient)
+        if business(last).get('success') is True:
+            CREATED[waybill] = 'cancelled'
+        CLEANUP_CANCELS.append({'customerOrderNo': order_no, 'sfWaybillNo': waybill, 'attempts': attempts, 'seconds': seconds})
 
 
 def warn_uncancelled() -> list[str]:
@@ -1674,7 +1777,8 @@ def main() -> int:
               'upstream': ({'kind': 'the carrier\'s sandbox', 'name': SANDBOX_HOST, 'name_resolved_to_at_the_start': resolved,
                             'addresses_the_signer_and_gateway_authz_held_connections_to': sorted(PEERS)}
                            if args.sandbox else {'kind': 'stand-in', 'address': f"127.0.0.1:{gk.PORTS['provider']}", 'signer': f'127.0.0.1:{SIGNER_PORT}'}),
-              'calls': CALLS, 'orders_to_cancel_by_hand': [{'sfWaybillNo': waybill, 'customerOrderNo': ORDER_OF.get(waybill)} for waybill in uncleaned],
+              'calls': CALLS, 'cleanup_cancels': CLEANUP_CANCELS,
+              'orders_to_cancel_by_hand': [{'sfWaybillNo': waybill, 'customerOrderNo': ORDER_OF.get(waybill)} for waybill in uncleaned],
               'cases': results.cases, 'passed': [case['id'] for case in results.cases if case not in failed], 'failed': [case['id'] for case in failed]}
     scanned, looked_for = scan(made, state, json.dumps(record, ensure_ascii=False, indent=1), args.sandbox)
     def clean_of(found: dict) -> bool:
