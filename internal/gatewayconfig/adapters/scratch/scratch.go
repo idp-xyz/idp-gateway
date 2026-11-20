@@ -68,9 +68,8 @@ type Staging struct {
 
 // New 检查配置。它不在这里碰 docker。
 func New(config Config) (*Staging, error) {
-	repository, digest, found := strings.Cut(config.Image, "@sha256:")
-	if !found || repository == "" || len(digest) != 64 || strings.Trim(digest, "0123456789abcdef") != "" {
-		return nil, fmt.Errorf("scratch: image %q is not referenced by digest (repository@sha256:…)", config.Image)
+	if err := domain.ImageReference(config.Image); err != nil {
+		return nil, fmt.Errorf("scratch: %w", err)
 	}
 	host, port, err := net.SplitHostPort(config.Publish)
 	if err != nil {

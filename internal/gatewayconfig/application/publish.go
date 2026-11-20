@@ -1,6 +1,6 @@
 // Package application 把往一个池发布一份快照这件事串起来：先离线加载，再换上去，经回读确认；
 // 没有生效就把上一份放回去。要重启网关才生效的快照走 Restart；池和记录对不上时由 Reconcile 收拾；
-// 网关启动之前由 Place 把记录的那一份放到位。
+// 网关启动之前由 Place 把记录的那一份放到位。换网关镜像走 Reimage，它不改配置文件。
 // 它不知道快照是怎么送到网关那里的，也不知道回读走的是什么协议。
 //
 // 做法和它的依据见 docs/adr/ADR-0010.md 第 6、10 条和 tests/integration/compose/README.md。
@@ -39,6 +39,9 @@ const (
 	// OutcomeUnknown：换上去了，没有生效，也没能确认放回去了。不是成功也不是失败，要对账。
 	// 对账时：记录的那一份在不在网关上生效，没能读到。就位时：记录的那一份没能放回去。
 	OutcomeUnknown Outcome = "UNKNOWN"
+	// OutcomeUnchanged：要换成的镜像摘要就是容器现在跑的那一个。没有重建，变量文件也没改。
+	// 只有换镜像（Reimage）返回它。
+	OutcomeUnchanged Outcome = "UNCHANGED"
 )
 
 // 只有对账（Reconcile）才有的结局。

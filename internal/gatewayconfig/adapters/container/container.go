@@ -74,10 +74,44 @@ func New(config Config) (*Container, error) {
 
 func docker(ctx context.Context, env []string, argv ...string) (string, error) {
 	command := exec.CommandContext(ctx, "docker", argv...)
-	command.Env = append(os.Environ(), env...)
+	if len(env) == 0 {
+		command.Env = append(os.Environ(), env...)
+	} else {
+		// 换镜像要盖过调用者环境里旧的 GATEWAY_IMAGE。只追加的话，同名变量仍是原来的那一个。
+		// 没有额外变量时与原来相同：重启和起池走的是上面那一支。
+		command.Env = overlayEnv(os.Environ(), env)
+	}
 	detach(command)
 	output, err := command.CombinedOutput()
 	return string(output), err
+}
+
+// overlayEnv 让 extra 里的同名变量盖过 base。值里可以有等号，按第一个等号切开。
+func overlayEnv(base, extra []string) []string {
+	next := make(map[string]string, len(extra))
+	order := make([]string, 0, len(extra))
+	for _, entry := range extra {
+		name, value, ok := strings.Cut(entry, "=")
+		if !ok || name == "" {
+			continue
+		}
+		if _, seen := next[name]; !seen {
+			order = append(order, name)
+		}
+		next[name] = value
+	}
+	out := make([]string, 0, len(base)+len(order))
+	for _, entry := range base {
+		name, _, _ := strings.Cut(entry, "=")
+		if _, replaced := next[name]; replaced {
+			continue
+		}
+		out = append(out, entry)
+	}
+	for _, name := range order {
+		out = append(out, name+"="+next[name])
+	}
+	return out
 }
 
 // mount 是 docker inspect 报告的一个挂载里用到的部分。
@@ -109,21 +143,7 @@ func (c *Container) Verify(ctx context.Context) error {
 	if timeout != nil && *timeout > 0 {
 		c.configured = time.Duration(*timeout) * time.Second
 	}
-	var mounted []string
-	for _, m := range mounts {
-		if m.Destination != c.config.Mount {
-			continue
-		}
-		if m.Type == "bind" && sameDirectory(m.Source, c.config.ConfigDirectory) {
-			return nil
-		}
-		mounted = append(mounted, m.Source)
-	}
-	if len(mounted) == 0 {
-		return fmt.Errorf("container: %s has nothing mounted at %s: it is not the gateway of this pool", c.config.Name, c.config.Mount)
-	}
-	return fmt.Errorf("container: %s has %s mounted at %s, not the configuration directory of this pool (%s)",
-		c.config.Name, strings.Join(mounted, ", "), c.config.Mount, c.config.ConfigDirectory)
+	return configurationMounted(mounts, c.config.Name, c.config.Mount, c.config.ConfigDirectory)
 }
 
 // sameDirectory 报告两个路径是不是同一个目录。docker 报告的是它那边的路径；经符号链接到的也算。

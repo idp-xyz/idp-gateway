@@ -78,3 +78,18 @@ type Pool interface {
 	// 占着命名空间的那个它不动。开始之后不随 ctx 取消。
 	StopDependents(ctx context.Context) error
 }
+
+// ErrImageRecreate 表示换镜像时，变量文件里的 GATEWAY_IMAGE 已经整份写好，
+// 但是按这份文件重建网关没有成功。错误里不带 docker 的输出：那份输出里可能有仓库的令牌。
+var ErrImageRecreate = errors.New("gatewayconfig: recreating the gateway image failed")
+
+// ImageSwap 是单机上换网关镜像的那一层（ADR-0010 第 10 条「要重启网关的变更」）。
+// 它读容器现在的镜像引用，核对挂载，再把 compose 的变量文件指到另一个摘要上并只重建那一个服务。
+type ImageSwap interface {
+	// Current 返回容器现在的镜像引用。容器挂的不是这个池的配置目录时返回错误，什么都不改。
+	Current(ctx context.Context) (reference string, err error)
+	// PointAt 把变量文件里的 GATEWAY_IMAGE 改成 reference，再 force-recreate 那个服务。
+	// 变量文件要么还是原来的整份，要么已经是改完的整份，不会停在写了一半。
+	// 文件改好了但重建没有成功时返回 ErrImageRecreate。
+	PointAt(ctx context.Context, reference string) error
+}

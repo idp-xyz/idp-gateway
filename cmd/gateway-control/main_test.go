@@ -194,9 +194,16 @@ type fakeDocker struct {
 	restarted []string
 	// project 是它扮演的那个 compose 项目（keep_test.go）；没有时那几条命令什么都不答。
 	project *fakeProject
+	// reimage：容器现在的镜像引用，和挂载的宿主机目录。空的 imageRef 用锁定的那个摘要。
+	imageRef    string
+	mountSource string
+	// composed 是每次 docker compose 的参数；composeEnv 是传给它的额外环境；composeFile 是当时变量文件里的 GATEWAY_IMAGE。
+	composed    [][]string
+	composeEnv  [][]string
+	composeFile []string
 }
 
-func (d *fakeDocker) run(_ context.Context, _ []string, argv ...string) (string, error) {
+func (d *fakeDocker) run(_ context.Context, env []string, argv ...string) (string, error) {
 	if d.project != nil && d.project.handles(argv) {
 		// 项目的命令里要跑 place 和 reconcile，后者要去读假网关：这里不能占着锁等它。
 		d.mu.Lock()
@@ -226,6 +233,30 @@ func (d *fakeDocker) run(_ context.Context, _ []string, argv ...string) (string,
 		d.restarted = append([]string(nil), argv...)
 		d.gateway.restart()
 	case "inspect":
+		if len(argv) > 2 && strings.Contains(argv[2], ".Config.Image") {
+			if argv[len(argv)-1] != gatewayContainer {
+				return "Error response from daemon: No such object: " + argv[len(argv)-1] + "\n", errors.New("exit status 1")
+			}
+			ref := d.imageRef
+			if ref == "" {
+				ref = image
+			}
+			source := d.mounted
+			if d.mountSource != "" {
+				source = d.mountSource
+			}
+			imageJSON, err := json.Marshal(ref)
+			if err != nil {
+				return "", err
+			}
+			mountsJSON, err := json.Marshal([]map[string]string{{
+				"Type": "bind", "Source": source, "Destination": "/work/config",
+			}})
+			if err != nil {
+				return "", err
+			}
+			return string(imageJSON) + " " + string(mountsJSON) + "\n", nil
+		}
 		if strings.Contains(argv[2], ".Mounts") { // 问的是池里的网关容器
 			if argv[len(argv)-1] != gatewayContainer {
 				return "Error response from daemon: No such object: " + argv[len(argv)-1] + "\n", errors.New("exit status 1")
@@ -239,6 +270,11 @@ func (d *fakeDocker) run(_ context.Context, _ []string, argv ...string) (string,
 		return "true 0\n", nil
 	case "logs":
 		return "info starting\nError: " + loadError + "\n", nil
+	case "compose":
+		d.composed = append(d.composed, append([]string(nil), argv...))
+		d.composeEnv = append(d.composeEnv, append([]string(nil), env...))
+		d.composeFile = append(d.composeFile, gatewayImageInFile(argv))
+		return "", nil
 	}
 	return "", nil
 }

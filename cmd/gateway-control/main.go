@@ -27,7 +27,13 @@
 //	gateway-control compile --spec <规格> --output-gateway <yaml> --output-policy <json> [--agentgateway <二进制>] [--lock-file <锁>] [--tls-dir <目录>]
 //	gateway-control compile --preflight-only --intents <意图.json> [--provider-registry <登记表>]
 //
-// 它们的结局和退出码在 revoke.go、history.go、jwks.go、compile.go 的开头写着；下面说的退出码是前五条命令的，加上 rollback。
+// 另有一条把池里的网关镜像换成另一个摘要（reimage.go，ADR-0010 第 10 条「要重启网关的变更」）：
+//
+//	gateway-control reimage --image <repository>@sha256:<64 hex> --container <name> --config-dir <abs> --mount <container path> --compose-file <file> --compose-env-file <file> --service agentgateway --read-back <host:port> --read-back-name <name> --tls-cert --tls-key --tls-ca
+//
+// 它不改配置文件，也不改锁定的镜像。结局和退出码在 reimage.go 的开头。
+//
+// 它们的结局和退出码在 revoke.go、history.go、jwks.go、compile.go、reimage.go 的开头写着；下面说的退出码是前五条命令的，加上 rollback。
 //
 // publish 把一份网关配置发布到池里，网关不重启。restart 发布一份要重启网关才能全部生效的配置
 // （启动设置变了的那种），会让这个池中断一下；不给 --snapshot 时，用的是这个池上最后一次得到确认的那一份。
@@ -134,6 +140,7 @@ const (
 	// rollback 回到历史里的一份快照（history.go）：flag 与 publish、restart 同一套。
 	commandRollback = "rollback"
 	commandCompile  = "compile"
+	commandReimage  = "reimage"
 )
 
 // dockerRunner 是 scratch.Config.Docker 的类型；nil 表示用本机的 docker 命令行。
@@ -161,8 +168,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, docker do
 	if len(args) > 0 && args[0] == commandCompile {
 		return runCompile(ctx, args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == commandReimage {
+		return runReimage(ctx, args[1:], stdout, stderr, docker)
+	}
 	if len(args) == 0 || !known[args[0]] {
 		fmt.Fprintln(stderr, "usage: gateway-control publish|restart|reconcile|place|keep [flags]   (gateway-control <command> --help lists them)")
+		fmt.Fprintln(stderr, "       gateway-control reimage --image <repository>@sha256:<64 hex> --container <name> --config-dir <abs> --mount <container path> --compose-file <file> --compose-env-file <file> --service agentgateway --read-back <host:port> --read-back-name <name> --tls-cert --tls-key --tls-ca")
 		fmt.Fprintln(stderr, "       gateway-control compile --spec <file> --output-gateway <file> --output-policy <file>")
 		fmt.Fprintln(stderr, "       gateway-control compile --preflight-only --intents <file> [--provider-registry <file>]")
 		fmt.Fprintln(stderr, "       gateway-control revoke|restore|revocations [flags]   (revoke or lift the revocation of a Provider account in gateway-authz, or read its table)")
@@ -210,7 +221,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, docker do
 
 func exitCode(outcome application.Outcome) int {
 	switch outcome {
-	case application.OutcomeActive, application.OutcomeInSync, application.OutcomeInPlace, application.OutcomeNoRecord:
+	case application.OutcomeActive, application.OutcomeInSync, application.OutcomeInPlace, application.OutcomeNoRecord, application.OutcomeUnchanged:
 		return exitActive
 	case application.OutcomeRefused, application.OutcomeRestartRequired, application.OutcomePoolNotReady, application.OutcomeUnconfirmed:
 		return exitNotDone
