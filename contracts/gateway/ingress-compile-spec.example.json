@@ -1,0 +1,37 @@
+{
+  "traffic_class": "INGRESS",
+  "pool": {
+    "name": "ingress-test",
+    "environment": "TEST",
+    "public_hostname": "api.cargopai.example",
+    "listen_port": 8081,
+    "bind_address": "127.0.0.1",
+    "tls_dir": "tls",
+    "jwt_issuer": "https://issuer.example/ingress",
+    "jwt_audiences": ["example-ingress"],
+    "jwks_file": "tls/jwks.json",
+    "notes": "Example only. A deployment replaces public_hostname, jwt_issuer, jwt_audiences, jwks_file, and the backend upstream. None of these values is a product constant. This pool is not the carrier egress pool."
+  },
+  "backend": {
+    "backend_service_ref": "service:cargopai/shipment-api",
+    "upstream_host": "shipment-api.example",
+    "upstream_port": 443,
+    "upstream_tls": "VERIFY_REQUIRED",
+    "upstream_sni": "shipment-api.example",
+    "route_timeout": "9s"
+  },
+  "routes": [
+    {
+      "intent_id": "gwi-public-001",
+      "route_id": "public-shipments-get",
+      "logical_path": "/v1/shipments",
+      "allowed_methods": ["GET", "HEAD"],
+      "api_asset_ref": "apiasset:cargopai/shipment/v1",
+      "authz_profile": "public-oidc-jwt-v1",
+      "approval_ref": "APPROVAL-PENDING-002",
+      "expected_generation": 0,
+      "transport": "HTTP",
+      "policy_bundle_ref": "policy:ingress-standard-v1"
+    }
+  ]
+}

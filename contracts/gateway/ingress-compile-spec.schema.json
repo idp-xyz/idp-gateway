@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.idp.internal/gateway/ingress-compile-spec-1.0.json",
+  "title": "Ingress compile spec",
+  "description": "Input to a future ingress compile. Every hostname, issuer, audience, and backend address is supplied by this document. The compiler does not embed a product hostname, a JWT issuer, or a backend.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["traffic_class", "pool", "backend", "routes"],
+  "properties": {
+    "traffic_class": { "const": "INGRESS" },
+    "pool": { "$ref": "#/$defs/pool" },
+    "backend": { "$ref": "#/$defs/backend" },
+    "routes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/route" }
+    }
+  },
+  "$defs": {
+    "pool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "environment",
+        "public_hostname",
+        "listen_port",
+        "bind_address",
+        "tls_dir",
+        "jwt_issuer",
+        "jwt_audiences",
+        "jwks_file"
+      ],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]{2,63}$" },
+        "environment": { "type": "string", "enum": ["TEST", "STAGE", "PROD"] },
+        "public_hostname": { "type": "string", "pattern": "^(?:[a-z0-9-]+\\.)+[a-z]{2,}$" },
+        "listen_port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "bind_address": { "type": "string", "minLength": 1 },
+        "tls_dir": { "type": "string", "minLength": 1 },
+        "jwt_issuer": { "type": "string", "format": "uri" },
+        "jwt_audiences": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "jwks_file": { "type": "string", "minLength": 1 },
+        "notes": { "type": "string" }
+      }
+    },
+    "backend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backend_service_ref", "upstream_host", "upstream_port", "upstream_tls"],
+      "properties": {
+        "backend_service_ref": {
+          "type": "string",
+          "pattern": "^service:[a-z0-9][a-z0-9._/-]{2,127}$"
+        },
+        "upstream_host": { "type": "string", "pattern": "^(?:[a-z0-9-]+\\.)+[a-z]{2,}$" },
+        "upstream_port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "upstream_tls": { "type": "string", "enum": ["VERIFY_REQUIRED"] },
+        "upstream_sni": { "type": "string", "pattern": "^(?:[a-z0-9-]+\\.)+[a-z]{2,}$" },
+        "route_timeout": { "type": "string", "pattern": "^[1-9][0-9]*s$" }
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "intent_id",
+        "route_id",
+        "logical_path",
+        "allowed_methods",
+        "api_asset_ref",
+        "authz_profile",
+        "approval_ref",
+        "expected_generation",
+        "transport",
+        "policy_bundle_ref"
+      ],
+      "properties": {
+        "intent_id": { "type": "string", "pattern": "^gwi-[a-z0-9-]{3,64}$" },
+        "route_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{2,63}$" },
+        "logical_path": { "type": "string", "pattern": "^/(?:[A-Za-z0-9._~-]+/)*[A-Za-z0-9._~-]+$" },
+        "allowed_methods": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] }
+        },
+        "api_asset_ref": { "type": "string", "pattern": "^apiasset:[a-z0-9][a-z0-9._/-]{2,127}$" },
+        "authz_profile": { "type": "string", "minLength": 1 },
+        "approval_ref": { "type": "string", "minLength": 1 },
+        "expected_generation": { "type": "integer", "minimum": 0 },
+        "transport": { "type": "string", "enum": ["HTTP", "GRPC"] },
+        "policy_bundle_ref": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
