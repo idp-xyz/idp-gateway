@@ -473,7 +473,8 @@ func (h *Handler) refuse(w http.ResponseWriter, r *http.Request, endpoint, calle
 		slog.String("result", resultDeny), slog.String("reason", reason))
 }
 
-// record 为每次判定写一行日志。这里没有任何请求头的值，也没有凭证。
+// record 为每次判定写一行日志。ExtAuthZ 请求带着 traceparent 时，这一行记上那个值。
+// 没有这个头就不写这个字段，也不另造一个。这一行不写 Authorization，也不写凭证。
 func (h *Handler) record(r *http.Request, endpoint, caller string, status int, result string, in application.Input, out application.Outcome, err error) {
 	level := slog.LevelInfo
 	attrs := []slog.Attr{
@@ -484,11 +485,28 @@ func (h *Handler) record(r *http.Request, endpoint, caller string, status int, r
 		slog.String("tenant", in.Tenant), slog.String("subject", in.Subject), slog.String("account", out.Account),
 		slog.String("policy_version", out.PolicyVersion), slog.Uint64("revocation_epoch", out.RevocationEpoch),
 	}
+	if endpoint == PathExtAuthz {
+		if value, ok := incomingTraceparent(r.Header); ok {
+			attrs = append(attrs, slog.String("traceparent", value))
+		}
+	}
 	if err != nil {
 		level = slog.LevelError
 		attrs = append(attrs, slog.String("error", err.Error()))
 	}
 	h.log.LogAttrs(r.Context(), level, "egress authorization", attrs...)
+}
+
+// incomingTraceparent 取调用方送来的那一个 traceparent。没有这个头，或值是空的，就不算有。
+// 不生成新的 trace id。有多份时取第一份非空的值，不把它们拼成一个新的。
+func incomingTraceparent(header http.Header) (string, bool) {
+	for _, value := range header.Values("Traceparent") {
+		if value == "" || len(value) > 128 || strings.ContainsAny(value, "\r\n") {
+			continue
+		}
+		return value, true
+	}
+	return "", false
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

@@ -161,6 +161,7 @@ func extAuthz(spec CompileSpec, route RouteSpec) *ynode {
 				yp("x-idp-environment", ys(env)),
 				yp("x-idp-method", ys("request.method")),
 				yp("x-idp-path", ys("request.path")),
+				yp("traceparent", ys(`request.headers["traceparent"]`)),
 			)),
 			yp("metadata", ym(yp("decision_id", ys(`response.headers["x-idp-decision-id"]`)))),
 			yp("includeResponseHeaders", stringSeq([]string{"authorization"})),

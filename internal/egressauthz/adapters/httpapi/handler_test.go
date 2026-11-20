@@ -198,6 +198,42 @@ func TestExtAuthzReleasesEachTenantsOwnCredentialInAHeaderOnly(t *testing.T) {
 	}
 }
 
+// 判定日志只在 ExtAuthZ 请求自己带着 traceparent 时写下那个值。没有这个头就不写，也不另造。
+func TestExtAuthzDecisionLogCarriesCallerTraceparent(t *testing.T) {
+	const parent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	const callerAuthorization = "Bearer caller-token-should-not-be-logged"
+	f := newFixture(t)
+	headers := append(trusted("tenant-blue"),
+		[2]string{"traceparent", parent},
+		[2]string{"Authorization", callerAuthorization},
+	)
+	recorder := f.call("gateway", "GET", PathExtAuthz, headers, "")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("带着 traceparent：%d %s", recorder.Code, recorder.Body)
+	}
+	logged := lastLog(t, f)
+	if logged["msg"] != "egress authorization" || logged["traceparent"] != parent {
+		t.Fatalf("判定日志：%v", logged)
+	}
+	if strings.Contains(f.logs.String(), callerAuthorization) || strings.Contains(f.logs.String(), "provider-token") ||
+		strings.Contains(f.logs.String(), "Authorization") {
+		t.Fatalf("日志里出现了凭证或 Authorization：%s", f.logs)
+	}
+
+	f.logs.Reset()
+	recorder = f.call("gateway", "GET", PathExtAuthz, trusted("tenant-blue"), "")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("没有 traceparent：%d %s", recorder.Code, recorder.Body)
+	}
+	logged = lastLog(t, f)
+	if _, has := logged["traceparent"]; has {
+		t.Fatalf("没有这个头时日志里有 traceparent：%v", logged)
+	}
+	if strings.Contains(f.logs.String(), "provider-token") || strings.Contains(f.logs.String(), callerAuthorization) {
+		t.Fatalf("日志里出现了凭证：%s", f.logs)
+	}
+}
+
 // 契约规定网关转发原方法；每种方法的交换都相同。
 func TestExtAuthzAnswersEveryMethod(t *testing.T) {
 	f := newFixture(t)

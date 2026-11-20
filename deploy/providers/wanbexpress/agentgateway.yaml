@@ -109,6 +109,7 @@ routes:
             x-idp-environment: '"TEST"'
             x-idp-method: request.method
             x-idp-path: request.path
+            traceparent: 'request.headers["traceparent"]'
           metadata:
             decision_id: 'response.headers["x-idp-decision-id"]'
           includeResponseHeaders:
@@ -197,6 +198,7 @@ routes:
             x-idp-environment: '"TEST"'
             x-idp-method: request.method
             x-idp-path: request.path
+            traceparent: 'request.headers["traceparent"]'
           metadata:
             decision_id: 'response.headers["x-idp-decision-id"]'
           includeResponseHeaders:
@@ -285,6 +287,7 @@ routes:
             x-idp-environment: '"TEST"'
             x-idp-method: request.method
             x-idp-path: request.path
+            traceparent: 'request.headers["traceparent"]'
           metadata:
             decision_id: 'response.headers["x-idp-decision-id"]'
           includeResponseHeaders:
@@ -373,6 +376,7 @@ routes:
             x-idp-environment: '"TEST"'
             x-idp-method: request.method
             x-idp-path: request.path
+            traceparent: 'request.headers["traceparent"]'
           metadata:
             decision_id: 'response.headers["x-idp-decision-id"]'
           includeResponseHeaders:

@@ -267,6 +267,11 @@ flowchart TD
 - 报文采集与脱敏：`scripts/diagnostic_reference.py` 的移植，四阶段的证据。`GW-GAP-07`。
   - **到哪了（2026-11-21）**：离线参照现在在 `internal/diagnostic`。正文采集仍然关闭。职责分离没有移植（2026-11-19 仓库所有者决定本项目不区分操作人和审批人）。
 - 完整的 Trace 和审计，SLO。`GW-FR-017`、`GW-GAP-08`。
+  - **量过的（2026-11-21）**：这不是验收通过。完整的 Trace、审计和 SLO 仍没有做，也没有接收集器。锁定的 1.7.0，SHA-256 是 `c7ef326b7b5702451e94bab55ff484d600d5abdc5344a4cdf7c72fc0bcff9e24`，与锁定文件里 linux/amd64 镜像的 `/app/agentgateway` 相同；`--version` 报 1.7.0，`git_revision` 是 `26f5aebe99a36a037fe54f8080a608aca5547e15`。回环上一个进程、一条没有 JWT 的路由：明文 `127.0.0.1:19440`，ExtAuthZ 替身 `127.0.0.1:19441`，上游替身 `127.0.0.1:19442`。ExtAuthZ 的 `addRequestHeaders` 写了 `traceparent: request.headers["traceparent"]`。两笔都是 `GET /probe`，HTTP 200。
+
+    调用方送了 `traceparent` `00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01`。ExtAuthZ 替身收到 `traceparent` `00-4bf92f3577b34da6a3ce929d0e0e4736-9492622030647bfe-01`。trace id `4bf92f3577b34da6a3ce929d0e0e4736` 与调用方的相同。span id `9492622030647bfe` 与网关这一行的 `span.id` 相同；调用方原来的 span id 是 `00f067aa0ba902b7`。上游替身收到的是同一份。调用方的应答里没有 `traceparent`。网关日志有 `trace.id=4bf92f3577b34da6a3ce929d0e0e4736`。
+
+    调用方没有送 `traceparent`。ExtAuthZ 替身只收到 `host`，没有 `traceparent`。上游替身也没有。网关这一行没有 `trace.id`，也没有 `span.id`。没有生成 trace id。
 - 多实例：单机是单点（ADR-0010 的"成本与剩余风险"），压测和 11 项故障演练要多实例的部署。顺丰国际这一家，几个 `gateway-authz` 实例各取各的访问令牌，会互相作废（[ADR-0014](adr/ADR-0014.md)）；一次重启也是一次新的取令牌，生产上同样作废前一枚。这一步没有解决。
 - 安全测试；镜像的签名和 SBOM。`GW-GAP-13`。
 - 第 2 节留下来的：按 Operation 封禁、撤销在多个实例之间的传播、没有用到的认证方式。
