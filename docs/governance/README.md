@@ -31,7 +31,7 @@
 - STD-CP5（工程与质量）：真实构建、集成、安全、负载和故障测试的运行记录。
 - STD-CP6（发布与运营）：发布方式、运行手册和发布后实际验证的运行记录。现在是开发阶段，不考虑生产部署，这一项不在眼下的工作范围里。
 
-现在六个门禁和 `design-status.json` 里的各项运行验证仍是 `NOT_RUN`，那是还没有人按上面的规则重新评估，不是"缺批准"。
+2026-11-19，仓库所有者定了把 `design-status.json` 里三项运行验证从 `NOT_RUN` 改成 `RUN`：`agentgateway`、`gatekeeper_extauthz`、`provider_sandbox`。`RUN` 的意思是跑过、证据在仓库里，不是"全部通过"；每一项看到了什么、没有看到什么（保留），写在同一个文件的 `runtime_verification_notes` 里。`security_penetration`、`performance`、`production` 没有证据，仍是 `NOT_RUN`。六个门禁和验收矩阵里的用例还没有人对着证据逐项评估，仍是 `NOT_RUN`，那不是"缺批准"。
 
 ## 已有的运行结果，和它们为什么还不是门禁证据
 

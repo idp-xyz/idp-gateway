@@ -14,12 +14,58 @@
     "STD-CP6": "NOT_RUN"
   },
   "runtime_verification": {
-    "agentgateway": "NOT_RUN",
-    "gatekeeper_extauthz": "NOT_RUN",
-    "provider_sandbox": "NOT_RUN",
+    "agentgateway": "RUN",
+    "gatekeeper_extauthz": "RUN",
+    "provider_sandbox": "RUN",
     "security_penetration": "NOT_RUN",
     "performance": "NOT_RUN",
     "production": "NOT_RUN"
+  },
+  "runtime_verification_notes": {
+    "rule": "RUN means it was run and the evidence is in the repository; it is not a statement that everything passed. What was seen, and what was not shown, is listed per item. Changed from NOT_RUN on 2026-11-19 by decision of the repository owner (see approval_rule).",
+    "agentgateway": {
+      "since": "2026-11-19",
+      "evidence": [
+        "tests/acceptance/blackbox/evidence/p1-run-agentgateway-1.7.0.json",
+        "tests/integration/compose/README.md",
+        "tests/integration/wanbexpress/evidence/"
+      ],
+      "seen": "The pinned agentgateway 1.7.0, real binary and real image. Black-box suite: 97 cases, 96 pass. Single-host pool suite: 30 cases, three rounds.",
+      "reservations": [
+        "One black-box case fails: P1-SS-04.",
+        "In the black-box suite Gatekeeper and the provider are stand-ins.",
+        "The image signature was not verified."
+      ]
+    },
+    "gatekeeper_extauthz": {
+      "since": "2026-11-19",
+      "evidence": [
+        "tests/integration/gatekeeper/README.md",
+        "tests/integration/wanbexpress/evidence/"
+      ],
+      "seen": "A real Gatekeeper at commit f36dc06 run on the development machine: tokens it signs are verified by the gateway, gateway-authz asks its PDP with a client certificate. 12 of the 12 default cases pass.",
+      "reservations": [
+        "It is a local instance with local changes (provider_account type, the dedicated audience by a global switch, a TLS terminator in front of the PDP), not an environment run by the Gatekeeper team.",
+        "No environment claim in the token.",
+        "The key-rotation case (GK-12) is not among the default cases and failed when it was last run, on 2026-11-11: a token signed with a new key was not accepted within the 60 seconds the case allows, only after the gateway fetched the JWKS again on its own schedule.",
+        "The provider in that suite is a stand-in."
+      ]
+    },
+    "provider_sandbox": {
+      "since": "2026-11-19",
+      "evidence": [
+        "tests/integration/wanbexpress/evidence/rig-sandbox.json",
+        "tests/integration/wanbexpress/evidence/pool-sandbox.json",
+        "tests/integration/wanbexpress/README.md"
+      ],
+      "seen": "The WanbExpress sandbox through the whole chain (real Gatekeeper as above, real agentgateway, gateway-authz), from a local gateway and from the single-host pool behind its egress rules: whoami, create, get, delete, revocation. No check failed.",
+      "reservations": [
+        "One sandbox account: isolation between two accounts is shown at a stand-in only.",
+        "The sandbox is plain HTTP: TLS to the carrier was not shown.",
+        "What the carrier receives, credential rotation and the unknown outcome of a write are shown at a stand-in only.",
+        "One carrier."
+      ]
+    }
   },
   "poc": {
     "p1_credential_injection": {
@@ -28,12 +74,19 @@
         "tests/acceptance/blackbox/evidence/p1-run-agentgateway-1.7.0.json"
       ],
       "report": "tests/acceptance/blackbox/README.md",
-      "agentgateway_versions_run": ["1.7.0"],
+      "agentgateway_versions_run": [
+        "1.7.0"
+      ],
       "agentgateway_version_targeted": "1.7.0 (pinned in deploy/agentgateway/agentgateway.lock.json: the upstream container image by digest, and the SHA-256 of the binary inside it, which is the build the suites start; origin, licence and known vulnerabilities checked once on 2026-11-11 as recorded in deploy/agentgateway/README.md; image signature not verified; no separate approval step)",
       "gatekeeper": "MOCK (no Gatekeeper implementation was available; mutual TLS to the mock is real)",
       "local_broker": "MOCK",
       "provider": "MOCK",
-      "credential_modes_run": ["A (response header)", "A (backendAuth.key.expression)", "B (local broker)", "C (static)"],
+      "credential_modes_run": [
+        "A (response header)",
+        "A (backendAuth.key.expression)",
+        "B (local broker)",
+        "C (static)"
+      ],
       "counts_as_gate_or_acceptance_evidence": false,
       "proposed_decision": "docs/adr/ADR-0008.md"
     }
@@ -67,6 +120,6 @@
   "warnings": [
     "The manifest keeps the structure of IDP-SCG-STD-001 and passes its JSON Schema; the UNASSIGNED-* and UNRESOLVED-* placeholders are left open on purpose and do not block anything.",
     "All ADRs referred to by the baseline are still Proposed; the repository owner decides their status. The decisions array is intentionally empty.",
-    "No gate or acceptance case has been re-evaluated against its evidence yet: the statuses above are unchanged. The P1 PoC under \"poc\" ran against a mock Gatekeeper and a mock provider; later suites (tests/integration/gatekeeper, tests/integration/wanbexpress) used a real Gatekeeper and a real carrier sandbox, see docs/governance/README.md."
+    "On 2026-11-19 three runtime verifications were changed from NOT_RUN to RUN with their reservations (runtime_verification_notes). The six gates and the cases of the acceptance matrix have not been re-evaluated against the evidence: they are unchanged. security_penetration, performance and production have no evidence."
   ]
 }
