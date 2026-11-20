@@ -26,12 +26,17 @@ const (
 //
 //   - 去掉顶层的 config 段。那是启动时定下的设置，里面有随运行环境变的值，由 StartupSettings 另外比；
 //   - 证书正文换成占位。证书不在快照里，换证书不经过发布；
+//   - 一个列表的元素按各自的规范形式排序：policies[*].policy.traffic.jwtAuth.providers[*].keys，
+//     网关列出一份 JWKS 里各把密钥的 kid。锁定的 1.7.0 每次加载这份 JWKS 列出的顺序都可能不同
+//     （2026-11-19 在同一份有两把或三把密钥的文件上见到；同一个进程里重复取不变）。只有这一个列表这样处理，
+//     按它在导出里的位置认；路由、规则等其它列表的顺序有意义，照原样；
 //   - 剩下的写成规范形式，取 SHA-256。
 //
-// 同一份快照由同一个版本的网关加载，在哪里加载、对象里的键以什么顺序输出，摘要都相同。
+// 同一份快照由同一个版本的网关加载，在哪里加载、对象里的键以什么顺序输出、JWKS 里的密钥以什么顺序列出，
+// 摘要都相同。没有这个列表或它只有一个元素的导出，摘要与加这一条之前相同。
 //
 // 规范形式与 Python 的 json.dumps(sort_keys=True, separators=(',', ':')) 逐字节相同，
-// tests/integration 下的用例就是那样算的：键按码点排序，没有多余的空白，字符串里 ASCII 可见字符
+// tests/integration 下的用例就是那样算的（先把上面那个列表按元素的 json.dumps(sort_keys=True, separators=(',', ':')) 排序）：键按码点排序，没有多余的空白，字符串里 ASCII 可见字符
 // 以外的一律写成 \uXXXX，整数照原样，带小数点或指数的数按 float64 的最短写法。
 // 输入里有不成对的代理字符时两边不同，这里把它当成 U+FFFD。
 func PublishedDigest(dump []byte) (string, error) {
@@ -40,8 +45,12 @@ func PublishedDigest(dump []byte) (string, error) {
 		return "", err
 	}
 	delete(document, settingsSection)
+	published := withoutCertificates(document).(map[string]any) // 一份新的副本，下面的排序不动 document
+	if err := sortJWKSKeys(published); err != nil {
+		return "", err
+	}
 	var canonical bytes.Buffer
-	if err := writeCanonical(&canonical, withoutCertificates(document)); err != nil {
+	if err := writeCanonical(&canonical, published); err != nil {
 		return "", err
 	}
 	sum := sha256.Sum256(canonical.Bytes())
@@ -120,6 +129,42 @@ func decodeObject(raw []byte) (map[string]any, error) {
 		return nil, errors.New("gatewayconfig: the dump is not a JSON object")
 	}
 	return object, nil
+}
+
+// sortJWKSKeys 把 policies[*].policy.traffic.jwtAuth.providers[*].keys 的元素按各自的规范形式排序，原地改。
+// 路径上有哪一层不是预期的类型，就不动（其它形状的导出照原样算）。
+func sortJWKSKeys(document map[string]any) error {
+	policies, _ := document["policies"].([]any)
+	for _, entry := range policies {
+		policy, _ := entry.(map[string]any)
+		policy, _ = policy["policy"].(map[string]any)
+		traffic, _ := policy["traffic"].(map[string]any)
+		jwtAuth, _ := traffic["jwtAuth"].(map[string]any)
+		providers, _ := jwtAuth["providers"].([]any)
+		for _, candidate := range providers {
+			provider, _ := candidate.(map[string]any)
+			keys, ok := provider["keys"].([]any)
+			if !ok || len(keys) < 2 {
+				continue
+			}
+			forms := make(map[int]string, len(keys))
+			indexed := make([]int, len(keys))
+			for i, key := range keys {
+				var form bytes.Buffer
+				if err := writeCanonical(&form, key); err != nil {
+					return err
+				}
+				forms[i], indexed[i] = form.String(), i
+			}
+			sort.SliceStable(indexed, func(a, b int) bool { return forms[indexed[a]] < forms[indexed[b]] })
+			sorted := make([]any, len(keys))
+			for to, from := range indexed {
+				sorted[to] = keys[from]
+			}
+			provider["keys"] = sorted
+		}
+	}
+	return nil
 }
 
 // withoutCertificates 把证书正文换成占位。只看值，不看键。

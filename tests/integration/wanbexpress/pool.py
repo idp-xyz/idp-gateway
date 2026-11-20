@@ -130,13 +130,8 @@ def prepare(state: dict, made: dict, sandbox: bool, snapshot_text: str):
     jwks = gk.call('GET', gk.ISSUER + '/.well-known/jwks.json')
     if jwks[0] != 200 or not isinstance(jwks[1], dict) or not jwks[1].get('keys'):
         die('no JWKS from the local Hydra')
-    # Only the key that signs the tokens now. The gateway's dump lists the keys of a JWKS in an order that changes from one start to the next, and the
-    # publisher's digest is sensitive to the order of a list: with two keys in the file the publisher sometimes sees a digest that is not the one it
-    # staged (one run in three here). The local Hydra has two (a key rotation was tried on it earlier). Reported, not worked around in the publisher.
-    kid = wb.gk.jwt.get_unverified_header(gk.token_for(state['blue']['client']))['kid']
-    jwks[1]['keys'] = [k for k in jwks[1]['keys'] if k.get('kid') == kid]
-    if len(jwks[1]['keys']) != 1:
-        die('the signing key of the tokens is not in the JWKS exactly once')
+    # The local Hydra's whole JWKS (two keys: a key rotation was tried on it earlier). The gateway lists the keys of a JWKS in an order that
+    # changes from one load to the next; the publisher's digest does not depend on that order (ADR-0010 item 6).
     # certificates: the rig's, because the PDP's mutual-TLS front trusts this run's CA (publish_pdp_tls)
     for name in ('gateway-readback.crt', 'gateway-readback.key', 'gateway.crt', 'gateway.key', 'ca.crt'):
         shutil.copy2(gk.TLS / name, pool / 'tls' / name)

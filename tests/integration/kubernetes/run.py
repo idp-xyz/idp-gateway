@@ -146,13 +146,24 @@ def without_certificates(node):
     return node
 
 
+def sorted_jwks_keys(document):
+    """policies[*].policy.traffic.jwtAuth.providers[*].keys（网关列出一份 JWKS 里各把密钥的 kid）的元素按各自的规范形式排序：
+    锁定的 1.7.0 每次加载列出的顺序都可能不同。只有这一个列表，按位置认；规则与 internal/gatewayconfig/domain/digest.go 的 sortJWKSKeys 相同。"""
+    document = json.loads(json.dumps(document))
+    for entry in document.get('policies') or []:
+        for provider in (((((entry or {}).get('policy') or {}).get('traffic') or {}).get('jwtAuth') or {}).get('providers') or []):
+            if isinstance(provider, dict) and isinstance(provider.get('keys'), list):
+                provider['keys'] = sorted(provider['keys'], key=lambda key: json.dumps(key, sort_keys=True, separators=(',', ':')))
+    return document
+
+
 def published_digest(dump: dict, certificates: bool = False) -> str:
     """/config_dump 里由发布的文件决定的那部分的摘要，与键的顺序无关。去掉 config 段（启动时定下的设置，
-    里面有随运行环境变的值）；certificates 为假时证书正文不计入。"""
+    里面有随运行环境变的值）；certificates 为假时证书正文不计入。网关列出 JWKS 密钥的顺序不定，那个列表先排序（sorted_jwks_keys）。"""
     document = {k: v for k, v in dump.items() if k != 'config'}
     if not certificates:
         document = without_certificates(document)
-    return hashlib.sha256(json.dumps(document, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(sorted_jwks_keys(document), sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
 # ---- 发布前的离线加载 -------------------------------------------------------------------------------

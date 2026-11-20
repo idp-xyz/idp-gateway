@@ -32,7 +32,7 @@
 
 池的 `tls/` 里放网关的证书和 `jwks.json`，`gateway-authz.yml` 的变量填好；`docker compose -f compose.yml -f gateway-authz.yml up -d agentgateway`，再 `gateway-control publish --snapshot agentgateway.yaml …`，再 `up -d`（见 [deploy/compose](../../compose/README.md) 的"头一次安装"和"gateway-authz"）。
 
-**`jwks.json` 里只放现在签令牌的那把密钥。** 网关把 JWKS 的几把密钥按不定的顺序列在运行配置里，发布器的摘要对列表的顺序敏感：文件里有两把时，发布有时会因为摘要对不上而被还原（本机试过，三次里一次）。换密钥要两把并存，这个问题要先在发布器上处理，现在没有。
+**`jwks.json` 里可以放几把密钥，换密钥时两把并存。** 网关把 JWKS 的几把密钥按不定的顺序列在运行配置里；发布器的摘要与这个列表的顺序无关（ADR-0010 第 6 条，2026-11-19 修的），所以发布不会因为顺序而被还原。
 
 ## "默认配置不安全的地方"九项
 

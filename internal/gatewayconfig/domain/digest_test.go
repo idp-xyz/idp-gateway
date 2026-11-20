@@ -294,3 +294,87 @@ func TestStartupSettingsOfOtherInputs(t *testing.T) {
 		}
 	}
 }
+
+// 网关列出一份 JWKS 的各把密钥的顺序每次加载都可能不同（锁定的 1.7.0，2026-11-19 见到），所以摘要与
+// policies[*].policy.traffic.jwtAuth.providers[*].keys 里元素的顺序无关；只有这一个列表如此。
+func jwksDump(keys string, routes string) []byte {
+	return []byte(`{"policies":[{"key":"gateway/t/0","policy":{"traffic":{"phase":"gateway","jwtAuth":{"mode":"strict",` +
+		`"providers":[{"issuer":"i"` + keys + `}]}}}}],"binds":[{"routes":` + routes + `}]}`)
+}
+
+func TestPublishedDigestIsIndependentOfTheOrderOfTheJWKSKeys(t *testing.T) {
+	const routes = `["a","b"]`
+	two := digest(t, jwksDump(`,"keys":["k1","k2"]`, routes))
+	three := digest(t, jwksDump(`,"keys":["k1","k2","k3"]`, routes))
+	for name, keys := range map[string]string{
+		"两把，换了顺序":  `,"keys":["k2","k1"]`,
+		"三把，另一种顺序": `,"keys":["k3","k1","k2"]`,
+		"三把，再一种顺序": `,"keys":["k2","k3","k1"]`,
+	} {
+		want := two
+		if strings.Contains(keys, "k3") {
+			want = three
+		}
+		if got := digest(t, jwksDump(keys, routes)); got != want {
+			t.Errorf("%s：摘要变了", name)
+		}
+	}
+	if two == three {
+		t.Error("多了一把密钥，摘要没有变")
+	}
+	for name, keys := range map[string]string{
+		"换了一把":  `,"keys":["k1","k9"]`,
+		"少了一把":  `,"keys":["k1"]`,
+		"多了一把":  `,"keys":["k1","k2","k2"]`,
+		"另一个名字": `,"keys":["k1","K2"]`,
+	} {
+		if got := digest(t, jwksDump(keys, routes)); got == two {
+			t.Errorf("%s：摘要没有变", name)
+		}
+	}
+}
+
+func TestOnlyTheJWKSKeyListIsOrderInsensitive(t *testing.T) {
+	keys := `,"keys":["k1","k2"]`
+	if digest(t, jwksDump(keys, `["a","b"]`)) == digest(t, jwksDump(keys, `["b","a"]`)) {
+		t.Error("路由的顺序换了，摘要没有变")
+	}
+	// 别处同名的 keys 也不排序：不在 policies[*].policy.traffic.jwtAuth.providers[*] 这条路径上。
+	other := func(keys string) []byte {
+		return []byte(`{"policies":[{"policy":{"traffic":{"other":{"providers":[{"keys":` + keys + `}]}}}}]}`)
+	}
+	if digest(t, other(`["k1","k2"]`)) == digest(t, other(`["k2","k1"]`)) {
+		t.Error("路径之外的 keys 列表的顺序换了，摘要没有变")
+	}
+	// 一个 provider 里的 keys 换顺序，不影响别的 provider；providers 本身的顺序有意义。
+	pair := func(first, second string) []byte {
+		return []byte(`{"policies":[{"policy":{"traffic":{"jwtAuth":{"providers":[{"issuer":"x","keys":` + first + `},{"issuer":"y","keys":` + second + `}]}}}}]}`)
+	}
+	if digest(t, pair(`["a","b"]`, `["c","d"]`)) != digest(t, pair(`["b","a"]`, `["d","c"]`)) {
+		t.Error("每个 provider 的 keys 应各自排序")
+	}
+	if digest(t, pair(`["a","b"]`, `["c","d"]`)) == digest(t, pair(`["c","d"]`, `["a","b"]`)) {
+		t.Error("两个 provider 的顺序换了，摘要没有变")
+	}
+}
+
+// 没有这个列表、或只有一个元素时，摘要与加排序之前逐字节相同。下面三个值是修之前的代码对同样的原文算出来的
+// （2026-11-19），已经在用的池的记录因此不受影响；两把已是升序的，也与之前相同。
+func TestPublishedDigestIsUnchangedWhereTheSortDoesNothing(t *testing.T) {
+	const routes = `["a","b"]`
+	for name, c := range map[string]struct{ keys, want string }{
+		"没有 keys":  {``, "049fbd27a980db249301ebce7b62dada57099ed3c07bfcd2d0e463e1194eaddd"},
+		"一把":       {`,"keys":["k1"]`, "c21ae1259d514379b37b28e058b18cbae3d1a11c60386ecdf69ecd188d19d3fe"},
+		"两把，已经是升序": {`,"keys":["k1","k2"]`, "8632016949035bdd07e779b4be4dc13033088658db9a9c3a22fb5646eb5e2b18"},
+	} {
+		if got := digest(t, jwksDump(c.keys, routes)); got != c.want {
+			t.Errorf("%s：得到 %s，修之前是 %s", name, got, c.want)
+		}
+	}
+	// 修之前的代码对降序的两把给出的是另一个值；修之后与升序的相同。
+	const beforeDescending = "7613490f6f51146cc92109902744e36b7a9c0b5dc751c60ddc91b823786d1412"
+	got := digest(t, jwksDump(`,"keys":["k2","k1"]`, routes))
+	if got == beforeDescending || got != "8632016949035bdd07e779b4be4dc13033088658db9a9c3a22fb5646eb5e2b18" {
+		t.Errorf("降序的两把：得到 %s", got)
+	}
+}
