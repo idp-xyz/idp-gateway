@@ -199,14 +199,18 @@ class CredentialRedemption(unittest.TestCase):
     def test_gatekeeper_suite_can_still_derive_its_gateway_configuration(self):
         """tests/integration/gatekeeper starts the gateway from the black-box configuration with a few pieces of
         text replaced, and refuses to run when one of them does not occur as often as it expects. That suite needs
-        a local Gatekeeper and is run by hand, so a change here that breaks it would otherwise go unnoticed."""
+        a local Gatekeeper and is run by hand, so a change here that breaks it would otherwise go unnoticed.
+        JWKS is not one of the replacements: the gateway keeps file: .run/jwks.json and gateway-control sync-jwks
+        fills that file."""
         tree = ast.parse(text('tests/integration/gatekeeper/run.py'))
         differences = next(node.value for node in tree.body if isinstance(node, ast.Assign)
                            and getattr(node.targets[0], 'id', None) == 'GATEWAY_DIFFERENCES')
         config = text('tests/acceptance/blackbox/agentgateway.poc.yaml')
-        self.assertGreaterEqual(len(differences.elts), 3)
+        self.assertGreaterEqual(len(differences.elts), 2)
+        self.assertIn('file: .run/jwks.json\n', config)
         for element in differences.elts:
             old, times = ast.literal_eval(element.elts[0]), ast.literal_eval(element.elts[2])
+            self.assertNotIn('jwks.json', old)
             with self.subTest(replaced=old.strip()):
                 self.assertEqual(config.count(old), times)
 

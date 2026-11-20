@@ -9,8 +9,10 @@
 gateway-authz（产品构建）。假的部分：Provider（黑盒套件的 mock_provider.py）和工作负载证书
 （每次运行现做的 CA）。
 
-网关配置就是黑盒套件的 agentgateway.poc.yaml，只换了三处：签发者、JWKS 的来源，以及
-"Token 环境"的来源（见 GATEWAY_DIFFERENCES）。登记表按本地实例里的租户和客户端现生成。
+网关配置就是黑盒套件的 agentgateway.poc.yaml，只换了两处：签发者，以及
+"Token 环境"的来源（见 GATEWAY_DIFFERENCES）。JWKS 仍是 file: .run/jwks.json，由
+gateway-control sync-jwks 从本机 Hydra 同步到这个文件：锁定的 agentgateway 1.7.0 会在文件被原子替换后自行重新加载。
+登记表按本地实例里的租户和客户端现生成。
 
 gateway-authz 问 PDP 走的是 27623：栈里 PDP 前面的 nginx（compose.local.yml 的 pdp-mtls），要求本次运行的工作负载 CA 签发、
 CN 是 gateway-authz 的客户端证书；每次运行开始时这里把 nginx 的服务端证书和 CA 换成新做的。
@@ -52,9 +54,11 @@ KEY_ROTATION = False          # --key-rotation
 ROTATION_WAIT = 60
 
 # 黑盒套件的网关配置里被替换的文本，以及各自应当出现的次数。
+# JWKS 不在这里换：黑盒配置已经是 file: .run/jwks.json，联调也用这份文件，
+# 由 gateway-control sync-jwks 写入并保持更新。契约测试要求这份列表至少两项，
+# 而且每一项的旧文本在黑盒配置里出现的次数必须与这里写的一致。
 GATEWAY_DIFFERENCES = [
     ('      issuer: https://gatekeeper.idp.test\n', f'      issuer: {ISSUER}\n', 1),
-    ('        file: .run/jwks.json\n', f'        url: {ISSUER}/.well-known/jwks.json\n', 1),
     # Gatekeeper 的令牌里没有 env 声明。这里的"Token 环境"是这个网关实例的常量：
     # 它只信一个签发者，签发者属于哪个环境是部署时定下的。
     # 黑盒配置里每条问 PDP 的路由各有一处，一共五条；联调只走其中一条，五处都要换，配置才是一致的。
@@ -199,12 +203,21 @@ def sync_tuples(state: dict):
 
 
 # ---- 进程 --------------------------------------------------------------------------------
-PROCS: list[tuple[str, subprocess.Popen, int]] = []
+PROCS: list[tuple[str, subprocess.Popen, int | None]] = []
 
 
-def start(name: str, argv: list[str], port: int, env: dict | None = None):
+def start(name: str, argv: list[str], port: int | None, env: dict | None = None):
     log = open(RUN / f'{name}.log', 'a')   # 同一轮里重启的进程接着写，判定记录不丢
-    PROCS.append((name, subprocess.Popen(argv, cwd=HERE, stdout=log, stderr=subprocess.STDOUT, env=env or os.environ), port))
+    process = subprocess.Popen(argv, cwd=HERE, stdout=log, stderr=subprocess.STDOUT, env=env or os.environ)
+    PROCS.append((name, process, port))
+    if port is None:
+        # 没有监听端口的进程（sync-jwks）：稍等，确认它没有马上退出。停的时候也不去等端口。
+        time.sleep(0.2)
+        if process.poll() is not None:
+            tail = (RUN / f'{name}.log').read_text(errors='replace')[-1200:]
+            stop_all()
+            die(f'{name} 启动后立即退出了：\n{tail}')
+        return
     if not wait_port(port, up=True):
         tail = (RUN / f'{name}.log').read_text()[-1200:]
         stop_all()
@@ -219,7 +232,8 @@ def stop(name: str):
             process.wait(5)
         except subprocess.TimeoutExpired:
             process.kill()
-        wait_port(port, up=False)
+        if port is not None:
+            wait_port(port, up=False)
         PROCS.remove(entry)
 
 
@@ -328,16 +342,24 @@ def prepare(state: dict) -> dict:
     for name, content in files.items():
         (RUN / name).write_text(content, encoding='utf-8')
         os.chmod(RUN / name, 0o600)
-    build = subprocess.run(['/usr/local/go/bin/go', 'build', '-trimpath', '-o', str(RUN / 'gateway-authz'), './cmd/gateway-authz'],
-                           cwd=ROOT, capture_output=True, text=True)
-    if build.returncode != 0:
-        die('gateway-authz 构建失败：\n' + build.stderr[-1500:])
+    for binary, pkg in (('gateway-authz', './cmd/gateway-authz'), ('gateway-control', './cmd/gateway-control')):
+        build = subprocess.run(['/usr/local/go/bin/go', 'build', '-trimpath', '-o', str(RUN / binary), pkg],
+                               cwd=ROOT, capture_output=True, text=True)
+        if build.returncode != 0:
+            die(f'{binary} 构建失败：\n' + build.stderr[-1500:])
     return {'provider_tokens': provider_tokens, 'admin_secret': admin_secret}
 
 
 def start_all(binary: str):
     for log in RUN.glob('*.log'):
         log.unlink()
+    jwks = str(RUN / 'jwks.json')
+    sync = [str(RUN / 'gateway-control'), 'sync-jwks', '--url', ISSUER + '/.well-known/jwks.json',
+            '--output', jwks, '--mode', '0600']
+    once = subprocess.run([*sync, '--once'], cwd=HERE, capture_output=True, text=True)
+    if once.returncode != 0:
+        die('gateway-control sync-jwks --once 没有写成 JWKS：\n' + (once.stdout + '\n' + once.stderr)[-1500:])
+    start('jwks-sync', [*sync, '--interval', '2s'], None)
     start('provider', [sys.executable, str(BLACKBOX / 'mock_provider.py'), '--port', str(PORTS['provider']),
                        '--name', 'mockcarrier', '--state', str(RUN / 'state.json')], PORTS['provider'])
     start_authz(RUN / 'pdp-token')
@@ -603,7 +625,10 @@ def run_cases(r: Results, state: dict, made: dict):
         if new:
             r.check('旧密钥签的令牌仍被接受', gw(old)['status'] == 200)
             r.note('新密钥签的令牌，第一个请求的状态码', gw(new)['status'])
-            r.check(f'{ROTATION_WAIT} 秒内被接受', wait_allowed(new, ROTATION_WAIT))
+            started = time.perf_counter()
+            accepted = wait_allowed(new, ROTATION_WAIT)
+            r.note('新密钥被接受用了多少秒', round(time.perf_counter() - started, 3))
+            r.check(f'{ROTATION_WAIT} 秒内被接受', accepted)
 
     # 编号接着 GK-11：GK-12 留给 --key-rotation，它不是每次都跑。
     r.case('GK-13', 'gateway-authz 到 PDP 那一跳：出示的证书不对（别的 CA 签的；同一个 CA 签的别的身份）问不到，不记成策略拒绝；换回正确的证书后照常')

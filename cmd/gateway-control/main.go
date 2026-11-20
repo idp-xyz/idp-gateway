@@ -18,7 +18,11 @@
 //	gateway-control release  --history-dir <目录> --pool <名字> --id <编号>
 //	gateway-control rollback --history-dir <目录> --pool <名字> --to <编号> [--with-restart] …   （其余同 publish、restart）
 //
-// 它们的结局和退出码在 revoke.go、history.go 的开头写着；下面说的退出码是前五条命令的，加上 rollback。
+// 另有一条把身份提供者的 JWKS 同步到本机文件（jwks.go）：
+//
+//	gateway-control sync-jwks --url <JWKS 地址> --output <文件> [--once] …
+//
+// 它们的结局和退出码在 revoke.go、history.go、jwks.go 的开头写着；下面说的退出码是前五条命令的，加上 rollback。
 //
 // publish 把一份网关配置发布到池里，网关不重启。restart 发布一份要重启网关才能全部生效的配置
 // （启动设置变了的那种），会让这个池中断一下；不给 --snapshot 时，用的是这个池上最后一次得到确认的那一份。
@@ -144,10 +148,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, docker do
 	if len(args) > 0 && isHistoryReadCommand(args[0]) {
 		return runHistoryRead(ctx, args[0], args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && isJWKSCommand(args[0]) {
+		return runJWKS(ctx, args[1:], stdout, stderr)
+	}
 	if len(args) == 0 || !known[args[0]] {
 		fmt.Fprintln(stderr, "usage: gateway-control publish|restart|reconcile|place|keep [flags]   (gateway-control <command> --help lists them)")
 		fmt.Fprintln(stderr, "       gateway-control revoke|restore|revocations [flags]   (revoke or lift the revocation of a Provider account in gateway-authz, or read its table)")
 		fmt.Fprintln(stderr, "       gateway-control releases|release|rollback [flags]   (the release history of a pool: list it, show one release, roll back to one)")
+		fmt.Fprintln(stderr, "       gateway-control sync-jwks [flags]   (copy a JWKS document from an identity provider to a local file and keep it fresh)")
 		return exitUsage
 	}
 	o, err := parse(args[0], args[1:], stderr)
