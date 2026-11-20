@@ -50,7 +50,7 @@ MOCK = HERE / 'mock_sfintl.py'
 RUN = gk.RUN
 HOST = gk.HOST
 BASE = '/providers/sfintl/v1'
-ORDERS, CANCELS, QUERIES = f'{BASE}/orders', f'{BASE}/order-cancellations', f'{BASE}/agent-number-queries'
+ORDERS, CANCELS, QUERIES, PRINTS = f'{BASE}/orders', f'{BASE}/order-cancellations', f'{BASE}/agent-number-queries', f'{BASE}/label-prints'
 BINDING = 'gatekeeper:sfintl-test'
 SANDBOX_HOST = 'api-ifsp-sit.sf.global'
 BLUE_ACCOUNT, GREEN_ACCOUNT = 'account-blue', 'account-green'
@@ -80,10 +80,10 @@ SIGNER_DETAIL = {
 BACKEND_RULE = ("      authorization:\n        rules:\n        - allow: 'request.headers[\"authorization\"].startsWith(\"Sf-OpenApi \")'\n")
 BACKEND_TLS = ("      backendTLS:\n        cert: .run/tls/gateway.crt\n        key: .run/tls/gateway.key\n        root: .run/tls/ca.crt\n        hostname: provider-signer.idp.test\n")
 MUTATIONS = {
-    'bearer-prefix': ('startsWith("Sf-OpenApi ")', 'startsWith("Bearer ")', 3),
-    'no-backend-rule': (BACKEND_RULE, '', 3),
-    'no-backend-tls': (BACKEND_TLS, '', 3),
-    'wrong-signer-name': ('        hostname: provider-signer.idp.test\n', '        hostname: wrong.idp.test\n', 3),
+    'bearer-prefix': ('startsWith("Sf-OpenApi ")', 'startsWith("Bearer ")', 4),
+    'no-backend-rule': (BACKEND_RULE, '', 4),
+    'no-backend-tls': (BACKEND_TLS, '', 4),
+    'wrong-signer-name': ('        hostname: provider-signer.idp.test\n', '        hostname: wrong.idp.test\n', 4),
     'create-retry': ("    # No retry policy on purpose. A create that times out has an unknown result; the carrier answers a repeated customerOrderNo with the existing order (measured 2026-11-20 for an identical body).\n"
                      "    timeout:\n      requestTimeout: 9s\n",
                      "    retry:\n      attempts: 2\n      codes: [502, 503, 504]\n    timeout:\n      requestTimeout: 9s\n", 1),
@@ -241,13 +241,13 @@ RIG_VALUES = [
     ('destination.port == 8443 &&', 'destination.port == 27619 &&', 1),
     ('    port: 8443\n', '    port: 27619\n', 1),
     ('    port: 8081\n', '    port: 27611\n', 1),
-    ('      host: gateway-authz:9443\n', '      host: 127.0.0.1:27613\n', 3),
-    ('cert: tls/', 'cert: .run/tls/', 7),
-    ('key: tls/', 'key: .run/tls/', 7),
-    ('root: tls/', 'root: .run/tls/', 7),
+    ('      host: gateway-authz:9443\n', '      host: 127.0.0.1:27613\n', 4),
+    ('cert: tls/', 'cert: .run/tls/', 9),
+    ('key: tls/', 'key: .run/tls/', 9),
+    ('root: tls/', 'root: .run/tls/', 9),
     ('        file: tls/jwks.json\n', '        url: http://127.0.0.1:27621/.well-known/jwks.json\n', 1),
     ('  - host: 127.0.0.1:15000\n', '  - host: 127.0.0.1:27614\n', 1),
-    ('  - host: provider-signer:9444\n', f'  - host: 127.0.0.1:{SIGNER_PORT}\n', 3),
+    ('  - host: provider-signer:9444\n', f'  - host: 127.0.0.1:{SIGNER_PORT}\n', 4),
 ]
 
 
@@ -633,6 +633,15 @@ def cancel_body(order_no: str, waybill: str) -> dict:
     return {'cancelReason': 'IDPGW test order', 'customerOrderNo': order_no, 'sfWaybillNo': waybill}
 
 
+def print_body(waybill: str, api_username: str) -> dict:
+    """The print body measured on 2026-11-20. The gateway returns the JSON, including data.url; it does not fetch that URL."""
+    return {'apiUsername': api_username, 'printWaybillNoDtoList': [{'sfWaybillNo': waybill}]}
+
+
+def http_url(value) -> bool:
+    return isinstance(value, str) and bool(value) and (value.startswith('http://') or value.startswith('https://'))
+
+
 def open_sandbox_journal() -> None:
     """Start of a --sandbox run (run.py and pool.py). An earlier orders-*.jsonl is named and left where it is."""
     note = journal.warning(journal.begin())
@@ -785,7 +794,7 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
 
     # SF-01
     STATE['label'] = 'SF-01'
-    r.case('SF-01', 'query, create, query, cancel, query: the blue tenant\'s real Gatekeeper token, through the gateway')
+    r.case('SF-01', 'query, create, query, print, cancel, query, print: the blue tenant\'s real Gatekeeper token, through the gateway')
     order_no = new_order_no()
     username = apps[BLUE_ACCOUNT]['api_username']
     if not sandbox:
@@ -852,6 +861,19 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
         query_decisions = [item for item in HOOKS['decisions']() if item.get('operation_id') == 'agent-numbers.query']
         r.check('the second query: gateway-authz decided ACTIVE_ACCOUNT_GRANT for agent-numbers.query',
                 len(query_decisions) >= 2 and query_decisions[-1].get('reason') == 'ACTIVE_ACCOUNT_GRANT')
+        dmark, _ = marks()
+        printed = post(PRINTS, print_body(waybill, username))
+        pdata = business(printed).get('data') if isinstance(business(printed).get('data'), dict) else {}
+        r.check('print: HTTP 200, apiResultCode 0, success true, code 200',
+                printed['status'] == 200 and envelope(printed).get('apiResultCode') == 0 and business(printed).get('success') is True
+                and business(printed).get('code') == '200')
+        r.check('print: the waybill, our customerOrderNo, and a url that is an http or https address',
+                pdata.get('sfWaybillNo') == waybill and pdata.get('customerOrderNo') == order_no and http_url(pdata.get('url')))
+        print_decision = new_decisions(dmark)[-1] if asked_since(dmark) else {}
+        r.check('print: gateway-authz decided ACTIVE_ACCOUNT_GRANT for labels.print',
+                print_decision.get('reason') == 'ACTIVE_ACCOUNT_GRANT' and print_decision.get('operation_id') == 'labels.print')
+        if business(printed).get('success') is not True:
+            note_answer('print', printed)
         cancelled, attempts, cancel_seconds = cancel_order(order_no, waybill)
         r.note('cancel attempts', attempts)
         r.note('cancel seconds', cancel_seconds)
@@ -867,6 +889,18 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
         after_status = ((business(after).get('wrongData') or [{}])[0] or {}).get('status') if isinstance((business(after).get('wrongData') or [None])[0], dict) else None
         r.check('query after the cancel: HTTP 200, apiResultCode 0, wrongData status 4001',
                 after['status'] == 200 and envelope(after).get('apiResultCode') == 0 and after_status == '4001')
+        dmark, _ = marks()
+        printed_after = post(PRINTS, print_body(waybill, username))
+        adata = business(printed_after).get('data') if isinstance(business(printed_after).get('data'), dict) else {}
+        r.check('print after the cancel: HTTP 200, apiResultCode 0, success true, the same waybill, customerOrderNo suffixed _cancel',
+                printed_after['status'] == 200 and envelope(printed_after).get('apiResultCode') == 0 and business(printed_after).get('success') is True
+                and business(printed_after).get('code') == '200' and adata.get('sfWaybillNo') == waybill
+                and adata.get('customerOrderNo') == order_no + '_cancel')
+        after_decision = new_decisions(dmark)[-1] if asked_since(dmark) else {}
+        r.check('print after the cancel: gateway-authz decided ACTIVE_ACCOUNT_GRANT for labels.print',
+                after_decision.get('reason') == 'ACTIVE_ACCOUNT_GRANT' and after_decision.get('operation_id') == 'labels.print')
+        if business(printed_after).get('success') is not True:
+            note_answer('print after cancel', printed_after)
     if sandbox:
         r.skip('exactly one token request was made for the blue app up to here', 'the sandbox does not show its token requests to us')
     else:
@@ -979,9 +1013,9 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
 
     # SF-04
     STATE['label'] = 'SF-04'
-    r.case('SF-04', 'no token, a token for another audience, a forged signature, on each of the three paths: 401, and nothing is asked downstream')
+    r.case('SF-04', 'no token, a token for another audience, a forged signature, on each of the four paths: 401, and nothing is asked downstream')
     for label, token in (('no token', None), ('another audience', tok['blue-other-aud']), ('forged signature', gk.forged(tok['blue']))):
-        for path in (ORDERS, CANCELS, QUERIES):
+        for path in (ORDERS, CANCELS, QUERIES, PRINTS):
             dmark, smark = marks(reset=True)
             answer = req('POST', path, token, {'x': 1})
             short = path.removeprefix(BASE)
@@ -991,14 +1025,14 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
 
     # SF-05
     STATE['label'] = 'SF-05'
-    r.case('SF-05', 'tenants: green gets the green app; green cannot cancel blue\'s order (the stand-in\'s assumption); blue asking for green\'s account is refused'
+    r.case('SF-05', 'tenants: green gets the green app; green cannot cancel or print blue\'s order (the stand-in\'s assumption); blue asking for green\'s account is refused'
            + ('' if not sandbox else ' (sandbox: green has no account)'))
     if sandbox:
         dmark, _ = marks()
         answer = post(QUERIES, query_body(new_order_no(), 'SF000000000000'), 'green')
         r.check('green (no account in this run): 403', answer['status'] == 403)
         r.note('green: gateway-authz\'s reason', reason_since(dmark))
-        r.skip('green gets the green app, and green cannot cancel an order of the blue app', 'there is one sandbox account; order ownership per app is the stand-in\'s assumption and is not sent to the sandbox')
+        r.skip('green gets the green app, and green cannot cancel or print an order of the blue app', 'there is one sandbox account; order ownership per app is the stand-in\'s assumption and is not sent to the sandbox')
     else:
         owned = new_order_no()
         made_it = post(ORDERS, order_body(owned, username))
@@ -1018,6 +1052,9 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
         r.check('green: the dispatch carries the token the stand-in issued to the green app (accepted, and not the blue app\'s), compared and not printed',
                 accepted and got_token[0] != seen_token.get(apps[BLUE_ACCOUNT]['app_key']))
         if owned_bill:
+            denied_print = post(PRINTS, print_body(owned_bill, apps[GREEN_ACCOUNT]['api_username']), 'green')
+            r.check('green cannot print blue\'s waybill: business success is false, and the order is still active (order ownership per app is the stand-in\'s assumption)',
+                    denied_print['status'] == 200 and business(denied_print).get('success') is False and order_active(owned))
             denied = post(CANCELS, cancel_body(owned, owned_bill), 'green')
             r.check('green cannot cancel blue\'s order: business success is false (order ownership per app is the stand-in\'s assumption)',
                     denied['status'] == 200 and business(denied).get('success') is False)
@@ -1044,7 +1081,7 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
     STATE['label'] = 'SF-07'
     r.case('SF-07', 'a method or a path that is not registered does not get to the signer or the carrier')
     for method in ('GET', 'PUT', 'DELETE', 'PATCH'):
-        for path in (ORDERS, CANCELS, QUERIES):
+        for path in (ORDERS, CANCELS, QUERIES, PRINTS):
             dmark, smark = marks(reset=not sandbox)
             answer = req(method, path, tok['blue'], raw=b'[]', content_type='application/json') if method in ('PUT', 'PATCH') else req(method, path, tok['blue'])
             short = f'{method} {path.removeprefix(BASE)}'
@@ -1052,6 +1089,7 @@ def run_cases(r: Results, state: dict, made: dict, sandbox: bool):
             r.check(f'{short}: gateway-authz was not asked', asked_since(dmark) == 0)
             quiet(f'{short}: the signer was not called and the carrier got nothing', dmark, smark)
     near = [f'{ORDERS}/', f'{ORDERS}/X', f'{BASE}/orders-extra', f'{BASE}/order-cancellations/1', f'{BASE}/agent-number-queries/x',
+            f'{PRINTS}/', f'{PRINTS}/X', '/sfintl/v1/label-prints',
             f'{ORDERS}/../orders', f'{ORDERS}/%2e%2e', f'{ORDERS}%2fX', f'{BASE}/%252e', f'{ORDERS};x=1', f'{ORDERS}%00',
             f'{BASE}//orders', f'{BASE}/ORDERS', '/sfintl/v1/orders', '/providers/wanbexpress/v1/parcels', '/providers/sfintl/v2/orders']
     for path in near:

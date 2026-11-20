@@ -11,11 +11,13 @@ type Operation struct {
 	MsgType string
 }
 
-// operations 是第一步的三个操作（docs/adr/ADR-0014.md 第 3 条）。面单以后再做。
+// operations 是顺丰国际当前的四个操作。前三个是第一步（docs/adr/ADR-0014.md 第 3 条）。
+// 面单 IECS_PRINT_ORDER 已列入：网关只交回含 data.url 的 JSON，不代理面单文件本身。
 var operations = []Operation{
 	{ID: "orders.create", Method: "POST", Path: "/sfintl/v1/orders", MsgType: "IECS_CREATE_ORDER"},
 	{ID: "orders.cancel", Method: "POST", Path: "/sfintl/v1/order-cancellations", MsgType: "IECS_CANCEL_ORDER"},
 	{ID: "agent-numbers.query", Method: "POST", Path: "/sfintl/v1/agent-number-queries", MsgType: "IECS_QUERY_AGENTNO"},
+	{ID: "labels.print", Method: "POST", Path: "/sfintl/v1/label-prints", MsgType: "IECS_PRINT_ORDER"},
 }
 
 // Operations 返回操作表的一份拷贝。

@@ -66,7 +66,7 @@ class SfIntlConfiguration(unittest.TestCase):
                 self.assertNotIn('retry', keys(route), 'a create that times out has an unknown result; nothing here repeats a request')
 
     def test_each_rewritten_path_is_a_row_of_the_signers_table_and_the_table_has_no_row_without_a_route(self):
-        self.assertEqual(len(TABLE), 3, 'the signer\'s table was not read, or it changed: this configuration has three routes')
+        self.assertEqual(len(TABLE), 4, 'the signer\'s table was not read, or it changed: this configuration has four routes')
         for route in ROUTES:
             rewritten = route['policies']['urlRewrite']['path']['prefix']
             sent = route['policies']['extAuthz']['protocol']['http']['addRequestHeaders']

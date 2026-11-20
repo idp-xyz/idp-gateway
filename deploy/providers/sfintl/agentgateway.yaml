@@ -3,10 +3,11 @@
 # tests/acceptance/blackbox/agentgateway.poc.yaml), the way development plan 3.2 describes and ADR-0014 item 4 applies.
 # What is different from the WanbExpress file is listed in deploy/providers/sfintl/README.md.
 #
-# Three operations, all POST, and nothing else reaches the signer (caller's path -> signer's path, operation id, msgType):
+# Four operations, all POST, and nothing else reaches the signer (caller's path -> signer's path, operation id, msgType):
 #   /providers/sfintl/v1/orders               -> /sfintl/v1/orders                orders.create        IECS_CREATE_ORDER
 #   /providers/sfintl/v1/order-cancellations  -> /sfintl/v1/order-cancellations   orders.cancel        IECS_CANCEL_ORDER
 #   /providers/sfintl/v1/agent-number-queries -> /sfintl/v1/agent-number-queries  agent-numbers.query  IECS_QUERY_AGENTNO
+#   /providers/sfintl/v1/label-prints         -> /sfintl/v1/label-prints          labels.print         IECS_PRINT_ORDER
 #
 # THE UPSTREAM OF THESE ROUTES IS THE SIGNER, NOT THE CARRIER. The carrier's protocol encrypts the body and signs it,
 # which the gateway cannot do (docs/adr/ADR-0014.md), so the backend is provider-signer (cmd/provider-signer), over mutual
@@ -74,7 +75,7 @@ gateways:
       jwks:
         file: tls/jwks.json
 
-# The three prefixes are not nested in one another (none is a string prefix of another), so no two routes can match
+# The four prefixes are not nested in one another (none is a string prefix of another), so no two routes can match
 # the same request.
 routes:
 - name: sfintl-orders-create
@@ -316,6 +317,99 @@ routes:
         full: provider-signer.idp.test
       path:
         prefix: /sfintl/v1/agent-number-queries
+    responseHeaderModifier:
+      remove:
+      - location
+      - set-cookie
+      - x-idp-decision-id
+    # No retry policy on purpose. The gateway does not repeat a request.
+    timeout:
+      requestTimeout: 9s
+  backends:
+  - host: provider-signer:9444
+    policies:
+      # Mutual TLS to the signer: the gateway presents its certificate; SNI and the name the signer's certificate is
+      # verified for is hostname.
+      backendTLS:
+        cert: tls/gateway.crt
+        key: tls/gateway.key
+        root: tls/ca.crt
+        hostname: provider-signer.idp.test
+      # Fail closed if the PDP allowed but released no credential. The caller's token was removed
+      # after validation, so a header that starts like this can only have come from the PDP.
+      authorization:
+        rules:
+        - allow: 'request.headers["authorization"].startsWith("Sf-OpenApi ")'
+      transformations:
+        request:
+          replace: 'request.headers.filterKeys(k, k in ["accept", "authorization", "content-type", "idempotency-key", "traceparent", "x-client-trace"])'
+      # No Accept is written: this carrier has no Accept requirement. A Content-Type that is not JSON is refused
+      # by the signer (415), not rewritten here.
+      requestHeaderModifier:
+        remove:
+        - x-provider-account
+        - cookie
+        - x-forwarded-host
+        - x-forwarded-for
+        - x-forwarded-proto
+        - forwarded
+        - x-idp-verified-subject
+        - x-idp-verified-tenant
+        - x-idp-verified-env
+
+- name: sfintl-labels-print
+  gateways: [egress-test]
+  hostnames: ["egress-api.idp.test"]
+  matches:
+  - path:
+      pathPrefix: /providers/sfintl/v1/label-prints
+    method: POST
+  policies:
+    # Path shape (print: POST on exactly /label-prints). The reviewed
+    # configuration's canonical-path rule is a weaker form of this one: the characters allowed are the
+    # same, and no segment starts with a dot, so "." and ".." cannot occur. The shape is also what keeps
+    # a path that merely starts with the registered prefix (a deeper path) from reaching the
+    # signer; gateway-authz's register only compares a prefix, so this rule is the only place that says it.
+    authorization:
+      rules:
+      - allow: 'request.path == "/providers/sfintl/v1/label-prints"'
+    extAuthz:
+      host: gateway-authz:9443
+      failureMode:
+        denyWithStatus: 503
+      includeRequestHeaders:
+      - x-provider-account
+      policies:
+        backendTLS:
+          cert: tls/gateway.crt
+          key: tls/gateway.key
+          root: tls/ca.crt
+          hostname: gatekeeper.idp.test
+        http:
+          requestTimeout: 1s
+      protocol:
+        http:
+          path: '"/v1/extauthz/check"'
+          addRequestHeaders:
+            x-idp-verified-subject: jwt.sub
+            x-idp-verified-tenant: jwt.tenant_id
+            x-idp-verified-env: '"TEST"'
+            x-idp-route-id: '"sfintl-labels-print"'
+            x-idp-provider-id: '"sfintl"'
+            x-idp-operation-id: '"labels.print"'
+            x-idp-environment: '"TEST"'
+            x-idp-method: request.method
+            x-idp-path: request.path
+          metadata:
+            decision_id: 'response.headers["x-idp-decision-id"]'
+          includeResponseHeaders:
+          - authorization
+    urlRewrite:
+      # The signer's Host: the name its certificate is for, without a port: the port is the backend's.
+      authority:
+        full: provider-signer.idp.test
+      path:
+        prefix: /sfintl/v1/label-prints
     responseHeaderModifier:
       remove:
       - location

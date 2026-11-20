@@ -20,7 +20,7 @@ B = {'app_key': 'idpgw-test-app-b', 'app_secret': 'secret-of-b', 'api_username':
      'encoding_aes_key': base64.b64encode(bytes(range(64, 96))).decode().rstrip('=')}
 KEY_B = m.parse_key(B['encoding_aes_key'])
 SECRET = 'admin-secret'
-CREATE, CANCEL, QUERY = m.CREATE, m.CANCEL, m.QUERY
+CREATE, CANCEL, QUERY, PRINT = m.CREATE, m.CANCEL, m.QUERY, m.PRINT
 BAD_PARAMS = '请求参数错误'
 FAILED_CANCEL = {'code': '500', 'msg': '请求服务发生异常', 'success': False}
 
@@ -399,6 +399,82 @@ class StandIn(unittest.TestCase):
         self.assertEqual(self.cancel('S-1', waybill, A).data['code'], '200')
         self.assertEqual(self.query('S-1', theirs['data']['sfWaybillNo'], B).data['wrongData'][0]['status'], '4002')
         self.assertEqual([o['state'] for o in self.rig.orders()], ['cancelled', 'active'])
+
+    def _label(self, waybill, app=A, **extra):
+        body = {'apiUsername': app['api_username'], 'printWaybillNoDtoList': [{'sfWaybillNo': waybill}]}
+        body.update(extra)
+        return self.rig.dispatch(app, PRINT, body)
+
+    def test_print_of_an_active_order_returns_the_measured_label(self):
+        waybill = self.create('LBL-1').data['data']['sfWaybillNo']
+        printed = self._label(waybill)
+        self.assertEqual((printed.status, sorted(printed.envelope), printed.envelope['apiResultCode']),
+                         (200, ['apiResultCode', 'apiResultData', 'apiTimestamp'], 0))
+        self.assertEqual(printed.data, {'code': '200', 'data': {
+            'customerOrderNo': 'LBL-1', 'sfWaybillNo': waybill,
+            'url': f'http://mock-oss.sfintl.invalid/labels/{waybill}.pdf'}, 'success': True})
+        self.assertIs(printed.data['success'], True)
+        self.assertEqual(self.rig.orders()[0]['state'], 'active', 'printing does not cancel the order')
+        self.assertIsNone(self.rig.hits()[-1]['customer_order_no'], 'the print body has no customerOrderNo')
+
+    def test_print_of_a_cancelled_order_suffixes_the_customer_order_number(self):
+        waybill = self.create('LBL-2').data['data']['sfWaybillNo']
+        self.assertEqual(self.cancel('LBL-2', waybill).data['code'], '200')
+        printed = self._label(waybill)
+        self.assertEqual((printed.status, printed.envelope['apiResultCode']), (200, 0))
+        self.assertEqual(printed.data['code'], '200')
+        self.assertIs(printed.data['success'], True)
+        self.assertEqual(printed.data['data']['sfWaybillNo'], waybill)
+        self.assertEqual(printed.data['data']['customerOrderNo'], 'LBL-2_cancel')
+        self.assertEqual(printed.data['data']['url'], f'http://mock-oss.sfintl.invalid/labels/{waybill}.pdf')
+        fresh = self.create('LBL-2').data['data']['sfWaybillNo']
+        self.assertNotEqual(fresh, waybill)
+        self.assertEqual(self._label(fresh).data['data']['customerOrderNo'], 'LBL-2', 'the new order prints under the original number')
+        self.assertEqual(self._label(waybill).data['data']['customerOrderNo'], 'LBL-2_cancel', 'the cancelled waybill still prints')
+
+    def test_print_refuses_an_unknown_waybill_a_bad_body_a_wrong_user_and_another_apps_waybill(self):
+        waybill = self.create('LBL-A').data['data']['sfWaybillNo']
+        theirs = self.create('LBL-B', B).data['data']['sfWaybillNo']
+        bad = {'code': '500', 'msg': BAD_PARAMS, 'success': False}
+        user = {'code': '500', 'msg': '没有此用户|current user not supported', 'success': False}
+        cases = {
+            'unknown waybill': ({'apiUsername': A['api_username'], 'printWaybillNoDtoList': [{'sfWaybillNo': 'SF6043000000000'}]}, bad),
+            'another app\'s waybill': ({'apiUsername': A['api_username'], 'printWaybillNoDtoList': [{'sfWaybillNo': theirs}]}, bad),
+            'wrong apiUsername': ({'apiUsername': 'someone', 'printWaybillNoDtoList': [{'sfWaybillNo': waybill}]}, user),
+            'the other app\'s user name': ({'apiUsername': B['api_username'], 'printWaybillNoDtoList': [{'sfWaybillNo': waybill}]}, user),
+            'empty list': ({'apiUsername': A['api_username'], 'printWaybillNoDtoList': []}, bad),
+            'missing list': ({'apiUsername': A['api_username']}, bad),
+            'list is not a list': ({'apiUsername': A['api_username'], 'printWaybillNoDtoList': {'sfWaybillNo': waybill}}, bad),
+            'item is not an object': ({'apiUsername': A['api_username'], 'printWaybillNoDtoList': [waybill]}, bad),
+            'empty waybill': ({'apiUsername': A['api_username'], 'printWaybillNoDtoList': [{'sfWaybillNo': ''}]}, bad),
+            'waybill is not a string': ({'apiUsername': A['api_username'], 'printWaybillNoDtoList': [{'sfWaybillNo': 1}]}, bad),
+            'missing waybill': ({'apiUsername': A['api_username'], 'printWaybillNoDtoList': [{}]}, bad),
+        }
+        for name, (body, want) in cases.items():
+            with self.subTest(name):
+                answer = self.rig.dispatch(A, PRINT, body)
+                self.assertEqual((answer.status, answer.envelope['apiResultCode'], answer.data), (200, 0, want))
+                self.assertIs(answer.data['success'], False)
+        other = self.rig.dispatch(B, PRINT, {'apiUsername': B['api_username'], 'printWaybillNoDtoList': [{'sfWaybillNo': waybill}]})
+        self.assertIs(other.data['success'], False, 'the other app cannot print this app\'s waybill')
+        own = self.rig.dispatch(B, PRINT, {'apiUsername': B['api_username'], 'printWaybillNoDtoList': [{'sfWaybillNo': theirs}]}).data
+        self.assertIs(own['success'], True)
+        self.assertEqual(own['data']['customerOrderNo'], 'LBL-B')
+
+    def test_print_of_several_waybills_follows_the_assumed_shape(self):
+        first = self.create('LBL-M1').data['data']['sfWaybillNo']
+        second = self.create('LBL-M2').data['data']['sfWaybillNo']
+        items = [{'sfWaybillNo': first}, {'sfWaybillNo': second}]
+        one = self.rig.dispatch(A, PRINT, {'apiUsername': A['api_username'], 'printWaybillNoDtoList': items}).data
+        self.assertEqual(set(one['data']), {'customerOrderNo', 'sfWaybillNo', 'url'})
+        self.assertEqual(one['data']['sfWaybillNo'], first, 'onePdf defaults to true: the first waybill only')
+        split = self.rig.dispatch(A, PRINT, {'apiUsername': A['api_username'], 'printWaybillNoDtoList': items, 'onePdf': False}).data
+        self.assertEqual(split['data']['customerOrderNo'], 'LBL-M1')
+        self.assertEqual([row['customerOrderNo'] for row in split['data']['printWaybillNoDtoList']], ['LBL-M1', 'LBL-M2'])
+        self.assertEqual([row['sfWaybillNo'] for row in split['data']['printWaybillNoDtoList']], [first, second])
+        missing = self.rig.dispatch(A, PRINT, {'apiUsername': A['api_username'], 'onePdf': False,
+                                              'printWaybillNoDtoList': items + [{'sfWaybillNo': 'SF6043000000000'}]}).data
+        self.assertEqual(missing, {'code': '500', 'msg': BAD_PARAMS, 'success': False})
 
     # ---- faults
 

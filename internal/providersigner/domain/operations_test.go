@@ -7,6 +7,7 @@ func TestOperationTable(t *testing.T) {
 		{"orders.create", "POST", "/sfintl/v1/orders", "IECS_CREATE_ORDER"},
 		{"orders.cancel", "POST", "/sfintl/v1/order-cancellations", "IECS_CANCEL_ORDER"},
 		{"agent-numbers.query", "POST", "/sfintl/v1/agent-number-queries", "IECS_QUERY_AGENTNO"},
+		{"labels.print", "POST", "/sfintl/v1/label-prints", "IECS_PRINT_ORDER"},
 	}
 	if got := Operations(); len(got) != len(want) {
 		t.Fatalf("表里有 %d 行", len(got))
@@ -44,6 +45,7 @@ func TestOperationLookupIsExact(t *testing.T) {
 		{"POST", "/providers/sfintl/v1/orders"},
 		{"POST", "/sfintl/v1/order-cancellations/"},
 		{"POST", "/sfintl/v1/agent-number-queries/"},
+		{"POST", "/sfintl/v1/label-prints/"},
 		{"POST", "/openapi/api/dispatch"},
 	} {
 		if got, ok := FindOperation(c.method, c.path); ok {

@@ -4,7 +4,7 @@
 
 **这份配置在联调架子上和单机池上，对着替身和真实沙箱都跑过**（[tests/integration/sfintl](../../../tests/integration/sfintl/README.md)，证据 `rig-standin.json`、`rig-sandbox.json`、`pool-standin.json`、`pool-sandbox.json`）。见下面「发布到池」。
 
-现在查过的：锁定的 agentgateway 1.7.0 的 `--validate-only` 接受这份文件；离线的[契约测试](../../../tests/contracts/test_sfintl_config.py)查配置、登记表和 Go 代码里的几个常量互相对得上（操作表、凭证前缀、适配器的默认超时），并查联调套件的替换还在；联调套件把这份文件换上联调的地址后，经网关、`gateway-authz` 和 `provider-signer` 对着替身跑过，也在 2026-11-20 对着真实沙箱跑了两遍。第二遍的证据是 `rig-sandbox.json`（14/14，168 项过、65 项跳过）。第一遍 13/14，前两次取令牌失败，证据没有留在仓库里，写在提交 `7fd2dd2` 的说明里。细节在套件的 README 里。
+现在查过的：锁定的 agentgateway 1.7.0 的 `--validate-only` 接受这份文件；离线的[契约测试](../../../tests/contracts/test_sfintl_config.py)查配置、登记表和 Go 代码里的几个常量互相对得上（操作表、凭证前缀、适配器的默认超时），并查联调套件的替换还在；联调套件把这份文件换上联调的地址后，经网关、`gateway-authz` 和 `provider-signer` 对着替身跑过，也在 2026-11-20 对着真实沙箱跑了两遍。第二遍的证据是 `rig-sandbox.json`（14/14，168 项过、65 项跳过）。第一遍 13/14，前两次取令牌失败，证据没有留在仓库里，写在提交 `7fd2dd2` 的说明里。细节在套件的 README 里。仓库里的沙箱证据是面单路由加入之前的；`IECS_PRINT_ORDER` 在 2026-11-20 单独对沙箱量过（见下面），整套没有带着面单再对沙箱跑。
 
 ```
 调用方 → 网关 → provider-signer（双向 TLS）→ 承运商
@@ -13,18 +13,19 @@
 `gateway-authz` 向承运商取访问令牌，放行时交出 `Sf-OpenApi appKey;令牌;AES密钥`；网关只把这一个头转给 `provider-signer`，由它拆开、加密正文、签名、发给承运商、把应答解开。
 
 - `agentgateway.yaml`：完整的一份，锁定的 agentgateway 1.7.0 直接能用。业务监听 `8081`（`front` 转给它）、回读口 `8443`、管理、指标、就绪 `15000`、`15020`、`15021`，证书是 `tls/<文件名>`，`gateway-authz` 是池里的服务 `gateway-authz:9443`，`provider-signer` 是 `provider-signer:9444`（都按名字找，出口规则才管得到这两跳），JWKS 是文件 `tls/jwks.json`。后端 `provider-signer:9444` 带 `backendTLS`：网关出示自己的证书，按 `provider-signer.idp.test` 核对对方。
-- `policy.example.json`：`gateway-authz --policy` 的登记表，三行。`TENANT-ID-*`、`CLIENT-ID-*` 是占位，部署时填 Gatekeeper 的租户号和 M2M 客户端号（令牌的 `sub`）；`account-blue`、`account-green` 是 Gatekeeper 里 `provider_account` 对象的名字，也是应用文件里句柄 `gatekeeper:sfintl-test/<账户>` 的后半。`upstream_hostname`、`port` 写的是路由的上游，也就是 `provider-signer:9444`；`gateway-authz` 不读这两个字段。`enforce_tls_upstream` 是 `true`，指网关到 `provider-signer` 这一跳；`provider-signer` 到沙箱那一跳是明文，这个字段不管它。
+- `policy.example.json`：`gateway-authz --policy` 的登记表，四行。`TENANT-ID-*`、`CLIENT-ID-*` 是占位，部署时填 Gatekeeper 的租户号和 M2M 客户端号（令牌的 `sub`）；`account-blue`、`account-green` 是 Gatekeeper 里 `provider_account` 对象的名字，也是应用文件里句柄 `gatekeeper:sfintl-test/<账户>` 的后半。`upstream_hostname`、`port` 写的是路由的上游，也就是 `provider-signer:9444`；`gateway-authz` 不读这两个字段。`enforce_tls_upstream` 是 `true`，指网关到 `provider-signer` 这一跳；`provider-signer` 到沙箱那一跳是明文，这个字段不管它。
 - 环境是 `TEST`，写在路由里（Gatekeeper 的令牌没有 `env`，一个池只信一个签发者）。
 
-## 三个操作
+## 四个操作
 
 | 调用方的请求 | `provider-signer` 的路径 | `msgType` | 路由 / `x-idp-operation-id` |
 |---|---|---|---|
 | `POST /providers/sfintl/v1/orders` | `POST /sfintl/v1/orders` | `IECS_CREATE_ORDER` | `sfintl-orders-create` / `orders.create` |
 | `POST /providers/sfintl/v1/order-cancellations` | `POST /sfintl/v1/order-cancellations` | `IECS_CANCEL_ORDER` | `sfintl-orders-cancel` / `orders.cancel` |
 | `POST /providers/sfintl/v1/agent-number-queries` | `POST /sfintl/v1/agent-number-queries` | `IECS_QUERY_AGENTNO` | `sfintl-agent-numbers-query` / `agent-numbers.query` |
+| `POST /providers/sfintl/v1/label-prints` | `POST /sfintl/v1/label-prints` | `IECS_PRINT_ORDER` | `sfintl-labels-print` / `labels.print` |
 
-三个路径前缀互相不是对方的前缀，所以一个请求最多对上一条路由。别的方法和路径到不了 `provider-signer`：方法对不上，网关自己答 404；路径以这三个前缀之一开头、却不是恰好这个路径（更深的路径、`..`、编码的斜杠），路由上的 `authorization` 规则答 403。登记表只比较路径前缀，"恰好这一个路径"只写在网关的路由上。`provider-signer` 自己的操作表也只认这三个方法加路径，完全相等。
+四个路径前缀互相不是对方的前缀，所以一个请求最多对上一条路由。别的方法和路径到不了 `provider-signer`：方法对不上，网关自己答 404；路径以这四个前缀之一开头、却不是恰好这个路径（更深的路径、`..`、编码的斜杠），路由上的 `authorization` 规则答 403。登记表只比较路径前缀，"恰好这一个路径"只写在网关的路由上。`provider-signer` 自己的操作表也只认这四个方法加路径，完全相等。
 
 ## 应用文件
 
@@ -86,6 +87,7 @@
    - 取消。2026-11-20 在沙箱上量到的，原因不知道，量的是沙箱，不是生产。要么下单后几秒内被接受，要么要到下单之后大约 5 到 8.5 分钟才被接受。池上后来有一次，从第一次取消尝试起 493.595 秒才被接受。套件这一次用 600 秒的预算等过了，还剩 106 秒。不是说以后都够。在那之前，业务拒绝是 HTTP 200、`apiResultCode` 0、`{"code":"500","msg":"请求服务发生异常","success":false}`，订单还在。调用方要把被拒的取消再试上几分钟，不是再试几秒。接受之后 `code` 为 `"200"`。
    - 取消之后，同一个 `customerOrderNo` 可以再用，得到新的运单号。
    - 查代理单号（`IECS_QUERY_AGENTNO`）对刚下的单答 `wrongData` 里 `status` 为 `"4002"`（代理单号未生成），取消后是 `"4001"`。
+   - 面单（`IECS_PRINT_ORDER`）。请求正文是 `{"apiUsername","printWaybillNoDtoList":[{"sfWaybillNo"}]}`（文档里的 `version`、`printPicking`、`onePdf`、`fileFormat` 这次没放）。成功时 HTTP 200、`Content-Type: application/json`，信封恰好是 `apiResultCode`（0）、`apiResultData`、`apiTimestamp`，没有 `apiErrorMsg`。解开是 `{"code":"200","data":{"customerOrderNo","sfWaybillNo","url"},"success":true}`。`url` 是承运商 OSS 上的 PDF。直接取这个 URL 得到 HTTP 206、`application/pdf`，开头是 `%PDF-`，不需要鉴权头。网关只代理 `IECS_PRINT_ORDER`，把含 `data.url` 的 JSON 交回，不代理那个 OSS 主机。订单取消之后再打同一张面单，仍是 HTTP 200、`apiResultCode` 0、`code` `"200"`、`success` 真，`sfWaybillNo` 和 `url` 不变，`customerOrderNo` 是原来的客单号加上 `_cancel`。
    - 沙箱的 `apiUsername` 要填文档给的测试用户名。
    - 没有量过：同一个 `customerOrderNo` 换一份正文再下；取消不存在的订单。
 4. **网关不重试。** 创建超时之后结果是未知的，网关不重放；`front` 也不重放。
@@ -125,7 +127,7 @@ docker compose -f compose.yml -f gateway-authz.yml -f provider-signer.yml up -d
 ## 与万邦那份不同的地方
 
 - 后端是 `provider-signer:9444`，不是承运商；后端带 `backendTLS`（网关的证书、`tls/ca.crt`、对方的名字 `provider-signer.idp.test`）。
-- 三条路由都是 `POST`，每条的 `authorization` 规则是完全相等的一个路径；三个路径前缀互不包含，登记表里是三行不同前缀。万邦有三条路由共用 `/parcels` 前缀、靠方法区分。
+- 四条路由都是 `POST`，每条的 `authorization` 规则是完全相等的一个路径；四个路径前缀互不包含，登记表里是四行不同前缀。万邦有三条路由共用 `/parcels` 前缀、靠方法区分。
 - 没有 `Accept` 的改写：这家没有 `Accept` 的要求；`Content-Type` 不是 JSON 的请求由 `provider-signer` 以 415 拒绝，网关不改写它。
 - 凭证的前缀是 `Sf-OpenApi `，不是 `Hc-OweDeveloper `；凭证来自应用文件，不是开发者令牌文件。
 - `urlRewrite` 把 `Host` 写成 `provider-signer.idp.test`，路径前缀写成 `provider-signer` 的路径（`/sfintl/v1/...`）。
@@ -134,7 +136,7 @@ docker compose -f compose.yml -f gateway-authz.yml -f provider-signer.yml up -d
 
 ## 没有做的
 
-- **面单**（`IECS_PRINT_ORDER`）和别的 `msgType`。操作表里只有上面三个。
+- **别的 `msgType`。**
 - **池上没有接撤销。** 叠加文件给 `gateway-authz` 加的只有 `--sf-openapi-apps` 和 `--sf-openapi-plain-http-host`，不带 `--revocations`。套件的 SF-12 在池上整个跳过。
 - **到承运商的 TLS**：沙箱没有，没有验过。
 - **`gateway-authz` 到令牌端点的连接没有出口规则。**

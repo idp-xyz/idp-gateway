@@ -36,7 +36,13 @@ Measured at the real sandbox on 2026-11-20 (the documentation does not say; the 
   - IECS_CANCEL_ORDER: sent within a few seconds of the create it answered {"code":"500","msg":"请求服务发生异常","success":false} (twice, 1.2 s
     and about 3.6 s after the create) and the order still existed; sent again later {"code":"200","msg":"success","success":true}. The
     stand-in does NOT imitate this timing by itself: a cancel succeeds at once, and the failure is the fault `cancel-not-yet`;
-  - after a successful cancel the same customerOrderNo can be used again and makes a new order with a new waybill number.
+  - after a successful cancel the same customerOrderNo can be used again and makes a new order with a new waybill number;
+  - IECS_PRINT_ORDER while the order is active: {"code":"200","data":{"customerOrderNo":<the order's number>,"sfWaybillNo":<waybill>,
+    "url":"http://ibu-lomp-core-er-shenzhen-xili1-oss.sit.sf-express.com:8080/v1.2/AUTH_IBU-LOMP-CORE-ER/sfosspublic001/kts-label%2F<hex>.pdf"},
+    "success":true}. The request body was {"apiUsername":...,"printWaybillNoDtoList":[{"sfWaybillNo":...}]}. Fetching that url returned
+    HTTP 206 application/pdf, beginning with %PDF-, and needed no Authorization header. This stand-in does not serve the PDF and does not
+    use that host: the url it returns is http://mock-oss.sfintl.invalid/labels/<waybill>.pdf. The same call after a successful cancel was
+    still HTTP 200, apiResultCode 0, code "200", success true, the same sfWaybillNo and the same url, with customerOrderNo suffixed "_cancel".
 
 Stricter than anything measured (our choice, as in the stand-in of the first carrier):
   - a nonce an app used before is refused (502); the sandbox was not tried with a repeated nonce;
@@ -62,7 +68,15 @@ Our assumptions (not measured, not in the documentation; nothing here is evidenc
   - a cancel of an order that does not exist, is already cancelled, or whose numbers are not its own, or a body of another shape,
     gets the measured failure of a too early cancel; a query body has to be {"service":"WaybillService","waybillList":[non-empty list of
     objects with string orderNo and sfWaybillNo]}, else {"code":"500","msg":"请求参数错误","success":false};
-  - waybill numbers are SF6043 and a 9-digit serial counted from 100001 in this process; tokens are auth_ and 40 hex digits.
+  - waybill numbers are SF6043 and a 9-digit serial counted from 100001 in this process; tokens are auth_ and 40 hex digits;
+  - IECS_PRINT_ORDER. A wrong apiUsername gets the create's user failure (code "500", "没有此用户|current user not supported").
+    printWaybillNoDtoList must be a non-empty list of objects, each with a non-empty string sfWaybillNo, else code "500" and
+    "请求参数错误". A waybill this app did not create, including another app's, is the same "请求参数错误" (not measured; orders belong
+    to the app that made them, and a cancelled order stays findable by its waybill). One entry returns the measured single-object data,
+    with the synthetic url above. More than one entry was not measured: if onePdf is not false (the documentation's default is true) the
+    answer is that same shape for the first waybill only; if onePdf is false, data also has printWaybillNoDtoList, one object per waybill,
+    and the other data fields are the first waybill's. An unknown waybill anywhere in the list fails the whole call. version, printPicking
+    and fileFormat are ignored. The dispatch record's customer_order_no stays null: the print body has sfWaybillNo and no customerOrderNo.
 Faults, for the cases that need the carrier to misbehave (default: none; each is for the next matching dispatch only, then it is gone,
 a refused dispatch does not use up a fault that needs a performed one; /admin/reset clears a pending one):
   POST /admin/fault?kind=slow&seconds=N     the next create is performed and its answer is held back N seconds (0 < N <= 60);
@@ -82,7 +96,8 @@ Every request that is not an admin call is recorded as the stand-in received it:
 (every header in order, [[name, value], ..]), body_len, body_sha256 and kind (token | dispatch | other). A dispatch also has msg_type,
 refused (null, or the apiResultCode it was refused with), refused_at (the failed check: content_type, headers, token, timestamp,
 signature, nonce, decrypt, msg_type, plaintext), plaintext_len and plaintext_sha256 (when the body decrypted), customer_order_no (the
-plaintext's customerOrderNo, else the first waybillList[].orderNo), business_success and fault (the fault applied, or null).
+plaintext's customerOrderNo, else the first waybillList[].orderNo; a print body has neither, so the field stays null), business_success
+and fault (the fault applied, or null).
 THE RECORDS HOLD CREDENTIALS: the target of a token request holds the app secret, the headers of a dispatch hold appKey and token. The
 state file holds the secrets and AES keys of the apps. The stand-in writes nothing to stderr or stdout; the suite reads the records at
 /admin/hits and keeps them out of its own output.
@@ -101,8 +116,8 @@ from urllib.parse import parse_qsl, urlsplit
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 TOKEN_PATH, DISPATCH_PATH = '/openapi/api/token', '/openapi/api/dispatch'
-CREATE, CANCEL, QUERY = 'IECS_CREATE_ORDER', 'IECS_CANCEL_ORDER', 'IECS_QUERY_AGENTNO'
-MSG_TYPES = (CREATE, CANCEL, QUERY)
+CREATE, CANCEL, QUERY, PRINT = 'IECS_CREATE_ORDER', 'IECS_CANCEL_ORDER', 'IECS_QUERY_AGENTNO', 'IECS_PRINT_ORDER'
+MSG_TYPES = (CREATE, CANCEL, QUERY, PRINT)
 LANGS = ('en', 'zh-CN', 'zh-HK')
 REQUIRED = ('appKey', 'token', 'timestamp', 'nonce', 'signature', 'msgType', 'lang')
 WINDOW_MS = 10 * 60 * 1000
@@ -223,6 +238,7 @@ class App:
         self.token, self.token_expires = None, 0.0     # the current token; the expiry is on the monotonic clock
         self.nonces: set[str] = set()
         self.active: dict[str, dict] = {}              # customerOrderNo -> order, only the orders that are not cancelled
+        self.orders_by_waybill: dict[str, dict] = {}   # sfWaybillNo -> the same order dict, while it is active and after it is cancelled
 
 
 def _lifetime(value) -> int:
@@ -344,7 +360,7 @@ class Carrier:
         if fault and fault['kind'] == 'cancel-not-yet':
             answer = _failure('500', '请求服务发生异常')
         else:
-            answer = {CREATE: self._create, CANCEL: self._cancel, QUERY: self._query}[msg_type](app, plain)
+            answer = {CREATE: self._create, CANCEL: self._cancel, QUERY: self._query, PRINT: self._print}[msg_type](app, plain)
         hit['business_success'] = answer['success']
         key = bytes(b ^ 0xFF for b in app.key) if fault and fault['kind'] == 'undecryptable' else app.key
         envelope = {'apiResultCode': 0, 'apiResultData': encrypt(key, app.app_key, _json(answer)), 'apiTimestamp': self.now_ms()}
@@ -366,6 +382,7 @@ class Carrier:
         order = {'customer_order_no': number, 'sf_waybill_no': f'SF6043{self.serial:09d}', 'state': 'active'}
         self.orders.append(order)
         app.active[number] = order
+        app.orders_by_waybill[order['sf_waybill_no']] = order
         return {'data': {'agentCode': 'IB-US', 'customerOrderNo': number, 'directionCode': '27-IB-US-US',
                          'sfWaybillNo': order['sf_waybill_no']}, 'success': True}
 
@@ -390,6 +407,29 @@ class Carrier:
             wrong.append({'description': '代理单号未生成，请稍后再试' if known else '顺丰单号或者订单号错误，未找到对应的代理单号',
                           'orderNo': item['orderNo'], 'sfWaybillNo': item['sfWaybillNo'], 'status': '4002' if known else '4001'})
         return {'code': '1', 'service': 'WaybillService', 'success': True, 'successData': [], 'wrongData': wrong}
+
+    def _print(self, app: App, plain: dict) -> dict:
+        if plain.get('apiUsername') != app.api_username:
+            return _failure('500', '没有此用户|current user not supported')
+        items = plain.get('printWaybillNoDtoList')
+        if (not isinstance(items, list) or not items or not all(
+                isinstance(item, dict) and isinstance(item.get('sfWaybillNo'), str) and item['sfWaybillNo'] for item in items)):
+            return _failure('500', '请求参数错误')
+        rendered = []
+        for item in items:
+            bill = item['sfWaybillNo']
+            order = app.orders_by_waybill.get(bill)
+            if order is None:        # not measured: an unknown waybill, including one that belongs to another app
+                return _failure('500', '请求参数错误')
+            customer = order['customer_order_no'] + ('_cancel' if order['state'] == 'cancelled' else '')
+            rendered.append({'customerOrderNo': customer, 'sfWaybillNo': bill,
+                             'url': f'http://mock-oss.sfintl.invalid/labels/{bill}.pdf'})
+        # One entry is the shape measured on 2026-11-20. More than one is the assumption in the header.
+        if len(rendered) == 1 or plain.get('onePdf', True) is not False:
+            return {'code': '200', 'data': rendered[0], 'success': True}
+        data = dict(rendered[0])
+        data['printWaybillNoDtoList'] = rendered
+        return {'code': '200', 'data': data, 'success': True}
 
     # -- /admin/...
 

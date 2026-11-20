@@ -82,6 +82,33 @@
         "CLIENT-ID-BLUE",
         "CLIENT-ID-GREEN"
       ]
+    },
+    {
+      "route_id": "sfintl-labels-print",
+      "provider_id": "sfintl",
+      "operation_id": "labels.print",
+      "environment": "TEST",
+      "method": "POST",
+      "path_prefix": "/providers/sfintl/v1/label-prints",
+      "upstream_hostname": "provider-signer",
+      "port": 9444,
+      "credential_binding_ref": "gatekeeper:sfintl-test",
+      "allowed_tenants": [
+        "TENANT-ID-BLUE",
+        "TENANT-ID-GREEN"
+      ],
+      "accounts_by_tenant": {
+        "TENANT-ID-BLUE": [
+          "account-blue"
+        ],
+        "TENANT-ID-GREEN": [
+          "account-green"
+        ]
+      },
+      "allowed_service_ids": [
+        "CLIENT-ID-BLUE",
+        "CLIENT-ID-GREEN"
+      ]
     }
   ],
   "allow_request_redirects": false,

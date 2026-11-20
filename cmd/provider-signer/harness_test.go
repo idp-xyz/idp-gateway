@@ -48,6 +48,7 @@ var operations = []operation{
 	{"/sfintl/v1/orders", "IECS_CREATE_ORDER"},
 	{"/sfintl/v1/order-cancellations", "IECS_CANCEL_ORDER"},
 	{"/sfintl/v1/agent-number-queries", "IECS_QUERY_AGENTNO"},
+	{"/sfintl/v1/label-prints", "IECS_PRINT_ORDER"},
 }
 
 // lockedBuffer 收服务的日志：服务在自己的 goroutine 里写，测试在另一个里读。

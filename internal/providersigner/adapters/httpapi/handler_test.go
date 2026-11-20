@@ -183,11 +183,12 @@ func TestChecksRunInOrderAndTheCarrierIsNotContacted(t *testing.T) {
 	}
 }
 
-func TestServesTheThreeOperations(t *testing.T) {
+func TestServesEachOperation(t *testing.T) {
 	for path, id := range map[string]string{
 		"/sfintl/v1/orders":               "orders.create",
 		"/sfintl/v1/order-cancellations":  "orders.cancel",
 		"/sfintl/v1/agent-number-queries": "agent-numbers.query",
+		"/sfintl/v1/label-prints":         "labels.print",
 	} {
 		f := newFixture(t)
 		for _, contentType := range []string{"application/json", "application/json; charset=utf-8", "Application/JSON", "application/json;charset=UTF-8"} {
@@ -304,6 +305,7 @@ func TestCallerHeadersDoNotChangeWhatIsSentToTheCarrier(t *testing.T) {
 		"/sfintl/v1/orders":               "IECS_CREATE_ORDER",
 		"/sfintl/v1/order-cancellations":  "IECS_CANCEL_ORDER",
 		"/sfintl/v1/agent-number-queries": "IECS_QUERY_AGENTNO",
+		"/sfintl/v1/label-prints":         "IECS_PRINT_ORDER",
 	} {
 		f := newFixture(t)
 		recorder := f.serve(t, attempt{target: path, peer: "gateway", header: jsonHeaders(

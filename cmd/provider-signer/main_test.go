@@ -36,7 +36,7 @@ func encryptUnder(t *testing.T, encodedKey, app, plain string) string {
 	return ciphertext
 }
 
-// 三个操作各走一遍，HTTP/1.1 和 HTTP/2 各一次：网关用 h2 连后端，Go 的 ServeTLS 要能应付。
+// 四个操作各走一遍，HTTP/1.1 和 HTTP/2 各一次：网关用 h2 连后端，Go 的 ServeTLS 要能应付。
 func TestEachOperationReachesTheCarrierSigned(t *testing.T) {
 	for _, http2 := range []bool{false, true} {
 		wantProto := map[bool]string{false: "HTTP/1.1", true: "HTTP/2.0"}[http2]
@@ -846,7 +846,7 @@ func TestStartsWithTheAcceptedCarrierURLs(t *testing.T) {
 				t.Fatalf("没有启动日志：%s", h.logs)
 			}
 			want := map[string]any{"gateway_identity": gatewayID, "carrier_host": c.host, "carrier_scheme": c.scheme, "plain_http_host": c.plain,
-				"lang": "zh-CN", "carrier_timeout": "7s", "max_request_bytes": float64(2048), "max_response_bytes": float64(4096), "operations": float64(3)}
+				"lang": "zh-CN", "carrier_timeout": "7s", "max_request_bytes": float64(2048), "max_response_bytes": float64(4096), "operations": float64(4)}
 			for name, value := range want {
 				if listening[name] != value {
 					t.Errorf("%s 是 %v，期望 %v", name, listening[name], value)
@@ -913,6 +913,7 @@ func TestLogsHaveOneLinePerRequestAndNoSecrets(t *testing.T) {
 		{"create", call{path: operations[0].path, body: oddBody("1"), headers: good()}, "ok", 200},
 		{"cancel", call{path: operations[1].path, body: oddBody("2"), headers: good()}, "ok", 200},
 		{"query", call{path: operations[2].path, body: oddBody("3"), headers: good()}, "ok", 200},
+		{"print", call{path: operations[3].path, body: oddBody("3b"), headers: good()}, "ok", 200},
 		{"over h2", call{path: operations[0].path, body: oddBody("4"), headers: good(), http2: true}, "ok", 200},
 		{"another identity", call{peer: "other", path: operations[0].path, body: oddBody("5"), headers: good()}, "caller_not_allowed", 403},
 		{"unknown path", call{path: "/nope", body: oddBody("6"), headers: good()}, "unknown_operation", 404},
@@ -989,8 +990,10 @@ func TestLogsHaveOneLinePerRequestAndNoSecrets(t *testing.T) {
 		}
 	}
 	if lines[0]["operation"] != "orders.create" || lines[0]["msg_type"] != "IECS_CREATE_ORDER" || lines[1]["operation"] != "orders.cancel" ||
-		lines[2]["operation"] != "agent-numbers.query" || lines[2]["msg_type"] != "IECS_QUERY_AGENTNO" || lines[5]["operation"] != "" || lines[5]["msg_type"] != "" {
-		t.Errorf("操作名不对：%v %v %v %v", lines[0], lines[1], lines[2], lines[5])
+		lines[2]["operation"] != "agent-numbers.query" || lines[2]["msg_type"] != "IECS_QUERY_AGENTNO" ||
+		lines[3]["operation"] != "labels.print" || lines[3]["msg_type"] != "IECS_PRINT_ORDER" ||
+		lines[6]["operation"] != "" || lines[6]["msg_type"] != "" {
+		t.Errorf("操作名不对：%v %v %v %v %v", lines[0], lines[1], lines[2], lines[3], lines[6])
 	}
 	for i, c := range answers {
 		line := lines[len(steps)+i]

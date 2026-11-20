@@ -432,8 +432,8 @@ def without_signer_name(snapshot: str, other: str) -> str:
     """The published configuration no longer names provider-signer. The backend host becomes another container of this machine, on 9444, where nothing listens."""
     old = '  - host: provider-signer:9444\n'
     found = snapshot.count(old)
-    if found != 3:
-        die(f'the configuration no longer has provider-signer:9444 exactly 3 times (found {found})')
+    if found != 4:
+        die(f'the configuration no longer has provider-signer:9444 exactly 4 times (found {found})')
     return snapshot.replace(old, f'  - host: {other}:9444\n')
 
 

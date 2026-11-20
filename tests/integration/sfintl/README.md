@@ -21,7 +21,7 @@ tests/integration/gatekeeper/stack.sh up                                   # 本
 | 真的 | 本机的 Gatekeeper（令牌、JWKS、PDP 和 OpenFGA，PDP 经 27623 要客户端证书）、锁定的 agentgateway 1.7.0、`gateway-authz`（产品构建）、`provider-signer`（`./cmd/provider-signer`）、`deploy/providers/sfintl/agentgateway.yaml` 和由 `policy.example.json` 填出来的登记表 |
 | 假的 | 承运商（`mock_sfintl.py`，听 27612）、工作负载证书（每次现做的 CA；运行时给 `provider-signer.idp.test` 补一张，不改 `pki.py`）。SF-09 里 `gateway-authz` 换成带 `acceptance` 标签的构建，只为了能让它放行却不给凭证；它还是问着真实的 PDP |
 
-配置文件写的是池的值。联调架子上用精确字符串替换（`run.py` 的 `RIG_VALUES`，每一处核对出现次数，不对就不跑）换回联调的：管理、指标、就绪 `15000/15020/15021` → `27614/27615/27616`；业务监听和回读口 `8081`、`8443` → `27611`、`27619`（含 `networkAuthorization` 里的两处）；`gateway-authz:9443` → `127.0.0.1:27613`（3 处）；证书路径 `tls/` → `.run/tls/`（`cert`、`key`、`root` 各 7 处）；JWKS 的 `file: tls/jwks.json` → 本机 Hydra 的 URL；回读路由转给的 `127.0.0.1:15000` → `27614`；三条路由后端的 `host: provider-signer:9444` → `127.0.0.1:27618`（3 处）。两种跑法都换这一处：网关的后端始终是本机的签名器，承运商的地址是签名器的 `--carrier-url`。换完先 `--validate-only`。网关进程去掉名字里带 `proxy` 的环境变量。
+配置文件写的是池的值。联调架子上用精确字符串替换（`run.py` 的 `RIG_VALUES`，每一处核对出现次数，不对就不跑）换回联调的：管理、指标、就绪 `15000/15020/15021` → `27614/27615/27616`；业务监听和回读口 `8081`、`8443` → `27611`、`27619`（含 `networkAuthorization` 里的两处）；`gateway-authz:9443` → `127.0.0.1:27613`（4 处）；证书路径 `tls/` → `.run/tls/`（`cert`、`key`、`root` 各 9 处）；JWKS 的 `file: tls/jwks.json` → 本机 Hydra 的 URL；回读路由转给的 `127.0.0.1:15000` → `27614`；四条路由后端的 `host: provider-signer:9444` → `127.0.0.1:27618`（4 处）。两种跑法都换这一处：网关的后端始终是本机的签名器，承运商的地址是签名器的 `--carrier-url`。换完先 `--validate-only`。网关进程去掉名字里带 `proxy` 的环境变量。
 
 签名器听 `127.0.0.1:27618`，用 `provider-signer` 的证书，`--client-ca` 是这次的 CA，`--gateway-identity` 是网关证书里的 URI，`--carrier-url` 是替身的 `http://127.0.0.1:27612/openapi/api/dispatch`，超时用默认的 8 秒。`gateway-authz` 带 `--sf-openapi-apps`（两个句柄，`token_endpoint` 是替身的 `http://127.0.0.1:27612/openapi/api/token`），Gatekeeper 和撤销的参数与万邦那套相同。`--sf-openapi-apps` 单独就够，不带 `--credentials`、`--developer-tokens`。
 
@@ -30,7 +30,7 @@ tests/integration/gatekeeper/stack.sh up                                   # 本
 - **默认**：两个租户各有一个账户（替身上两个应用，`app_key`、`app_secret`、43 字符的 `encoding_aes_key`、`api_username` 每次随机）。全部检查都做。
 - **`--sandbox --sandbox-credentials 文件`**：上游是承运商的沙箱（`api-ifsp-sit.sf.global`，明文 HTTP）。文件是 `{"app_key", "app_secret", "encoding_aes_key", "api_username"}`，0600，在仓库之外（在仓库里、权限宽于 0600、不是这四个字段，都拒绝）。一个应用，登记给 blue；green 没有账户。应用文件由套件包一层，写进临时目录（0700，文件 0600），结束时删掉。`gateway-authz` 的 `token_endpoint` 是 `http://api-ifsp-sit.sf.global/openapi/api/token`，并加 `--sf-openapi-plain-http-host api-ifsp-sit.sf.global`。签名器的 `--carrier-url` 是 `http://api-ifsp-sit.sf.global/openapi/api/dispatch`，并加 `--carrier-plain-http-host`。不起替身。
 
-  发到沙箱的只有三个操作的正常请求，凭证是文件里的那一份。`customerOrderNo` 是 `IDPGW-<UTC 日期>-<随机串>`。创建的正文与替身相同，是 2026-11-20 沙箱接受过的那一份（`apiUsername` 来自凭证文件）。凡是创建答了运单号的都记下，结束前取消。`--sandbox` 同时把每张单的创建和取消即时落盘到 `tests/integration/sfintl/.run/orders-<UTC 时间戳>-<进程号>.jsonl`（0600，只记时刻、事件、客单号、运单号、进程号，不含凭证），全部取消后自动删除；若运行中断或还有未取消的单，文件留着，下次 `--sandbox` 启动时会打印提醒。沙箱上，业务拒绝（HTTP 200、`apiResultCode` 0、`success` 假）会再试，直到接受，或从第一次尝试起过了 600 秒；间隔 3 秒、3 秒、6 秒，之后每次 10 秒。别的应答（网关的错误、签名器自己的错误、`apiResultCode` 不是 0）最多连着 6 次，每次隔 3 秒。替身上不睡，最多 6 次。消不掉的写在结果里，标准输出用一排感叹号标出，退出码非零。不发到沙箱的：错的或调用方自己塞的凭证、故障、轮换、故意写坏的正文（签名器在本机就拒绝的那些可以发，它们出不了这台机器）。
+  发到沙箱的只有四个操作的正常请求，凭证是文件里的那一份。`customerOrderNo` 是 `IDPGW-<UTC 日期>-<随机串>`。创建的正文与替身相同，是 2026-11-20 沙箱接受过的那一份（`apiUsername` 来自凭证文件）。凡是创建答了运单号的都记下，结束前取消。`--sandbox` 同时把每张单的创建和取消即时落盘到 `tests/integration/sfintl/.run/orders-<UTC 时间戳>-<进程号>.jsonl`（0600，只记时刻、事件、客单号、运单号、进程号，不含凭证），全部取消后自动删除；若运行中断或还有未取消的单，文件留着，下次 `--sandbox` 启动时会打印提醒。沙箱上，业务拒绝（HTTP 200、`apiResultCode` 0、`success` 假）会再试，直到接受，或从第一次尝试起过了 600 秒；间隔 3 秒、3 秒、6 秒，之后每次 10 秒。别的应答（网关的错误、签名器自己的错误、`apiResultCode` 不是 0）最多连着 6 次，每次隔 3 秒。替身上不睡，最多 6 次。消不掉的写在结果里，标准输出用一排感叹号标出，退出码非零。不发到沙箱的：错的或调用方自己塞的凭证、故障、轮换、故意写坏的正文（签名器在本机就拒绝的那些可以发，它们出不了这台机器）。
 
   结果里记：从网关进程去掉的代理变量名、沙箱的名字解析到的地址、**签名器**和 **`gateway-authz`** 连着的非回环地址（这两边才跟承运商说话）、每个调用的耗时。
 
@@ -44,19 +44,19 @@ tests/integration/gatekeeper/stack.sh up                                   # 本
 
 ## 替身的四段
 
-`mock_sfintl.py` 开头的注释把四段分开写了：文档里的、2026-11-20 在真实沙箱上量到的、比量到的更严的、我们的假设。套件不把假设说成承运商的行为。订单按应用归属（green 取消不了 blue 的单）是假设，SF-05 的检查文字里写了。故障 `slow`、`cut`、`cancel-not-yet`、`status`、`garbage`、`undecryptable` 各管下一个对得上的 dispatch。管理口要 `X-Poc-Admin`：`/admin/hits`、`/admin/reset`、`/admin/orders`、`/admin/tokens/void`、`/admin/token-lifetime`、`/admin/fault`。每个应答都带 `Set-Cookie` 和 `X-Mock-Provider: sfintl`。
+`mock_sfintl.py` 开头的注释把四段分开写了：文档里的、2026-11-20 在真实沙箱上量到的、比量到的更严的、我们的假设。套件不把假设说成承运商的行为。订单按应用归属（green 取消不了 blue 的单，也打印不了 blue 的运单）是假设，SF-05 的检查文字里写了。故障 `slow`、`cut`、`cancel-not-yet`、`status`、`garbage`、`undecryptable` 各管下一个对得上的 dispatch。管理口要 `X-Poc-Admin`：`/admin/hits`、`/admin/reset`、`/admin/orders`、`/admin/tokens/void`、`/admin/token-lifetime`、`/admin/fault`。每个应答都带 `Set-Cookie` 和 `X-Mock-Provider: sfintl`。
 
 ## 用例
 
 | 用例 | 检查什么 |
 |---|---|
-| SF-01 | blue 的真实 Gatekeeper 令牌：查一个不存在的单号（`wrongData` 的 `status` 是 `4001`）→ 创建（HTTP 200，`apiResultCode` 0，`success` 真，有 `sfWaybillNo`，客单号是我们的）→ 再查（`4002`）→ 取消（`success` 真；沙箱上按上面的办法重试，次数和秒数记在备注里）→ 再查（`4001`）。每一次 `gateway-authz` 的判定是 `ACTIVE_ACCOUNT_GRANT`，`operation_id` 对得上。替身的 `Set-Cookie` 和 `X-Mock-Provider` 不到调用方。创建的访问日志一行里 `provider_reference_id` 是客单号、`provider_request_id` 是运单号。替身：到这里 blue 的应用只取过一次令牌。沙箱上，第一次查询不是 HTTP 200 时，备注里记下 `gateway-authz` 取令牌的行：`msg`、`result`、`elapsed_ms`，有 `cause` 时也记下，别的不记 |
+| SF-01 | blue 的真实 Gatekeeper 令牌：查一个不存在的单号（`wrongData` 的 `status` 是 `4001`）→ 创建（HTTP 200，`apiResultCode` 0，`success` 真，有 `sfWaybillNo`，客单号是我们的）→ 再查（`4002`）→ 打面单（HTTP 200，`apiResultCode` 0，`success` 真，`code` `"200"`，`sfWaybillNo` 是这张单的，`customerOrderNo` 是我们的，`url` 是非空的 `http://` 或 `https://`）→ 取消（`success` 真；沙箱上按上面的办法重试，次数和秒数记在备注里）→ 再查（`4001`）→ 再打面单（同样成功，`sfWaybillNo` 不变，`customerOrderNo` 带 `_cancel`）。每一次 `gateway-authz` 的判定是 `ACTIVE_ACCOUNT_GRANT`，`operation_id` 对得上（面单是 `labels.print`）。替身的 `Set-Cookie` 和 `X-Mock-Provider` 不到调用方。创建的访问日志一行里 `provider_reference_id` 是客单号、`provider_request_id` 是运单号。替身：到这里 blue 的应用只取过一次令牌。沙箱上，第一次查询不是 HTTP 200 时，备注里记下 `gateway-authz` 取令牌的行：`msg`、`result`、`elapsed_ms`，有 `cause` 时也记下，别的不记 |
 | SF-02 | 订单还在时用同一份正文再创建：HTTP 200，`success` 真，`code` 是 `123052`，运单号不变。替身另做：故障 `cancel-not-yet` 时调用方得到 HTTP 200、`code` `500`、`success` 假，订单还在；再取消成功。这张单取消掉 |
 | SF-03 | 只在替身。三份创建，正文是合法的但不寻常（缩进、非 ASCII、`<`、`&`），按原始字节发，并带 `Cookie`、`X-Forwarded-For`、`X-Forwarded-Host`、`X-Forwarded-Proto`、`Forwarded`、`X-Evil-Probe`、`X-Provider-Account: account-blue`，以及第二个 `Authorization`（调用方自己塞的）。每条 dispatch：`refused` 是 null，`plaintext_sha256` 等于调用方字节的 SHA-256，`appKey` 和 `token` 是 blue 的（比对，不打印），三个 nonce 不同，`msgType` 是 `IECS_CREATE_ORDER`，目标恰好是 `/openapi/api/dispatch`；调用方的头、`x-idp-*`、`authorization`、Gatekeeper 令牌和塞进去的凭证都不在记录里；没有新的取令牌。头名只记不判。`Set-Cookie` 不到调用方。三张单都取消 |
-| SF-04 | 不带令牌、别的受众、伪造签名，三条路径都做：401，`gateway-authz` 没有被问，签名器没有被叫，承运商没有 dispatch 也没有取令牌 |
-| SF-05 | 替身：green 的令牌用的是 green 的应用（dispatch 上是 green 的 `appKey` 和令牌）；green 取消不了 blue 的单（业务 `success` 假；订单按应用归属是替身的假设）。blue 带 `X-Provider-Account: account-green`：403 `ACCOUNT_NOT_GRANTED`，签名器没被叫，承运商什么都没收到。`--sandbox`：green 被拒 403（原因码记下），上面两段跳过；blue 要 green 的账户仍做（403，到不了承运商） |
+| SF-04 | 不带令牌、别的受众、伪造签名，四条路径都做：401，`gateway-authz` 没有被问，签名器没有被叫，承运商没有 dispatch 也没有取令牌 |
+| SF-05 | 替身：green 的令牌用的是 green 的应用（dispatch 上是 green 的 `appKey` 和令牌）；green 取消不了 blue 的单，也打印不了 blue 的运单（业务 `success` 假；订单按应用归属是替身的假设）。blue 带 `X-Provider-Account: account-green`：403 `ACCOUNT_NOT_GRANTED`，签名器没被叫，承运商什么都没收到。`--sandbox`：green 被拒 403（原因码记下），上面两段跳过；blue 要 green 的账户仍做（403，到不了承运商） |
 | SF-06 | 登记表认、Gatekeeper 没有授权的客户端：403 `ACCOUNT_NOT_GRANTED`，签名器没被叫 |
-| SF-07 | `GET`、`PUT`、`DELETE`、`PATCH` 打在三条路径上：网关 404，`gateway-authz` 没被问，签名器没被叫。只是前缀或靠近的路径（`/orders/`、`/orders/X`、`/orders-extra`、`/order-cancellations/1`、`/agent-number-queries/x`、`/orders/../orders`、`%2e%2e`、`%2f`、`%252e`、`;x=1`、`%00`、`//orders`、大写、签名器自己的 `/sfintl/v1/orders`、别的承运商的路径、`/providers/sfintl/v2/orders`）：拒绝（>= 400），签名器没被叫，承运商什么都没收到。允许的路径加上 `?x=1`：拒绝（>= 400），承运商什么都没收到；谁拒绝的记在备注里，不另判 |
+| SF-07 | `GET`、`PUT`、`DELETE`、`PATCH` 打在四条路径上：网关 404，`gateway-authz` 没被问，签名器没被叫。只是前缀或靠近的路径（`/orders/`、`/orders/X`、`/orders-extra`、`/order-cancellations/1`、`/agent-number-queries/x`、`/label-prints/`、`/label-prints/X`、`/orders/../orders`、`%2e%2e`、`%2f`、`%252e`、`;x=1`、`%00`、`//orders`、大写、签名器自己的 `/sfintl/v1/orders` 和 `/sfintl/v1/label-prints`、别的承运商的路径、`/providers/sfintl/v2/orders`）：拒绝（>= 400），签名器没被叫，承运商什么都没收到。允许的路径加上 `?x=1`：拒绝（>= 400），承运商什么都没收到；谁拒绝的记在备注里，不另判 |
 | SF-08 | 用 blue 的令牌，经网关：`Content-Type: text/plain` → 415 `unsupported_media_type`；JSON 数组、两个对象、空正文、不是 JSON → 400 `body_not_json_object`；超过 1 MiB → 拒绝（>= 400），状态和是谁答的记在备注里。应答是签名器自己的 JSON，承运商没有 dispatch。两种跑法都做（出不了这台机器） |
 | SF-09 | 见下 |
 | SF-10 | 扫描，见上 |
@@ -202,7 +202,7 @@ SF-11 的备注：签名器的命名空间钉住 `sfintl-standin:8080`；网关�
 - **`orders-*.jsonl` 的中断留盘只在离线单元测试里验过，没有对着真实沙箱中途强杀验过。**
 - **请求头名单的对照**没有做，原因在上面。
 - **到承运商的 TLS** 没有验。沙箱是明文 HTTP。
-- **面单**（`IECS_PRINT_ORDER`）和别的 `msgType`。
+- **别的 `msgType`。**
 - **几个 `gateway-authz` 一起取同一个应用的令牌**，一次重启也是一次新的取令牌，生产上会作废前一枚。沙箱令牌是固定的，验不了。
 - **`gateway-authz` 到令牌端点的连接没有出口规则。**
 - **取令牌失败仍记一个类别**。传输失败另有 `cause`（`e88a7c5`），一个固定的词，不写错误原文。第一遍沙箱的两次 `unreachable` 发生在这之前，日志里没有 `cause`，分不出更细的原因。
