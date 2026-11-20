@@ -8,28 +8,28 @@
  },
  "gatekeeper_commit": "f36dc06",
  "repository": {
-  "commit": "7ec6f20",
+  "commit": "4416f89",
   "uncommitted_files": 0
  },
- "registry_sha256": "f1f4d438f82d25140e286b79865ea01ea12be3e6a74dca9f0a1c7dd474bd0e4d",
+ "registry_sha256": "94178c418e3a874b6539ec834031d728675ada33cc3c018a4b58512c4a366468",
  "registry_note": "the example register; each run fills its placeholders with that run's tenant and client ids, so the filled copy differs from run to run",
- "gateway_configuration_sha256": "2f9ee3c8a792b533df77197ec87d393b978883dfd4e5d0e2262b8cf54967d70c",
+ "gateway_configuration_sha256": "9a0b241c251ca2d69f7f40262a6c6a3999d7153bc21f585cf791a3d623f79308",
  "environment": [
   "TEST"
  ],
- "started_at_utc": "2026-11-20T10:12:38+00:00",
- "finished_at_utc": "2026-11-20T10:23:02+00:00",
+ "started_at_utc": "2026-11-20T14:13:01+00:00",
+ "finished_at_utc": "2026-11-20T14:14:13+00:00",
  "clock": {
-  "carrier_response_date": "Fri, 20 Nov 2026 10:12:39 GMT",
-  "offset_seconds": -0.7,
+  "carrier_response_date": "Fri, 20 Nov 2026 14:13:02 GMT",
+  "offset_seconds": -0.5,
   "resolution_seconds": 1,
   "taken_from": "the Date header of the first query (SF-01), as it reached the caller"
  },
  "dataset": {
   "reference_prefix": "IDPGW-20261120-",
   "orders_created_and_cancelled": [
-   "SF6043039281348",
-   "SF6043039281355"
+   "SF6043039282199",
+   "SF6043039282204"
   ],
   "orders_left_uncancelled": []
  },
@@ -39,17 +39,15 @@
   "port": 80,
   "addresses_the_signer_and_gateway_authz_held_connections_to": [
    "156.59.125.28:80",
-   "192.168.32.11:8443",
-   "192.168.48.3:38124",
-   "192.168.48.3:38134",
-   "192.168.48.3:47980",
-   "192.168.48.3:47984",
-   "192.168.48.3:49244",
-   "192.168.48.3:49256",
-   "192.168.48.3:50300",
-   "192.168.48.3:50302",
-   "192.168.48.3:50996",
-   "192.168.48.3:57812"
+   "172.28.0.10:8443",
+   "172.29.0.2:40892",
+   "172.29.0.2:40906",
+   "172.29.0.2:40916",
+   "172.29.0.2:45880",
+   "172.29.0.2:51532",
+   "172.29.0.2:55458",
+   "172.29.0.2:55470",
+   "172.29.0.2:55472"
   ]
  },
  "gateway_proxy_variables": {
@@ -66,7 +64,7 @@
  "cases": [
   {
    "id": "SF-01",
-   "title": "query, create, query, cancel, query: the blue tenant's real Gatekeeper token, through the gateway",
+   "title": "query, create, query, print, cancel, query, print: the blue tenant's real Gatekeeper token, through the gateway",
    "result": "pass",
    "checks": [
     {
@@ -115,6 +113,18 @@
      "result": "pass"
     },
     {
+     "check": "print: HTTP 200, apiResultCode 0, success true, code 200",
+     "result": "pass"
+    },
+    {
+     "check": "print: the waybill, our customerOrderNo, and a url that is an http or https address",
+     "result": "pass"
+    },
+    {
+     "check": "print: gateway-authz decided ACTIVE_ACCOUNT_GRANT for labels.print",
+     "result": "pass"
+    },
+    {
      "check": "cancel: HTTP 200, apiResultCode 0, success true, code 200",
      "result": "pass"
     },
@@ -124,6 +134,14 @@
     },
     {
      "check": "query after the cancel: HTTP 200, apiResultCode 0, wrongData status 4001",
+     "result": "pass"
+    },
+    {
+     "check": "print after the cancel: HTTP 200, apiResultCode 0, success true, the same waybill, customerOrderNo suffixed _cancel",
+     "result": "pass"
+    },
+    {
+     "check": "print after the cancel: gateway-authz decided ACTIVE_ACCOUNT_GRANT for labels.print",
      "result": "pass"
     },
     {
@@ -140,13 +158,13 @@
       {
        "route": "default/sfintl-orders-create",
        "http.status": "200",
-       "provider_reference_id": "IDPGW-20261120-b26408c646a3",
-       "provider_request_id": "SF6043039281355"
+       "provider_reference_id": "IDPGW-20261120-bc836a669a78",
+       "provider_request_id": "SF6043039282204"
       }
      ]
     },
-    "cancel attempts": 44,
-    "cancel seconds": 493.595
+    "cancel attempts": 2,
+    "cancel seconds": 5.358
    }
   },
   {
@@ -182,8 +200,8 @@
     }
    ],
    "notes": {
-    "cancel attempts": 2,
-    "cancel seconds": 6.455
+    "cancel attempts": 1,
+    "cancel seconds": 1.124
    }
   },
   {
@@ -201,7 +219,7 @@
   },
   {
    "id": "SF-04",
-   "title": "no token, a token for another audience, a forged signature, on each of the three paths: 401, and nothing is asked downstream",
+   "title": "no token, a token for another audience, a forged signature, on each of the four paths: 401, and nothing is asked downstream",
    "result": "pass",
    "checks": [
     {
@@ -252,6 +270,23 @@
     },
     {
      "check": "no token /agent-number-queries: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "no token /label-prints: 401",
+     "result": "pass"
+    },
+    {
+     "check": "no token /label-prints: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "no token /label-prints: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "no token /label-prints: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
      "result": "skipped",
      "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
     },
@@ -307,6 +342,23 @@
      "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
     },
     {
+     "check": "another audience /label-prints: 401",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /label-prints: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /label-prints: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "another audience /label-prints: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
      "check": "forged signature /orders: 401",
      "result": "pass"
     },
@@ -356,13 +408,30 @@
      "check": "forged signature /agent-number-queries: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
      "result": "skipped",
      "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "forged signature /label-prints: 401",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /label-prints: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /label-prints: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "forged signature /label-prints: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch and no token request)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
     }
    ],
    "notes": {}
   },
   {
    "id": "SF-05",
-   "title": "tenants: green gets the green app; green cannot cancel blue's order (the stand-in's assumption); blue asking for green's account is refused (sandbox: green has no account)",
+   "title": "tenants: green gets the green app; green cannot cancel or print blue's order (the stand-in's assumption); blue asking for green's account is refused (sandbox: green has no account)",
    "result": "pass",
    "checks": [
     {
@@ -370,7 +439,7 @@
      "result": "pass"
     },
     {
-     "check": "green gets the green app, and green cannot cancel an order of the blue app",
+     "check": "green gets the green app, and green cannot cancel or print an order of the blue app",
      "result": "skipped",
      "reason": "there is one sandbox account; order ownership per app is the stand-in's assumption and is not sent to the sandbox"
     },
@@ -478,6 +547,23 @@
      "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
     },
     {
+     "check": "GET /label-prints: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "GET /label-prints: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "GET /label-prints: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "GET /label-prints: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
      "check": "PUT /orders: 404 from the gateway",
      "result": "pass"
     },
@@ -525,6 +611,23 @@
     },
     {
      "check": "PUT /agent-number-queries: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "PUT /label-prints: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /label-prints: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /label-prints: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "PUT /label-prints: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
      "result": "skipped",
      "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
     },
@@ -580,6 +683,23 @@
      "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
     },
     {
+     "check": "DELETE /label-prints: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /label-prints: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /label-prints: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /label-prints: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
      "check": "PATCH /orders: 404 from the gateway",
      "result": "pass"
     },
@@ -627,6 +747,23 @@
     },
     {
      "check": "PATCH /agent-number-queries: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "PATCH /label-prints: 404 from the gateway",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /label-prints: gateway-authz was not asked",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /label-prints: the signer was not called and the carrier got nothing (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "PATCH /label-prints: the signer was not called and the carrier got nothing (judged by the stand-in's records: no dispatch)",
      "result": "skipped",
      "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
     },
@@ -692,6 +829,45 @@
     },
     {
      "check": "/agent-number-queries/x: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "/label-prints/: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "/label-prints/: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/label-prints/: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "/label-prints/X: refused (403)",
+     "result": "pass"
+    },
+    {
+     "check": "/label-prints/X: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/label-prints/X: the carrier got nothing (judged by the stand-in's records: no dispatch)",
+     "result": "skipped",
+     "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
+    },
+    {
+     "check": "/sfintl/v1/label-prints: refused (404)",
+     "result": "pass"
+    },
+    {
+     "check": "/sfintl/v1/label-prints: the signer was not called (judged by the signer's log: no new signer call)",
+     "result": "pass"
+    },
+    {
+     "check": "/sfintl/v1/label-prints: the carrier got nothing (judged by the stand-in's records: no dispatch)",
      "result": "skipped",
      "reason": "only the stand-in records what arrived; nothing was sent that should reach the carrier"
     },
@@ -1050,10 +1226,10 @@
       "127.0.0.1"
      ],
      "gateway-authz:9443": [
-      "192.168.48.2"
+      "172.29.0.5"
      ],
      "provider-signer:9444": [
-      "192.168.48.4"
+      "172.29.0.3"
      ]
     },
     "signer namespace rules (iptables -S IDP_EGRESS, then ip6tables)": {
@@ -1081,8 +1257,8 @@
       "-A IDP_EGRESS -p tcp -m conntrack --ctorigdst 127.0.0.11 --ctorigdstport 53 -j ACCEPT",
       "-A IDP_EGRESS -d 127.0.0.1/32 -p tcp -m tcp --dport 8081 -j ACCEPT",
       "-A IDP_EGRESS -d 127.0.0.1/32 -p tcp -m tcp --dport 15000 -m comment --comment \"pin:127.0.0.1:15000\" -j ACCEPT",
-      "-A IDP_EGRESS -d 192.168.48.2/32 -p tcp -m tcp --dport 9443 -m comment --comment \"pin:gateway-authz:9443\" -j ACCEPT",
-      "-A IDP_EGRESS -d 192.168.48.4/32 -p tcp -m tcp --dport 9444 -m comment --comment \"pin:provider-signer:9444\" -j ACCEPT",
+      "-A IDP_EGRESS -d 172.29.0.5/32 -p tcp -m tcp --dport 9443 -m comment --comment \"pin:gateway-authz:9443\" -j ACCEPT",
+      "-A IDP_EGRESS -d 172.29.0.3/32 -p tcp -m tcp --dport 9444 -m comment --comment \"pin:provider-signer:9444\" -j ACCEPT",
       "-A IDP_EGRESS -j REJECT --reject-with icmp-admin-prohibited"
      ],
      "ipv6": [
@@ -1099,15 +1275,15 @@
     ],
     "connect() from the signer's namespace (0 connected, 113 refused by the rule, 13 refused on IPv6)": {
      "156.59.125.28:80": 0,
-     "192.168.48.5:8000": 113,
-     "192.168.48.2:9444": 113,
+     "172.29.0.4:8000": 113,
+     "172.29.0.5:9444": 113,
      "[::1]:9": 13
     },
     "connect() from the gateway's namespace (0 connected, 113 refused by the rule, 13 refused on IPv6)": {
-     "192.168.48.4:9444": 0,
-     "192.168.48.2:9443": 0,
+     "172.29.0.3:9444": 0,
+     "172.29.0.5:9443": 0,
      "127.0.0.1:8081": 0,
-     "192.168.48.5:8000": 113,
+     "172.29.0.4:8000": 113,
      "[::1]:9": 13
     }
    }
@@ -1216,9 +1392,9 @@
   "cases": 15,
   "cases_failed": 0,
   "cases_skipped": 5,
-  "checks": 217,
-  "checks_passed": 157,
+  "checks": 259,
+  "checks_passed": 189,
   "checks_failed": 0,
-  "checks_skipped": 60
+  "checks_skipped": 70
  }
 }
