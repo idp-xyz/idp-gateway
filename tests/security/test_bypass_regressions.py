@@ -29,15 +29,13 @@ class CaptureGrantBypass(unittest.TestCase):
     def test_delivered_example_still_approved(self):
         self.assertEqual(approve(GRANT), (True, 'APPROVED_BOUND_SCOPE'))
 
-    def test_approver_must_be_present(self):
+    def test_requested_by_must_be_present(self):
         for label, mutate in {
-            'approved_by missing': lambda g: g.pop('approved_by'),
-            'approved_by empty': lambda g: g.update(approved_by=''),
-            'approved_by blank': lambda g: g.update(approved_by='   '),
-            'approved_by null': lambda g: g.update(approved_by=None),
-            'approved_by not a string': lambda g: g.update(approved_by=['security-reviewer-b']),
             'requested_by missing': lambda g: g.pop('requested_by'),
             'requested_by empty': lambda g: g.update(requested_by=''),
+            'requested_by blank': lambda g: g.update(requested_by='   '),
+            'requested_by null': lambda g: g.update(requested_by=None),
+            'requested_by not a string': lambda g: g.update(requested_by=['engineer-a']),
             'both missing': lambda g: (g.pop('approved_by'), g.pop('requested_by')),
         }.items():
             with self.subTest(case=label):
@@ -45,12 +43,27 @@ class CaptureGrantBypass(unittest.TestCase):
                 mutate(grant)
                 self.assertEqual(approve(grant), (False, 'APPROVAL_IDENTITY_MISSING'))
 
+    def test_approved_by_may_be_empty(self):
+        # 2026-11-19: the owner decided this project does not separate an operator from an approver.
+        for label, mutate in {
+            'approved_by missing': lambda g: g.pop('approved_by'),
+            'approved_by empty': lambda g: g.update(approved_by=''),
+            'approved_by blank': lambda g: g.update(approved_by='   '),
+            'approved_by null': lambda g: g.update(approved_by=None),
+            'approved_by not a string': lambda g: g.update(approved_by=['security-reviewer-b']),
+        }.items():
+            with self.subTest(case=label):
+                grant = copy.deepcopy(GRANT)
+                mutate(grant)
+                self.assertEqual(approve(grant), (True, 'APPROVED_BOUND_SCOPE'))
+
     def test_same_person_under_another_spelling(self):
+        # SEGREGATION_OF_DUTIES was dropped on 2026-11-19: the same person may request and approve.
         for approver in ['Engineer-A', 'ENGINEER-A', ' engineer-a ', 'engineer-a\t']:
             with self.subTest(approved_by=approver):
                 grant = copy.deepcopy(GRANT)
                 grant['approved_by'] = approver
-                self.assertEqual(approve(grant), (False, 'SEGREGATION_OF_DUTIES'))
+                self.assertEqual(approve(grant), (True, 'APPROVED_BOUND_SCOPE'))
 
     def test_limit_must_be_an_integer_in_range(self):
         for value in ['16384', None, True, 1.5, -1, 65537, [1], {}]:

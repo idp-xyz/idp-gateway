@@ -10,8 +10,9 @@ class DiagnosticReferenceTests(unittest.TestCase):
  def test_valid_sample(self):self.assertEqual(approve(G),(True,'APPROVED_BOUND_SCOPE'))
  def test_cross_tenant_denied(self):
   self.assertFalse(authorize_capture(G,trusted_route='gwi-example-001',trusted_tenant='tenant-other',trusted_environment='TEST',now=NOW)[0])
- def test_self_approval_denied(self):
-  x=copy.deepcopy(G);x['approved_by']=x['requested_by'];self.assertFalse(approve(x)[0])
+ def test_same_person_approved(self):
+  # SEGREGATION_OF_DUTIES was dropped on 2026-11-19: the owner decided this project does not separate an operator from an approver.
+  x=copy.deepcopy(G);x['approved_by']=x['requested_by'];self.assertEqual(approve(x),(True,'APPROVED_BOUND_SCOPE'))
  def test_expired_denied(self):self.assertFalse(authorize_capture(G,trusted_route='gwi-example-001',trusted_tenant='tenant-blue',trusted_environment='TEST',now=datetime(2026,11,10,9,0,tzinfo=timezone.utc))[0])
  def test_window_bound(self):
   x=copy.deepcopy(G);x['expires_at']='2026-11-10T08:30:00Z';self.assertEqual(approve(x)[1],'WINDOW_EXCEEDED')
@@ -21,4 +22,5 @@ class DiagnosticReferenceTests(unittest.TestCase):
  def test_body_cannot_leak(self):
   out=sanitized_evidence(headers={'Authorization':'Bearer jwt'},body={'name':'Sensitive Person','address':'sensitive'},capture_grant=G)
   self.assertIsNone(out['body_sample_sanitized']);self.assertEqual(out['body_status'],'NOT_CAPTURED')
+  self.assertFalse(out['production_payload_capture_enabled']);self.assertNotIn('Sensitive',json.dumps(out))
 if __name__=='__main__':unittest.main()

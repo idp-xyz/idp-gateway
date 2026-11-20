@@ -29,11 +29,11 @@ def authorize_capture(grant:dict, *, trusted_route:str, trusted_tenant:str, trus
     """Checks contextual constraints in addition to JSON Schema; does not verify identity signatures."""
     if not grant or grant.get('route_ref')!=trusted_route or grant.get('tenant_ref')!=trusted_tenant or grant.get('environment')!=trusted_environment:
         return False,'SCOPE_MISMATCH'
-    requester,approver=_identity(grant.get('requested_by')),_identity(grant.get('approved_by'))
-    if not requester or not approver:
+    # SEGREGATION_OF_DUTIES was dropped on 2026-11-19: the owner decided this project does not
+    # separate an operator from an approver. approved_by may be empty or the same person.
+    requester=_identity(grant.get('requested_by'))
+    if not requester:
         return False,'APPROVAL_IDENTITY_MISSING'
-    if requester==approver:
-        return False,'SEGREGATION_OF_DUTIES'
     try: start,end=_utc(grant['start_at']),_utc(grant['expires_at'])
     except (ValueError,KeyError,TypeError):return False,'INVALID_CAPTURE_TIMESTAMPS'
     if end<=start or (end-start).total_seconds()>MAX_WINDOW_SECONDS:
