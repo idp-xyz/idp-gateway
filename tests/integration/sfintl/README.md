@@ -128,7 +128,7 @@ tests/integration/gatekeeper/stack.sh up                                   # 本
 
 第一遍 **13/14**。SF-01 的前两个请求（查询和创建）被网关答 HTTP 503。`gateway-authz` 前两次取令牌失败，日志是 `sf openapi token not fetched`，`result` 是 `unreachable`，用了 127 毫秒和 78 毫秒。判定是 `INDETERMINATE` / `CREDENTIAL_UNAVAILABLE`。没有到签名器，也没有到承运商。0.8 秒之后的第三次取到了，这一遍剩下的都过了。SF-02 创建了一张单并取消，没有剩下的。网络路径上的原因不知道：日志里只有类别，因为请求地址带着应用密钥。紧接着 Python 取了 12 次，一个用适配器那一套传输设置的临时 Go 程序取了 25 次，每次都是新连接，都成功。这一遍的证据文件没有留在仓库里，第二遍写在同一个路径上。上面这段写在提交 `7fd2dd2` 的说明里；那里把 Go 程序的次数写成了 33，写错了，是 25。
 
-第二遍是 `evidence/rig-sandbox.json`。**14/14**。233 项检查：168 过，65 项带原因跳过，0 失败。17.7 秒。SF-03、SF-13、SF-14 整个跳过（只在替身上）。
+第二遍当时写入 `evidence/rig-sandbox.json`（这份文件后来被提交 `e1b01ed` 覆盖，见下面「四条路由」）。**14/14**。233 项检查：168 过，65 项带原因跳过，0 失败。17.7 秒。SF-03、SF-13、SF-14 整个跳过（只在替身上）。
 
 | 用例 | 过 / 跳过 |
 |---|---|
@@ -152,7 +152,11 @@ SF-01：查一个不存在的单号，`4001`；创建，HTTP 200，`apiResultCod
 
 `run.py --evidence`、`pool.py --evidence`：只有带这个参数才写 `tests/integration/sfintl/evidence/`。联调架子上对着替身是 `rig-standin.json`，对着沙箱是 `rig-sandbox.json`。池上对着替身是 `pool-standin.json`，对着沙箱是 `pool-sandbox.json`。和 `--mutate`、`--control` 不能一起用。字段与万邦那套相同；`dataset` 里是 `reference_prefix`、`orders_created_and_cancelled`、`orders_left_uncancelled`（运单号）。写完再读一遍，里面有这次的秘密或 `Sf-OpenApi …;`、`auth_<8 个以上>`、`Bearer ` 加 16 个以上字符，就删掉文件、退出码非零。契约测试（`tests/contracts/test_sfintl_config.py`）看有的文件。
 
-`rig-standin.json` 是 2026-11-20 在 `094c5e5` 上对着替身带 `--evidence` 的那一遍：14/14，284 项检查都过，没有跳过，25.5 秒，取消了 9 张单，没有剩下的。`uncommitted_files` 是 0。`rig-sandbox.json` 是上面第二遍，同一提交，未提交文件数也是 0。`pool-standin.json` 见下面「单机池上」。`pool-sandbox.json` 见「池上真实沙箱」。
+上面「结果」「真实沙箱」，以及下面「单机池上」「池上真实沙箱」，写的是更早的跑法。那些跑法发生过。当时写入这四个路径的文件，后来被下面这一节覆盖。
+
+### 四条路由（含 `IECS_PRINT_ORDER`，2026-11-20）
+
+四条路由（含面单 `IECS_PRINT_ORDER`）在干净的 `4416f89` 上重跑，证据由提交 `e1b01ed` 写入。四份文件的 `commit` 都是 `4416f89`，`uncommitted_files` 都是 0，`orders_left_uncancelled` 都是空的，没有剩下未取消的订单。`rig-standin.json`：14 个用例，0 失败，0 跳过；327 项检查，327 项通过，0 失败，0 跳过；2026-11-20T14:06:50Z 到 14:07:15Z；对着替身，创建并取消了 9 张单。`rig-sandbox.json`：14 个用例，0 失败，3 个跳过；275 项检查，200 项通过，0 失败，75 项跳过；14:08:15Z 到 14:08:36Z；上游是承运商沙箱；创建了 2 张真实订单并打印（未取消时交回一个 http 或 https 地址的 url；取消后再打印，同一张运单，`customerOrderNo` 带 `_cancel`），取消（SF-01：2 次 / 3.686 秒；SF-02：3 次 / 6.889 秒），再查到 `4001`。`pool-standin.json`：15 个用例，0 失败，2 个跳过；309 项检查，307 项通过，0 失败，2 项跳过；14:09:29Z 到 14:10:56Z；对着替身，创建并取消了 9 张单。`pool-sandbox.json`：15 个用例，0 失败，5 个跳过；259 项检查，189 项通过，0 失败，70 项跳过；14:13:01Z 到 14:14:13Z；同样打印了面单（未取消时是一个 http 或 https 地址的 url，取消后 `customerOrderNo` 带 `_cancel`，再查是 `4001`）；取消 SF-01：2 次 / 5.358 秒，SF-02：1 次 / 1.124 秒；SF-11 的 10 项过了，签名器的命名空间把 `api-ifsp-sit.sf.global:80` 钉在 156.59.125.28。
 
 ## 单机池上（`pool.py`，第三步）
 
@@ -176,7 +180,7 @@ tests/integration/gatekeeper/stack.sh up
 
 ### 结果（2026-11-20，替身）
 
-`pool.py --evidence` 在 `1a144d0` 上、未提交文件数 0，写的是 `evidence/pool-standin.json`。**15 个用例，0 个失败，2 个整个跳过（SF-09、SF-12）。** 266 项检查：264 项过，2 项跳过，0 项失败。从 07:41:46 到 07:43:23（UTC），97 秒。创建并取消了 9 张单，没有剩下的。`publish` 的结局，证据文件里没有；提交 `1a144d0` 的说明写是 `ACTIVE`。六个容器（`agentgateway`、`front`、`netns`、`gateway-authz`、`provider-signer`、`signer`）的环境里没有名字带 `proxy` 的变量。
+`pool.py --evidence` 在 `1a144d0` 上、未提交文件数 0，当时写入 `evidence/pool-standin.json`（这份文件后来被提交 `e1b01ed` 覆盖，见上面「四条路由」）。**15 个用例，0 个失败，2 个整个跳过（SF-09、SF-12）。** 266 项检查：264 项过，2 项跳过，0 项失败。从 07:41:46 到 07:43:23（UTC），97 秒。创建并取消了 9 张单，没有剩下的。`publish` 的结局，证据文件里没有；提交 `1a144d0` 的说明写是 `ACTIVE`。六个容器（`agentgateway`、`front`、`netns`、`gateway-authz`、`provider-signer`、`signer`）的环境里没有名字带 `proxy` 的变量。
 
 SF-11 的备注：签名器的命名空间钉住 `sfintl-standin:8080`；网关的命名空间钉住 `127.0.0.1:15000`、`gateway-authz:9443`、`provider-signer:9444`。从签名器的命名空间连：承运商是 0，另一个容器、另一个端口、`gateway-authz` 的 9444 是 113，`[::1]:9` 是 13。从网关的命名空间连：签名器的 9444、`gateway-authz` 的 9443、回环 8081 是 0，承运商和 `outsider` 是 113，`[::1]:9` 是 13。`slow`：调用方得到签名器的 504 `carrier_timeout`，8.008 秒。超过 1 MiB：HTTP 413，不是签名器的 JSON。
 
@@ -188,7 +192,7 @@ SF-11 的备注：签名器的命名空间钉住 `sfintl-standin:8080`；网关�
 
 预算改成 300 秒之后试了一遍，当时还没有改成 600 秒（提交 `149aa0e` 的说明）。SF-01 过了，取消在第二次被接受（2 次、6.1 秒）。SF-02 的取消被拒 28 次、295.9 秒，用例没过。那张单后来手工取消了。
 
-预算 600 秒的那一遍是 `pool.py --sandbox --evidence`，在干净的 `7ec6f20` 上写的，未提交文件数是 0。证据 `evidence/pool-sandbox.json`，提交 `710acb1`。从 2026-11-20T10:12:38Z 到 10:23:02Z。**15 个用例，0 个失败。** SF-03、SF-09、SF-12、SF-13、SF-14 整个跳过，是沙箱上的设计。217 项检查：157 项过，60 项跳过，0 项失败。SF-01 的 `cancel attempts` 是 44，`cancel seconds` 是 493.595，第 44 次被接受。SF-02 是 2 次、6.455 秒。两张单都取消了，`orders_left_uncancelled` 是空的。提交说明写，清理没有要做的。SF-01 的第一次查询是 HTTP 200，没有记下取令牌失败，`cause` 在沙箱上仍没有见到。SF-10 的 5 项过了。SF-11 的 10 项过了；签名器的命名空间把 `api-ifsp-sit.sf.global:80` 钉在 156.59.125.28。提交说明写调用方一侧的耗时，证据文件里没有逐次的数：创建约 1.0 秒，查询 0.2 到 0.6 秒，取消的中位数 0.24 秒，有一次 3.2 秒。
+预算 600 秒的那一遍是 `pool.py --sandbox --evidence`，在干净的 `7ec6f20` 上写的，未提交文件数是 0。当时写入 `evidence/pool-sandbox.json`，提交 `710acb1`（这份文件后来被提交 `e1b01ed` 覆盖，见上面「四条路由」）。从 2026-11-20T10:12:38Z 到 10:23:02Z。**15 个用例，0 个失败。** SF-03、SF-09、SF-12、SF-13、SF-14 整个跳过，是沙箱上的设计。217 项检查：157 项过，60 项跳过，0 项失败。SF-01 的 `cancel attempts` 是 44，`cancel seconds` 是 493.595，第 44 次被接受。SF-02 是 2 次、6.455 秒。两张单都取消了，`orders_left_uncancelled` 是空的。提交说明写，清理没有要做的。SF-01 的第一次查询是 HTTP 200，没有记下取令牌失败，`cause` 在沙箱上仍没有见到。SF-10 的 5 项过了。SF-11 的 10 项过了；签名器的命名空间把 `api-ifsp-sit.sf.global:80` 钉在 156.59.125.28。提交说明写调用方一侧的耗时，证据文件里没有逐次的数：创建约 1.0 秒，查询 0.2 到 0.6 秒，取消的中位数 0.24 秒，有一次 3.2 秒。
 
 这一遍之前还有一次中断，只写在提交 `710acb1` 的说明里。当天 17:55（本地时间），同一条命令启动过，会话断了；做到发布配置之后进程被杀掉，清理没有跑，池和本机的 Gatekeeper 栈还留着。下一次按 `pool.py` 自己的拆除把池拆掉，并把栈停了。池的日志跟着没了。套件只在结束时写结果，所以不知道那一次有没有建订单，也不知道单号。如果建了，沙箱上可能还留着最多两张测试单，客单号前缀 `IDPGW-20261120-`，从这里认不出，也取消不了。这台机器上那一次没有留下别的。
 

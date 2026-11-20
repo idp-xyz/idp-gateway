@@ -4,7 +4,7 @@
 
 **这份配置在联调架子上和单机池上，对着替身和真实沙箱都跑过**（[tests/integration/sfintl](../../../tests/integration/sfintl/README.md)，证据 `rig-standin.json`、`rig-sandbox.json`、`pool-standin.json`、`pool-sandbox.json`）。见下面「发布到池」。
 
-现在查过的：锁定的 agentgateway 1.7.0 的 `--validate-only` 接受这份文件；离线的[契约测试](../../../tests/contracts/test_sfintl_config.py)查配置、登记表和 Go 代码里的几个常量互相对得上（操作表、凭证前缀、适配器的默认超时），并查联调套件的替换还在；联调套件把这份文件换上联调的地址后，经网关、`gateway-authz` 和 `provider-signer` 对着替身跑过，也在 2026-11-20 对着真实沙箱跑了两遍。第二遍的证据是 `rig-sandbox.json`（14/14，168 项过、65 项跳过）。第一遍 13/14，前两次取令牌失败，证据没有留在仓库里，写在提交 `7fd2dd2` 的说明里。细节在套件的 README 里。仓库里的沙箱证据是面单路由加入之前的；`IECS_PRINT_ORDER` 在 2026-11-20 单独对沙箱量过（见下面），整套没有带着面单再对沙箱跑。
+现在查过的：锁定的 agentgateway 1.7.0 的 `--validate-only` 接受这份文件；离线的[契约测试](../../../tests/contracts/test_sfintl_config.py)查配置、登记表和 Go 代码里的几个常量互相对得上（操作表、凭证前缀、适配器的默认超时），并查联调套件的替换还在；联调套件把这份文件换上联调的地址后，经网关、`gateway-authz` 和 `provider-signer` 对着替身跑过，也在 2026-11-20 对着真实沙箱跑了两遍。第二遍当时写入 `rig-sandbox.json`（14/14，168 项过、65 项跳过）；这份文件后来被提交 `e1b01ed` 覆盖。第一遍 13/14，前两次取令牌失败，证据没有留在仓库里，写在提交 `7fd2dd2` 的说明里。细节在套件的 README 里。`IECS_PRINT_ORDER` 在 2026-11-20 写代码之前单独对沙箱量过（见下面）。整套后来带着四条路由又跑过。四条路由的证据在提交 `e1b01ed`（跑在干净的 `4416f89`）：替身联调 14 个用例、327 项都过；替身池 15 个用例、309 项里 307 过、2 跳过；沙箱联调 14 个用例、275 项里 200 过、75 跳过；沙箱池 15 个用例、259 项里 189 过、70 跳过；没有剩下未取消的订单。逐项在 [套件 README](../../../tests/integration/sfintl/README.md) 的「四条路由」和 [ADR-0014](../../../docs/adr/ADR-0014.md) V1.3。
 
 ```
 调用方 → 网关 → provider-signer（双向 TLS）→ 承运商

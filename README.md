@@ -2,24 +2,24 @@
 
 出站（Egress）API 网关：数据面用 agentgateway，本仓库是围绕它的 Go 代码、契约、部署配置和测试。
 
-> **状态**：开发阶段。95 条正式验收用例与六个 STD-CP 门禁全部 `NOT_RUN`；三项运行验证（agentgateway、Gatekeeper 与 ExtAuthZ、Provider 沙箱）2026-11-19 起是 `RUN`，各自的保留见 [design-status.json](docs/governance/design-status.json)。ADR-0009 是 Accepted，其余 ADR-0001 至 0008 和 ADR-0010 至 0014 仍是 Proposed。  
+> **状态**：开发阶段。95 条正式验收用例与六个 STD-CP 门禁全部 `NOT_RUN`；三项运行验证（agentgateway、Gatekeeper 与 ExtAuthZ、Provider 沙箱）2026-11-19 起是 `RUN`，各自的保留见 [design-status.json](docs/governance/design-status.json)。ADR-0009 是 Accepted，其余 ADR-0001 至 0008 和 ADR-0010 至 0017 仍是 Proposed。  
 > 设计基线交付包与 PoC 的原貌在标签 `baseline-v1.0-poc`；之后的目录结构见 [ADR-0009](docs/adr/ADR-0009.md)。
 
 ## 目录
 
 | 目录 | 内容 |
 |---|---|
-| `cmd/gateway-authz` | 请求路径上的服务：agentgateway 的 HTTP ExtAuthZ 端点，判定后按请求发放 Provider 凭证（四种来源：固定 Bearer 令牌文件、开发者令牌加每个请求一个随机数、向令牌端点取的 OAuth2 客户端凭证令牌、顺丰国际开放平台的应用文件 `--sf-openapi-apps`，向承运商取访问令牌并交出 `Sf-OpenApi`）；另有一个改撤销表的接口，只认一个工作负载身份 |
-| `cmd/provider-signer` | 网关和顺丰国际之间的适配器：拆开 `gateway-authz` 交出的 `Sf-OpenApi` 凭证，加密并签名正文，发给承运商，把应答解开。启动参数见 `deploy/providers/sfintl/README.md` |
+| `cmd/gateway-authz` | 请求路径上的服务：agentgateway 的 HTTP ExtAuthZ 端点，判定后按请求发放 Provider 凭证（四种来源：固定 Bearer 令牌文件、开发者令牌加每个请求一个随机数、向令牌端点取的 OAuth2 客户端凭证令牌、顺丰国际开放平台的应用文件 `--sf-openapi-apps`，向承运商取访问令牌并交出 `Sf-OpenApi`）；另有一个改撤销表的接口，只认一个工作负载身份。可选 `--rate-limits`（ADR-0017）：按 Provider 账户限流，超额答 429、`Retry-After`、原因码 `RATE_LIMITED`；不给这个参数就不限流 |
+| `cmd/provider-signer` | 网关和顺丰国际之间的适配器：拆开 `gateway-authz` 交出的 `Sf-OpenApi` 凭证，加密并签名正文，发给承运商，把应答解开。四个操作：创建、取消、服务商单号查询、面单 `labels.print`（`IECS_PRINT_ORDER`）。可选 `--cb-failure-threshold`（默认 0，关着）和 `--cb-open-duration`（默认 30 秒）：打开时答 503 `carrier_circuit_open`，不联系承运商（ADR-0017）。其余启动参数见 `deploy/providers/sfintl/README.md` |
 | `internal/egressauthz` | 上面这个服务的判定规则、协议适配与端口 |
-| `cmd/gateway-control` | 控制面的命令行，不在请求路径上。现在有十一条命令。前五条管的是单机上的一个池（ADR-0010 第 10 条）：`publish` 把一份网关配置发布上去，没生效就把上一份放回去；`restart` 发布要重启网关才生效的配置；`reconcile` 对账，池和记录对不上时把最后一次得到确认的那一份放回去；`place` 在网关启动之前把那一份放到位，由部署文件在启动时跑；`keep` 是常驻的看守，池里的容器死了它跑启动命令把它们起回来，平时定时对账，并在一个地址上给出指标供告警。后三条是操作员撤销 Provider 账户用的（ADR-0012 V1.2），各对着一个 `gateway-authz` 的撤销接口发一次请求，用撤销者自己的证书走双向 TLS：`revoke` 撤销一个账户（原因必填），`restore` 取消撤销，`revocations` 读整张表；结局和退出码见 `gateway-control revoke --help`，问不到时结局是“不知道”，不自动重试。最后三条是池的发布历史（ADR-0013）：`releases` 列出历史并与池的记录比，`release --id` 看一条和它的每一步，`rollback --to` 回到历史里一份到过生效的快照（是一次新的发布）；`publish`、`restart`、`reconcile`、`keep` 给了 `--history-dir` 就记，看守用它给停在半路的发布补上结局，不给就没有历史。RouteIntent 的编译、发布的状态和审批都还没有 |
+| `cmd/gateway-control` | 控制面的命令行，不在请求路径上。现在有十三条命令。前五条管的是单机上的一个池（ADR-0010 第 10 条）：`publish` 把一份网关配置发布上去，没生效就把上一份放回去；`restart` 发布要重启网关才生效的配置；`reconcile` 对账，池和记录对不上时把最后一次得到确认的那一份放回去；`place` 在网关启动之前把那一份放到位，由部署文件在启动时跑；`keep` 是常驻的看守，池里的容器死了它跑启动命令把它们起回来，平时定时对账，并在一个地址上给出指标供告警。后三条是操作员撤销 Provider 账户用的（ADR-0012 V1.2），各对着一个 `gateway-authz` 的撤销接口发一次请求，用撤销者自己的证书走双向 TLS：`revoke` 撤销一个账户（原因必填），`restore` 取消撤销，`revocations` 读整张表；结局和退出码见 `gateway-control revoke --help`，问不到时结局是“不知道”，不自动重试。最后三条是池的发布历史（ADR-0013）：`releases` 列出历史并与池的记录比，`release --id` 看一条和它的每一步，`rollback --to` 回到历史里一份到过生效的快照（是一次新的发布）；`publish`、`restart`、`reconcile`、`keep` 给了 `--history-dir` 就记，看守用它给停在半路的发布补上结局，不给就没有历史。另有 `sync-jwks`（ADR-0015）：把身份提供者的 JWKS 同步到本机文件，`--max-stale` 与 `--empty-on-stale` 管有界陈旧期。另有 `compile`（ADR-0016）：把出站编译规格编成网关配置和登记表，或只做 RouteIntent 预检。发布的批准还没有 |
 | `internal/gatewayconfig` | 上面这个命令的规则、端口与适配：快照、运行配置的摘要、单机上的下发和记录、回读、发布前的离线加载、重启网关容器、看一个池的容器在不在跑并跑它的启动命令 |
 | `internal/platform` | 与上下文无关的技术件 |
 | `internal/architecture` | 包依赖方向的测试 |
 | `contracts/` | OpenAPI 与 JSON Schema |
 | `deploy/agentgateway/` | 数据面的版本锁定（`agentgateway.lock.json`：上游 1.7.0 的容器镜像，按摘要）与原生配置（目前只有一份示意样例） |
-| `deploy/providers/wanbexpress/` | 为 1.1 的承运商万邦速达的沙箱手写的一份 agentgateway 配置和一份登记表样例，四个操作。对着替身在联调架子上跑过，也对着真实沙箱跑过；经 `gateway-control publish` 发布到 compose 池之后，对着替身和真实沙箱都跑过。证据在 `tests/integration/wanbexpress/evidence/`（`rig-standin.json`、`rig-sandbox.json`、`pool-standin.json`、`pool-sandbox.json`），见该目录 README |
-| `deploy/providers/sfintl/` | 为 1.1 的第二家承运商顺丰国际手写的一份 agentgateway 配置和一份登记表样例，三个操作，上游是 `provider-signer`。对着替身在联调架子上跑过，也对着真实沙箱跑过；经 `gateway-control publish` 发布到 compose 池（叠加 `provider-signer.yml`）之后，对着替身和真实沙箱都跑过。证据在 `tests/integration/sfintl/evidence/`（`rig-standin.json`、`rig-sandbox.json`、`pool-standin.json`、`pool-sandbox.json`），见该目录 README |
+| `deploy/providers/wanbexpress/` | 为 1.1 的承运商万邦速达的沙箱手写的一份 agentgateway 配置和一份登记表样例，四个操作。另有 `compile-spec.json`（四条路由）；`gateway-control compile` 编出来与这份手写配置和登记表结构相同（ADR-0016）。对着替身在联调架子上跑过，也对着真实沙箱跑过；经 `gateway-control publish` 发布到 compose 池之后，对着替身和真实沙箱都跑过。证据在 `tests/integration/wanbexpress/evidence/`（`rig-standin.json`、`rig-sandbox.json`、`pool-standin.json`、`pool-sandbox.json`），见该目录 README |
+| `deploy/providers/sfintl/` | 为 1.1 的第二家承运商顺丰国际手写的一份 agentgateway 配置和一份登记表样例，四个操作（含面单 `IECS_PRINT_ORDER`），上游是 `provider-signer`。另有 `compile-spec.json`（四条路由）。对着替身在联调架子上跑过，也对着真实沙箱跑过；经 `gateway-control publish` 发布到 compose 池（叠加 `provider-signer.yml`）之后，对着替身和真实沙箱都跑过。面单加入之后，替身联调是 14/14（327 项检查），替身池是 15/15（307 项通过、2 项跳过），那两遍没有叫真实承运商。四条路由的证据在提交 `e1b01ed`（跑在干净的 `4416f89`）：替身联调 14 个用例、327 项都过；替身池 15 个用例、309 项里 307 过、2 跳过；沙箱联调 14 个用例、275 项里 200 过、75 跳过；沙箱池 15 个用例、259 项里 189 过、70 跳过；没有剩下未取消的订单。逐项在 [tests/integration/sfintl/README.md](tests/integration/sfintl/README.md) 的「四条路由」和 [ADR-0014](docs/adr/ADR-0014.md) V1.3。证据目录是 `tests/integration/sfintl/evidence/`，见该目录 README |
 | `deploy/compose/` | 单机上一个池的部署文件（docker compose；`gateway-authz.yml` 是 `gateway-authz` 的叠加文件）：网关、它前面的 nginx，和启动的先后；`pin-egress.sh` 装出口的规则；另有叠加文件 `provider-signer.yml`（顺丰国际的签名器：自己的网络命名空间，出口规则仍用这份脚本）；另有两个 systemd 单元，一个在开机时启动这个池，一个是看守；另有一份 Prometheus 告警规则，看的是看守给出的指标。两个单元没有装到哪台机器上跑过，告警送到谁那里也没有做，真的重启一台机器也没有验证过，见该目录 README |
 | `tests/acceptance/` | 正式验收矩阵；`blackbox/` 是对着真实 agentgateway 跑的黑盒用例 |
 | `tests/integration/gatekeeper/` | 与本机起的一套真实 Gatekeeper 的联调 |
@@ -28,7 +28,7 @@
 | `tests/integration/kubernetes/` | 在本机的一个 kind 集群里验证 ADR-0010 在 Kubernetes 上的发布方式：不可变的快照，滚动替换，逐个副本回读 |
 | `tests/integration/compose/` | 在本机用 docker compose 验证 ADR-0010 在单机上的做法，跑的就是 `deploy/compose` 的部署文件。发布：换掉挂载目录里的配置文件，网关不重启，经回读口确认。启动：先把确认过的那一份放到位，回读对上了才收请求。容器死了：看守把它们起回来。`cmd/gateway-control` 的五条命令都在这里对着真的网关跑，看守的指标和一个真的 Prometheus 也在这里；两个 systemd 单元之间的关系另由 `units.py` 在用户级的 systemd 里用替身命令跑；出口的规则是不是装上了，也由套件看（`SH-22`） |
 | `tests/integration/egressnet/` | 在一个隔离的 docker 网络里看锁定的 agentgateway 1.7.0 按名字找后端、名字后来指到别处时去哪里，再看 `deploy/compose/pin-egress.sh` 拦不拦得住。解析器和服务器都是替身 |
-| `tests/contracts`、`tests/security`、`scripts/` | 针对契约的离线检查与尚未移植的 Python 参考实现 |
+| `tests/contracts`、`tests/security`、`scripts/` | 契约的离线检查（含出站编译规格 `test_route_compiler.py`、顺丰订单日记 `test_sfintl_journal.py`）和安全反例。RouteIntent 预检已有 Go 移植（`internal/routecompile`）；诊断采集的参考实现仍在 `scripts/` |
 | `docs/` | G01–G06 设计文档、[ADR](docs/adr/README.md)、[开发计划](docs/development-plan.md)、治理记录、运行手册 |
 
 ## 构建与测试

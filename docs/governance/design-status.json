@@ -28,9 +28,10 @@
       "evidence": [
         "tests/acceptance/blackbox/evidence/p1-run-agentgateway-1.7.0.json",
         "tests/integration/compose/README.md",
-        "tests/integration/wanbexpress/evidence/"
+        "tests/integration/wanbexpress/evidence/",
+        "tests/integration/sfintl/evidence/"
       ],
-      "seen": "The pinned agentgateway 1.7.0, real binary and real image. Black-box suite: 97 cases, 96 pass. Single-host pool suite: 30 cases, three rounds.",
+      "seen": "The pinned agentgateway 1.7.0, real binary and real image. Black-box suite on the evidence file above: 97 cases, 96 pass. Single-host pool suite recorded earlier: 30 cases, three rounds. Both WanbExpress and SF International have been run on the single-host pool. On 2026-11-20 the same binary was probed on loopback for gateway-control sync-jwks (jwks.file reload without a gateway restart), per-account HTTP 429 rate limits, frontendPolicies.http.maxConcurrentRequests, frontendPolicies.tcp.maxConnections, and route localRateLimit. Compose three rounds were not rerun for these commits. tests/integration/compose/run.py builds gateway-control and runs only publish, restart, reconcile, place, and keep. Since 78aee90, cmd/gateway-control/main.go returns early for sync-jwks and compile before the existing switch; the publish and keep implementations were not changed. gateway-authz rate limits and the provider-signer circuit breaker are not on this suite's path. The earlier record (30 cases, about 750 seconds a round, three rounds; dates in tests/integration/compose/README.md) still stands and is not replaced. The black-box suite was rerun from the clean tree at 6c5659d; evidence commit 4416f89; the file records repository_commit 6c5659d and 0 uncommitted files; 97 cases, 96 passed, 751 checks. The only failure is the known P1-SS-04 (two Host headers). --check-evidence prints OK p1-run-agentgateway-1.7.0.json (96/97 passed, commit 6c5659d). Compared with the evidence on 149aa0e, no case and no check differs in text or result. The file spans 2026-11-20T13:54:53Z to 13:56:06Z (72.5s); commit 4416f89 records wall-clock 74.825s.",
       "reservations": [
         "One black-box case fails: P1-SS-04.",
         "In the black-box suite Gatekeeper and the provider are stand-ins.",
@@ -38,16 +39,15 @@
       ]
     },
     "gatekeeper_extauthz": {
-      "since": "2026-11-19",
+      "since": "2026-11-20",
       "evidence": [
         "tests/integration/gatekeeper/README.md",
         "tests/integration/wanbexpress/evidence/"
       ],
-      "seen": "A real Gatekeeper at commit f36dc06 run on the development machine: tokens it signs are verified by the gateway, gateway-authz asks its PDP with a client certificate. 12 of the 12 default cases pass.",
+      "seen": "A real Gatekeeper at commit f36dc06 run on the development machine: tokens it signs are verified by the gateway, gateway-authz asks its PDP with a client certificate. 12 of the 12 default cases pass. On 2026-11-20, with --key-rotation, 13 of 13 cases passed twice in a row. GK-12 passed both times: gateway-control sync-jwks wrote .run/jwks.json; the new Hydra key was accepted in 2.015s and then in 1.012s, without restarting the gateway.",
       "reservations": [
         "It is a local instance with local changes (provider_account type, the dedicated audience by a global switch, a TLS terminator in front of the PDP), not an environment run by the Gatekeeper team.",
         "No environment claim in the token.",
-        "The key-rotation case (GK-12) is not among the default cases and failed when it was last run, on 2026-11-11: a token signed with a new key was not accepted within the 60 seconds the case allows, only after the gateway fetched the JWKS again on its own schedule.",
         "The provider in that suite is a stand-in."
       ]
     },
@@ -56,14 +56,16 @@
       "evidence": [
         "tests/integration/wanbexpress/evidence/rig-sandbox.json",
         "tests/integration/wanbexpress/evidence/pool-sandbox.json",
-        "tests/integration/wanbexpress/README.md"
+        "tests/integration/wanbexpress/README.md",
+        "tests/integration/sfintl/evidence/rig-sandbox.json",
+        "tests/integration/sfintl/evidence/pool-sandbox.json",
+        "tests/integration/sfintl/README.md"
       ],
-      "seen": "The WanbExpress sandbox through the whole chain (real Gatekeeper as above, real agentgateway, gateway-authz), from a local gateway and from the single-host pool behind its egress rules: whoami, create, get, delete, revocation. No check failed.",
+      "seen": "The WanbExpress sandbox through the whole chain (real Gatekeeper as above, real agentgateway, gateway-authz), from a local gateway and from the single-host pool behind its egress rules: whoami, create, get, delete, revocation. No check failed. The SF International sandbox through the same chain plus provider-signer (gateway-to-signer mTLS, signer egress pinning), including label print IECS_PRINT_ORDER, from the rig and from the pool. Evidence commit e1b01ed, runs from the clean tree at 4416f89, uncommitted_files 0, no orders left uncancelled. rig-standin.json: 14 cases, 0 failed, 0 skipped; 327 checks, 327 passed, 0 failed, 0 skipped; 2026-11-20T14:06:50Z to 14:07:15Z. rig-sandbox.json: 14 cases, 0 failed, 3 skipped; 275 checks, 200 passed, 0 failed, 75 skipped; 14:08:15Z to 14:08:36Z; 2 real orders created and printed (an http or https url while active; after cancel, customerOrderNo suffixed _cancel), cancelled (SF-01: 2 attempts / 3.686s; SF-02: 3 attempts / 6.889s), then query status 4001. pool-standin.json: 15 cases, 0 failed, 2 skipped; 309 checks, 307 passed, 0 failed, 2 skipped; 14:09:29Z to 14:10:56Z. pool-sandbox.json: 15 cases, 0 failed, 5 skipped; 259 checks, 189 passed, 0 failed, 70 skipped; 14:13:01Z to 14:14:13Z; cancel SF-01: 2 attempts / 5.358s; SF-02: 1 attempt / 1.124s; SF-11 egress 10/10, signer namespace pinned api-ifsp-sit.sf.global:80 to 156.59.125.28. No check failed.",
       "reservations": [
-        "One sandbox account: isolation between two accounts is shown at a stand-in only.",
-        "The sandbox is plain HTTP: TLS to the carrier was not shown.",
-        "What the carrier receives, credential rotation and the unknown outcome of a write are shown at a stand-in only.",
-        "One carrier."
+        "One sandbox account per carrier: isolation between two accounts is shown at a stand-in only.",
+        "The sandboxes are plain HTTP: TLS to the carrier was not shown.",
+        "What the carrier receives, credential rotation and the unknown outcome of a write are shown at a stand-in only."
       ]
     }
   },
@@ -119,7 +121,7 @@
   ],
   "warnings": [
     "The manifest keeps the structure of IDP-SCG-STD-001 and passes its JSON Schema; the UNASSIGNED-* and UNRESOLVED-* placeholders are left open on purpose and do not block anything.",
-    "All ADRs referred to by the baseline are still Proposed; the repository owner decides their status. The decisions array is intentionally empty.",
-    "On 2026-11-19 three runtime verifications were changed from NOT_RUN to RUN with their reservations (runtime_verification_notes). The six gates and the cases of the acceptance matrix have not been re-evaluated against the evidence: they are unchanged. security_penetration, performance and production have no evidence."
+    "ADR-0008 and ADR-0010 through ADR-0017 remain Proposed pending the repository owner's decision. ADR-0009 is Accepted and only decides repository structure. The decisions array is intentionally empty.",
+    "On 2026-11-19 three runtime verifications were changed from NOT_RUN to RUN with their reservations (runtime_verification_notes). On 2026-11-20 those notes were extended with later evidence (see each item). The six gates and the cases of the acceptance matrix have not been re-evaluated against the evidence: they are unchanged. security_penetration, performance and production have no evidence."
   ]
 }
