@@ -923,13 +923,27 @@ def evidence_document(kind: str, sandbox: bool, started_at: str, finished_at: st
 
 def write_evidence(name: str, document: dict, made: dict, state: dict) -> bool:
     """Write tests/integration/wanbexpress/evidence/<name>, then read it back and look for what must not be in it (a token, the carrier's
-    Authorization, a client secret, a Gatekeeper token, an account number). Found: the file is deleted. -> True when the file is kept."""
+    Authorization, a client secret, a Gatekeeper token, an account number). Found: the file is deleted. -> True when the file is kept.
+    An account number is looked for as a whole JSON string value (not in the field `environment`), not as a substring: it can be a short
+    ordinary word that the file legitimately holds elsewhere (the environment name TEST); where it appears together with a token is caught by the shape check."""
     EVIDENCE.mkdir(exist_ok=True)
     path = EVIDENCE / name
     path.write_text(json.dumps(document, ensure_ascii=False, indent=1) + '\n', encoding='utf-8')
     text = path.read_text(encoding='utf-8')
-    looked_for = secret_list(made, state) + [(f'account number of {a}', n) for a, (n, _t) in made['accounts'].items()]
-    found = [what for what, value in looked_for if value and value in text] + [f'a value of shape {shape.pattern}' for shape in SECRET_SHAPES if shape.search(text)]
+    looked_for = secret_list(made, state)
+    values = set()
+
+    def strings(node):
+        if isinstance(node, str):
+            values.add(node)
+        elif isinstance(node, dict):
+            for v in node.values():
+                strings(v)
+        elif isinstance(node, list):
+            for v in node:
+                strings(v)
+    strings({k: v for k, v in json.loads(text).items() if k != 'environment'})
+    found = [what for what, value in looked_for if value and value in text] + [f'account number of {a} (a whole string value)' for a, (n, _t) in made['accounts'].items() if n in values] + [f'a value of shape {shape.pattern}' for shape in SECRET_SHAPES if shape.search(text)]
     if found:
         path.unlink()
         say(f'EVIDENCE NOT KEPT: the file held {found} (what it was, not the value); it was deleted')

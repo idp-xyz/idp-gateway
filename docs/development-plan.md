@@ -113,8 +113,8 @@ flowchart TD
 ### 1.6 跑出来的结果算什么
 
 - [G06](G06_Testing_and_Acceptance.md) 第 6 节：进入 D2（Provider Sandbox）的条件是 D1（功能 PoC）通过，而 D1 现在是 `NOT_RUN`。黑盒套件的对端是替身，不算门禁证据（[governance/README.md](governance/README.md)）。
-- 所以要定：P2 这一轮的结果算开发中的验证，还是算验收证据；算后者，由谁执行、谁批准。定下来之前，本计划里的运行都只算前者。
-- [ADR-0008](adr/ADR-0008.md)（凭证经 ExtAuthZ 响应头注入）和 ADR-0010 仍是 Proposed：照它们做下去，是在没有批准的决定上继续投入。
+- 原来要定的是：P2 这一轮的结果算开发中的验证，还是算验收证据。下面定了。
+- [ADR-0008](adr/ADR-0008.md)（凭证经 ExtAuthZ 响应头注入）和 ADR-0010 仍是 Proposed：它们的状态由仓库所有者决定（见下一条和 [governance/README.md](governance/README.md)）。
 - **2026-11-19 定了（仓库所有者）**：这是一个技术软件，不用执行人和批准人分开的做法，那只会增加复杂度。P2 这一轮的结果照实记成验证的记录：跑了什么、在哪些提交和镜像上、看到了什么；不设批准人，不等门禁的结论。3.4 不再等这一项。
 
 ## 2. 请求路径（`gateway-authz`）
