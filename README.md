@@ -19,12 +19,12 @@
 | `contracts/` | OpenAPI 与 JSON Schema |
 | `deploy/agentgateway/` | 数据面的版本锁定（`agentgateway.lock.json`：上游 1.7.0 的容器镜像，按摘要）与原生配置（目前只有一份示意样例） |
 | `deploy/providers/wanbexpress/` | 为 1.1 的承运商万邦速达的沙箱手写的一份 agentgateway 配置和一份登记表样例，四个操作。对着替身在联调架子上跑过，也对着真实沙箱跑过；经 `gateway-control publish` 发布到 compose 池之后，对着替身和真实沙箱都跑过。证据在 `tests/integration/wanbexpress/evidence/`（`rig-standin.json`、`rig-sandbox.json`、`pool-standin.json`、`pool-sandbox.json`），见该目录 README |
-| `deploy/providers/sfintl/` | 为 1.1 的第二家承运商顺丰国际手写的一份 agentgateway 配置和一份登记表样例，三个操作，上游是 `provider-signer`。对着替身在联调架子上跑过，也对着真实沙箱跑过（证据 `tests/integration/sfintl/evidence/rig-sandbox.json`）。没有发布到 compose 池 |
-| `deploy/compose/` | 单机上一个池的部署文件（docker compose；`gateway-authz.yml` 是 `gateway-authz` 的叠加文件）：网关、它前面的 nginx，和启动的先后；`pin-egress.sh` 装出口的规则；另有两个 systemd 单元，一个在开机时启动这个池，一个是看守；另有一份 Prometheus 告警规则，看的是看守给出的指标。两个单元没有装到哪台机器上跑过，告警送到谁那里也没有做，真的重启一台机器也没有验证过，见该目录 README |
+| `deploy/providers/sfintl/` | 为 1.1 的第二家承运商顺丰国际手写的一份 agentgateway 配置和一份登记表样例，三个操作，上游是 `provider-signer`。对着替身在联调架子上跑过，也对着真实沙箱跑过；经 `gateway-control publish` 发布到 compose 池（叠加 `provider-signer.yml`）之后，对着替身和真实沙箱都跑过。证据在 `tests/integration/sfintl/evidence/`（`rig-standin.json`、`rig-sandbox.json`、`pool-standin.json`、`pool-sandbox.json`），见该目录 README |
+| `deploy/compose/` | 单机上一个池的部署文件（docker compose；`gateway-authz.yml` 是 `gateway-authz` 的叠加文件）：网关、它前面的 nginx，和启动的先后；`pin-egress.sh` 装出口的规则；另有叠加文件 `provider-signer.yml`（顺丰国际的签名器：自己的网络命名空间，出口规则仍用这份脚本）；另有两个 systemd 单元，一个在开机时启动这个池，一个是看守；另有一份 Prometheus 告警规则，看的是看守给出的指标。两个单元没有装到哪台机器上跑过，告警送到谁那里也没有做，真的重启一台机器也没有验证过，见该目录 README |
 | `tests/acceptance/` | 正式验收矩阵；`blackbox/` 是对着真实 agentgateway 跑的黑盒用例 |
 | `tests/integration/gatekeeper/` | 与本机起的一套真实 Gatekeeper 的联调 |
 | `tests/integration/wanbexpress/` | `deploy/providers/wanbexpress/` 的配置在联调架子上的套件：真实的 Gatekeeper、网关和 `gateway-authz`，承运商是替身；`--sandbox` 另可对着真实的沙箱跑（凭证文件在仓库之外），`--mutate` 做对照；`pool.py` 把同一份配置发布到 `deploy/compose` 的单机池上跑，并看出口规则 |
-| `tests/integration/sfintl/` | `deploy/providers/sfintl/` 的配置在联调架子上的套件：真实的 Gatekeeper、网关、`gateway-authz` 和 `provider-signer`。对着替身跑过，也对着真实沙箱跑过（`--sandbox`，凭证文件在仓库之外；证据 `tests/integration/sfintl/evidence/rig-sandbox.json`，见该目录 README）；`--mutate` 做对照。还没有 `pool.py` |
+| `tests/integration/sfintl/` | `deploy/providers/sfintl/` 的配置在联调架子上的套件：真实的 Gatekeeper、网关、`gateway-authz` 和 `provider-signer`，承运商是替身；`--sandbox` 另可对着真实的沙箱跑（凭证文件在仓库之外；证据 `tests/integration/sfintl/evidence/rig-sandbox.json`），`--mutate` 做对照；`pool.py` 把同一份配置发布到 `deploy/compose` 的单机池上跑（叠加 `provider-signer.yml`），用 `gateway-control publish` 发布，并看签名器自己的出口规则。对着替身的证据是 `tests/integration/sfintl/evidence/pool-standin.json`，对着沙箱的是 `pool-sandbox.json`，见该目录 README |
 | `tests/integration/kubernetes/` | 在本机的一个 kind 集群里验证 ADR-0010 在 Kubernetes 上的发布方式：不可变的快照，滚动替换，逐个副本回读 |
 | `tests/integration/compose/` | 在本机用 docker compose 验证 ADR-0010 在单机上的做法，跑的就是 `deploy/compose` 的部署文件。发布：换掉挂载目录里的配置文件，网关不重启，经回读口确认。启动：先把确认过的那一份放到位，回读对上了才收请求。容器死了：看守把它们起回来。`cmd/gateway-control` 的五条命令都在这里对着真的网关跑，看守的指标和一个真的 Prometheus 也在这里；两个 systemd 单元之间的关系另由 `units.py` 在用户级的 systemd 里用替身命令跑；出口的规则是不是装上了，也由套件看（`SH-22`） |
 | `tests/integration/egressnet/` | 在一个隔离的 docker 网络里看锁定的 agentgateway 1.7.0 按名字找后端、名字后来指到别处时去哪里，再看 `deploy/compose/pin-egress.sh` 拦不拦得住。解析器和服务器都是替身 |
@@ -57,7 +57,7 @@ python3 tests/integration/compose/units.py                                 # 一
 python3 scripts/agentgateway_release.py                                    # 锁定的 agentgateway 是否仍是上游最新发布版（要联网）
 ```
 
-黑盒用例说明与最近一次结果见 [tests/acceptance/blackbox/README.md](tests/acceptance/blackbox/README.md)；与 Gatekeeper 联调的做法和结论见 [tests/integration/gatekeeper/README.md](tests/integration/gatekeeper/README.md)；Kubernetes 上的发布验证见 [tests/integration/kubernetes/README.md](tests/integration/kubernetes/README.md)；单机 docker compose 上的验证见 [tests/integration/compose/README.md](tests/integration/compose/README.md)，单机的部署文件怎么用见 [deploy/compose/README.md](deploy/compose/README.md)。本项目在本机只使用 `27610-27622` 端口段；四套用例共用其中的端口，不能同时跑。
+黑盒用例说明与最近一次结果见 [tests/acceptance/blackbox/README.md](tests/acceptance/blackbox/README.md)；与 Gatekeeper 联调的做法和结论见 [tests/integration/gatekeeper/README.md](tests/integration/gatekeeper/README.md)；Kubernetes 上的发布验证见 [tests/integration/kubernetes/README.md](tests/integration/kubernetes/README.md)；单机 docker compose 上的验证见 [tests/integration/compose/README.md](tests/integration/compose/README.md)，单机的部署文件怎么用见 [deploy/compose/README.md](deploy/compose/README.md)。本机用到的端口：示例配置 `27610`；黑盒和联调架子 `27611-27620`，本机 Gatekeeper `27621-27623`；compose 套件 `27618-27622`；egressnet `27630`；万邦的池 `27631-27634`；顺丰国际的池 `27641-27645`。重叠的不能同时跑。
 
 已发布的 Gatekeeper（`gk.idp.xyz`）是生产环境：本仓库的任何测试都不访问它，联调只对本机实例。
 

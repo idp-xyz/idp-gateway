@@ -2,7 +2,7 @@
 
 [开发计划](../../../docs/development-plan.md) 3.2。第一步（`run.py`）在联调架子上，第二步（`pool.py`）在单机池上，见下面"单机池上"。读的是 `deploy/providers/wanbexpress/agentgateway.yaml` 本身，不是另抄一份。不改 Go，不改 `tests/integration/gatekeeper/run.py`：那一套的 `run.py` 被原样当模块用（取令牌、`seed`、签证书、起进程、停进程、读判定记录都是它的），所以它仍是 12/12，没有重跑的必要。
 
-> 已发布的 `gk.idp.xyz` 是生产环境，这里不访问它。真实沙箱那一遍（`--sandbox`）由仓库所有者带着自己的凭证跑，`run.py` 对着真实沙箱的结果在下面，`pool.py --sandbox` 没有跑过。
+> 已发布的 `gk.idp.xyz` 是生产环境，这里不访问它。真实沙箱那一遍（`--sandbox`）由仓库所有者带着自己的凭证跑。`run.py` 对着真实沙箱的结果在下面「真实沙箱的结果」。`pool.py --sandbox` 跑过，结果在下面「池上真实沙箱的结果」。
 
 ## 怎么跑
 

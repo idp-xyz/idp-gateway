@@ -2,7 +2,7 @@
 
 [开发计划](../../../docs/development-plan.md) 1.1 的第二家承运商：一份手写的 agentgateway 配置和一份登记表，照[万邦那一份](../wanbexpress/README.md)的样子，值也是[单机池](../../compose/README.md)的。这家的协议要加密正文、对密文签名，网关做不了，所以路由的上游不是承运商，而是签名适配器 `provider-signer`（[ADR-0014](../../../docs/adr/ADR-0014.md)）。
 
-**这份配置已经在联调架子上对着替身跑过，也对着真实沙箱跑过**（[tests/integration/sfintl](../../../tests/integration/sfintl/README.md)，证据 `rig-standin.json`、`rig-sandbox.json`）。没有在单机池里跑。单机池里还没有 `provider-signer` 这个服务。
+**这份配置在联调架子上和单机池上，对着替身和真实沙箱都跑过**（[tests/integration/sfintl](../../../tests/integration/sfintl/README.md)，证据 `rig-standin.json`、`rig-sandbox.json`、`pool-standin.json`、`pool-sandbox.json`）。见下面「发布到池」。
 
 现在查过的：锁定的 agentgateway 1.7.0 的 `--validate-only` 接受这份文件；离线的[契约测试](../../../tests/contracts/test_sfintl_config.py)查配置、登记表和 Go 代码里的几个常量互相对得上（操作表、凭证前缀、适配器的默认超时），并查联调套件的替换还在；联调套件把这份文件换上联调的地址后，经网关、`gateway-authz` 和 `provider-signer` 对着替身跑过，也在 2026-11-20 对着真实沙箱跑了两遍。第二遍的证据是 `rig-sandbox.json`（14/14，168 项过、65 项跳过）。第一遍 13/14，前两次取令牌失败，证据没有留在仓库里，写在提交 `7fd2dd2` 的说明里。细节在套件的 README 里。
 
@@ -83,7 +83,7 @@
 3. **2026-11-20 在沙箱上量到的（文档没写）：**
    - 新的 `customerOrderNo` 下单成功时，业务应答是 `{"data":{"agentCode","customerOrderNo","directionCode","sfWaybillNo"},"success":true}`，没有 `code`。
    - 订单还在时，用同一个 `customerOrderNo`、同一份正文再下：`success` 为真，`code` 为 `"123052"`，`sfWaybillNo` 是已有的那个，没有新建。
-   - 下单后几秒内取消，两次都答了 `{"code":"500","msg":"请求服务发生异常","success":false}`，订单还在；稍后再取消成功（`code` 为 `"200"`）。取消失败要重试。
+   - 取消。2026-11-20 在沙箱上量到的，原因不知道，量的是沙箱，不是生产。要么下单后几秒内被接受，要么要到下单之后大约 5 到 8.5 分钟才被接受。池上后来有一次，从第一次取消尝试起 493.595 秒才被接受。套件这一次用 600 秒的预算等过了，还剩 106 秒。不是说以后都够。在那之前，业务拒绝是 HTTP 200、`apiResultCode` 0、`{"code":"500","msg":"请求服务发生异常","success":false}`，订单还在。调用方要把被拒的取消再试上几分钟，不是再试几秒。接受之后 `code` 为 `"200"`。
    - 取消之后，同一个 `customerOrderNo` 可以再用，得到新的运单号。
    - 查代理单号（`IECS_QUERY_AGENTNO`）对刚下的单答 `wrongData` 里 `status` 为 `"4002"`（代理单号未生成），取消后是 `"4001"`。
    - 沙箱的 `apiUsername` 要填文档给的测试用户名。
@@ -93,6 +93,16 @@
 ## 沙箱只有明文 HTTP
 
 **两段都是明文：`gateway-authz` 向令牌端点取令牌，`provider-signer` 向承运商发请求。正文是 `provider-signer` 加过密的，但 appKey、访问令牌和签名在明文的请求头里，应用密钥在取令牌请求的查询串里，经公网到沙箱。这只对沙箱可以接受。** 要分别给 `gateway-authz` 加 `--sf-openapi-plain-http-host`、给 `provider-signer` 加 `--carrier-plain-http-host`。正式环境是 https；到承运商的 TLS 在这里没有验过。登记表里 `enforce_tls_upstream` 写的是网关到 `provider-signer` 这一跳，`gateway-authz` 不读它。
+
+## 发布到池
+
+叠加文件是 [provider-signer.yml](../../compose/provider-signer.yml)，和 `compose.yml`、`gateway-authz.yml` 一起用，不改那两个文件。变量在 [provider-signer.env.example](../../compose/provider-signer.env.example)，抄进同一个 `.env`。命名空间、出口规则、`gateway-authz` 的命令为什么要整份重写，写在 [deploy/compose](../../compose/README.md) 的「provider-signer（叠加文件）」。
+
+```bash
+docker compose -f compose.yml -f gateway-authz.yml -f provider-signer.yml up -d
+```
+
+发布用 `gateway-control publish`。池上怎么跑、跑过什么，见[套件](../../../tests/integration/sfintl/README.md)的「单机池上」。
 
 ## "默认配置不安全的地方"九项
 
@@ -125,11 +135,11 @@
 ## 没有做的
 
 - **面单**（`IECS_PRINT_ORDER`）和别的 `msgType`。操作表里只有上面三个。
-- **池上的 `provider-signer`**：单机池里还没有这个服务，也没有它的出口规则（它自己发起到承运商的连接），也没有经 `gateway-control publish` 发布，也没有池上的套件和 SF-11。
+- **池上没有接撤销。** 叠加文件给 `gateway-authz` 加的只有 `--sf-openapi-apps` 和 `--sf-openapi-plain-http-host`，不带 `--revocations`。套件的 SF-12 在池上整个跳过。
 - **到承运商的 TLS**：沙箱没有，没有验过。
 - **`gateway-authz` 到令牌端点的连接没有出口规则。**
 - **令牌刷新时旧令牌立刻作废**（承运商文档写的）：`gateway-authz` 不知道承运商把缓存里的令牌作废了。SF-13 在替身上量到：作废之后的下一次请求，和接着的三次，都是 HTTP 200、承运商的 `apiResultCode` 500，原样给调用方；把应用文件里的 `key_version` 改掉（旁边写新文件，再改名盖上去）之后才重新取。已经带着旧令牌在路上的那一个请求没有单独量。
-- **取令牌失败只记一个类别**（`timeout`、`unreachable`、`status N`、`code N`、`bad_answer`），不写地址，因为地址里有应用密钥。2026-11-20 第一遍沙箱的两次 `unreachable` 分不出更细的原因。
+- **取令牌失败仍记一个类别**（`timeout`、`unreachable`、`status N`、`code N`、`bad_answer`），不写地址，也不写错误原文，因为地址里有应用密钥。`timeout` 和 `unreachable` 另有属性 `cause`，一个固定的词（`e88a7c5`）。2026-11-20 第一遍沙箱的两次 `unreachable` 发生在这之前，那两次的日志里没有 `cause`，分不出更细的原因。
 - **几个 `gateway-authz` 实例会互相作废令牌**，一次重启也是一次新的取令牌，生产上同样作废前一枚。一个应用只能有一个取令牌的进程。沙箱令牌是固定的，这一条验不了。
 - **`--carrier-timeout` 不短于路由的 9 秒时，程序不拒绝。** 给 20 秒，调用方在 9.0 秒得到网关自己的 504（对照 `signer-long-timeout`）。
 - **发给承运商的请求还带着 Go 默认的 `User-Agent`（`Go-http-client/1.1`）和 `Accept-Encoding: gzip`。** 替身记下的头名里有这两个（SF-03，只记名字）。
