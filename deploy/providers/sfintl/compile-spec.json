@@ -1,0 +1,133 @@
+{
+  "pool": {
+    "name": "egress-test",
+    "environment": "TEST",
+    "caller_hostname": "egress-api.idp.test",
+    "listen_port": 8081,
+    "bind_address": "127.0.0.1",
+    "readback_port": 8443,
+    "admin_addr": "127.0.0.1:15000",
+    "stats_addr": "127.0.0.1:15020",
+    "readiness_addr": "127.0.0.1:15021",
+    "publisher_identity": "spiffe://idp.test/gateway-control/publisher",
+    "tls_dir": "tls",
+    "jwt_issuer": "http://127.0.0.1:27621",
+    "jwt_audiences": [
+      "idp-egress-gateway"
+    ],
+    "jwks_file": "tls/jwks.json",
+    "ext_authz": {
+      "host": "gateway-authz:9443",
+      "hostname": "gatekeeper.idp.test",
+      "timeout": "1s"
+    },
+    "access_log": {
+      "provider_reference_expr": "json(request.body).customerOrderNo.matches(\"^[A-Za-z0-9._-]{1,64}$\") ? json(request.body).customerOrderNo : \"(malformed)\"",
+      "provider_request_expr": "json(response.body).apiResultData.data.sfWaybillNo.matches(\"^[A-Za-z0-9._-]{1,64}$\") ? json(response.body).apiResultData.data.sfWaybillNo : \"(malformed)\""
+    }
+  },
+  "provider": {
+    "provider_id": "sfintl",
+    "policy_version": "sfintl-example",
+    "enforce_tls_upstream": true,
+    "credential_scheme": "Sf-OpenApi ",
+    "credential_binding_ref": "gatekeeper:sfintl-test",
+    "upstream_host": "provider-signer",
+    "upstream_port": 9444,
+    "rewrite_authority": "provider-signer.idp.test",
+    "route_timeout": "9s",
+    "backend_tls": {
+      "hostname": "provider-signer.idp.test"
+    },
+    "internal_backend_host": "provider-signer"
+  },
+  "access": {
+    "allowed_tenants": [
+      "TENANT-ID-BLUE",
+      "TENANT-ID-GREEN"
+    ],
+    "accounts_by_tenant": {
+      "TENANT-ID-BLUE": [
+        "account-blue"
+      ],
+      "TENANT-ID-GREEN": [
+        "account-green"
+      ]
+    },
+    "allowed_service_ids": [
+      "CLIENT-ID-BLUE",
+      "CLIENT-ID-GREEN"
+    ],
+    "policy_notes": "Example for the SF International (IECS) sandbox. TENANT-ID-*, CLIENT-ID-* are placeholders: fill in the Gatekeeper tenant ids and the M2M client ids (the sub of the caller's token) when deploying. account-blue and account-green are the ids of the provider_account objects in Gatekeeper and the second part of the handles in the file given to gateway-authz as --sf-openapi-apps (gatekeeper:sfintl-test/account-blue). upstream_hostname and port describe the route's upstream, which is provider-signer, not the carrier; gateway-authz does not read them, nor enforce_tls_upstream (it ignores everything outside the rows' decision fields). enforce_tls_upstream is true because the hop from the gateway to provider-signer is mutual TLS; provider-signer's own hop to the carrier's sandbox is plain HTTP, and this field does not describe it."
+  },
+  "routes": [
+    {
+      "intent_id": "gwi-sfintl-orders-create",
+      "route_id": "sfintl-orders-create",
+      "operation_id": "orders.create",
+      "method": "POST",
+      "logical_path": "/providers/sfintl/v1/orders",
+      "path_match_mode": "exact",
+      "rewrite_path_prefix": "/sfintl/v1/orders",
+      "expected_generation": 0,
+      "approval_ref": "APPROVAL-SANDBOX-001",
+      "authz_profile": "provider-account-allowlist-v1",
+      "redirect_policy": "DENY",
+      "upstream_tls": "VERIFY_REQUIRED",
+      "provider_account_strategy": "GATEKEEPER_DECISION_BINDING",
+      "transport": "HTTP",
+      "policy_bundle_ref": "policy:sfintl-sandbox-v1"
+    },
+    {
+      "intent_id": "gwi-sfintl-orders-cancel",
+      "route_id": "sfintl-orders-cancel",
+      "operation_id": "orders.cancel",
+      "method": "POST",
+      "logical_path": "/providers/sfintl/v1/order-cancellations",
+      "path_match_mode": "exact",
+      "rewrite_path_prefix": "/sfintl/v1/order-cancellations",
+      "expected_generation": 0,
+      "approval_ref": "APPROVAL-SANDBOX-001",
+      "authz_profile": "provider-account-allowlist-v1",
+      "redirect_policy": "DENY",
+      "upstream_tls": "VERIFY_REQUIRED",
+      "provider_account_strategy": "GATEKEEPER_DECISION_BINDING",
+      "transport": "HTTP",
+      "policy_bundle_ref": "policy:sfintl-sandbox-v1"
+    },
+    {
+      "intent_id": "gwi-sfintl-agent-numbers-query",
+      "route_id": "sfintl-agent-numbers-query",
+      "operation_id": "agent-numbers.query",
+      "method": "POST",
+      "logical_path": "/providers/sfintl/v1/agent-number-queries",
+      "path_match_mode": "exact",
+      "rewrite_path_prefix": "/sfintl/v1/agent-number-queries",
+      "expected_generation": 0,
+      "approval_ref": "APPROVAL-SANDBOX-001",
+      "authz_profile": "provider-account-allowlist-v1",
+      "redirect_policy": "DENY",
+      "upstream_tls": "VERIFY_REQUIRED",
+      "provider_account_strategy": "GATEKEEPER_DECISION_BINDING",
+      "transport": "HTTP",
+      "policy_bundle_ref": "policy:sfintl-sandbox-v1"
+    },
+    {
+      "intent_id": "gwi-sfintl-labels-print",
+      "route_id": "sfintl-labels-print",
+      "operation_id": "labels.print",
+      "method": "POST",
+      "logical_path": "/providers/sfintl/v1/label-prints",
+      "path_match_mode": "exact",
+      "rewrite_path_prefix": "/sfintl/v1/label-prints",
+      "expected_generation": 0,
+      "approval_ref": "APPROVAL-SANDBOX-001",
+      "authz_profile": "provider-account-allowlist-v1",
+      "redirect_policy": "DENY",
+      "upstream_tls": "VERIFY_REQUIRED",
+      "provider_account_strategy": "GATEKEEPER_DECISION_BINDING",
+      "transport": "HTTP",
+      "policy_bundle_ref": "policy:sfintl-sandbox-v1"
+    }
+  ]
+}

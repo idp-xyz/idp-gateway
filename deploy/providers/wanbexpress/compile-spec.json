@@ -1,0 +1,133 @@
+{
+  "pool": {
+    "name": "egress-test",
+    "environment": "TEST",
+    "caller_hostname": "egress-api.idp.test",
+    "listen_port": 8081,
+    "bind_address": "127.0.0.1",
+    "readback_port": 8443,
+    "admin_addr": "127.0.0.1:15000",
+    "stats_addr": "127.0.0.1:15020",
+    "readiness_addr": "127.0.0.1:15021",
+    "publisher_identity": "spiffe://idp.test/gateway-control/publisher",
+    "tls_dir": "tls",
+    "jwt_issuer": "http://127.0.0.1:27621",
+    "jwt_audiences": [
+      "idp-egress-gateway"
+    ],
+    "jwks_file": "tls/jwks.json",
+    "ext_authz": {
+      "host": "gateway-authz:9443",
+      "hostname": "gatekeeper.idp.test",
+      "timeout": "1s"
+    },
+    "access_log": {
+      "provider_reference_expr": "json(request.body).ReferenceId.matches(\"^[A-Za-z0-9._-]{1,64}$\") ? json(request.body).ReferenceId : \"(malformed)\"",
+      "provider_request_expr": "json(response.body).Data.ProcessCode.matches(\"^[A-Za-z0-9._-]{1,64}$\") ? json(response.body).Data.ProcessCode : \"(malformed)\""
+    }
+  },
+  "provider": {
+    "provider_id": "wanbexpress",
+    "policy_version": "wanbexpress-example",
+    "enforce_tls_upstream": false,
+    "credential_scheme": "Hc-OweDeveloper ",
+    "credential_binding_ref": "gatekeeper:wanbexpress-test",
+    "upstream_host": "api-sbx.wanbexpress.com",
+    "upstream_port": 80,
+    "rewrite_authority": "api-sbx.wanbexpress.com",
+    "route_timeout": "9s",
+    "set_request_headers": {
+      "accept": "application/json"
+    },
+    "plain_http_sandbox_host": "api-sbx.wanbexpress.com"
+  },
+  "access": {
+    "allowed_tenants": [
+      "TENANT-ID-BLUE",
+      "TENANT-ID-GREEN"
+    ],
+    "accounts_by_tenant": {
+      "TENANT-ID-BLUE": [
+        "account-blue"
+      ],
+      "TENANT-ID-GREEN": [
+        "account-green"
+      ]
+    },
+    "allowed_service_ids": [
+      "CLIENT-ID-BLUE",
+      "CLIENT-ID-GREEN"
+    ],
+    "policy_notes": "Example for the WanbExpress sandbox. TENANT-ID-*, CLIENT-ID-* are placeholders: fill in the Gatekeeper tenant ids and the M2M client ids (the sub of the caller's token) when deploying. account-blue and account-green are the ids of the provider_account objects in Gatekeeper and the second part of the developer-token file's handles (gatekeeper:wanbexpress-test/account-blue). enforce_tls_upstream is false because the sandbox is plain HTTP; gateway-authz does not read the field (it ignores everything outside the rows' decision fields). A production upstream must be https."
+  },
+  "routes": [
+    {
+      "intent_id": "gwi-wanbexpress-whoami-get",
+      "route_id": "wanbexpress-whoami-get",
+      "operation_id": "whoami.get",
+      "method": "GET",
+      "logical_path": "/providers/wanbexpress/v1/whoami",
+      "path_match_mode": "exact",
+      "rewrite_path_prefix": "/api/whoami",
+      "expected_generation": 0,
+      "approval_ref": "APPROVAL-SANDBOX-001",
+      "authz_profile": "provider-account-allowlist-v1",
+      "redirect_policy": "DENY",
+      "upstream_tls": "PLAIN_HTTP_SANDBOX_EXCEPTION",
+      "provider_account_strategy": "GATEKEEPER_DECISION_BINDING",
+      "transport": "HTTP",
+      "policy_bundle_ref": "policy:wanbexpress-sandbox-v1"
+    },
+    {
+      "intent_id": "gwi-wanbexpress-parcels-create",
+      "route_id": "wanbexpress-parcels-create",
+      "operation_id": "parcels.create",
+      "method": "POST",
+      "logical_path": "/providers/wanbexpress/v1/parcels",
+      "path_match_mode": "exact",
+      "rewrite_path_prefix": "/api/parcels",
+      "expected_generation": 0,
+      "approval_ref": "APPROVAL-SANDBOX-001",
+      "authz_profile": "provider-account-allowlist-v1",
+      "redirect_policy": "DENY",
+      "upstream_tls": "PLAIN_HTTP_SANDBOX_EXCEPTION",
+      "provider_account_strategy": "GATEKEEPER_DECISION_BINDING",
+      "transport": "HTTP",
+      "policy_bundle_ref": "policy:wanbexpress-sandbox-v1"
+    },
+    {
+      "intent_id": "gwi-wanbexpress-parcels-get",
+      "route_id": "wanbexpress-parcels-get",
+      "operation_id": "parcels.get",
+      "method": "GET",
+      "logical_path": "/providers/wanbexpress/v1/parcels",
+      "path_match_mode": "one_segment",
+      "rewrite_path_prefix": "/api/parcels",
+      "expected_generation": 0,
+      "approval_ref": "APPROVAL-SANDBOX-001",
+      "authz_profile": "provider-account-allowlist-v1",
+      "redirect_policy": "DENY",
+      "upstream_tls": "PLAIN_HTTP_SANDBOX_EXCEPTION",
+      "provider_account_strategy": "GATEKEEPER_DECISION_BINDING",
+      "transport": "HTTP",
+      "policy_bundle_ref": "policy:wanbexpress-sandbox-v1"
+    },
+    {
+      "intent_id": "gwi-wanbexpress-parcels-delete",
+      "route_id": "wanbexpress-parcels-delete",
+      "operation_id": "parcels.delete",
+      "method": "DELETE",
+      "logical_path": "/providers/wanbexpress/v1/parcels",
+      "path_match_mode": "one_segment",
+      "rewrite_path_prefix": "/api/parcels",
+      "expected_generation": 0,
+      "approval_ref": "APPROVAL-SANDBOX-001",
+      "authz_profile": "provider-account-allowlist-v1",
+      "redirect_policy": "DENY",
+      "upstream_tls": "PLAIN_HTTP_SANDBOX_EXCEPTION",
+      "provider_account_strategy": "GATEKEEPER_DECISION_BINDING",
+      "transport": "HTTP",
+      "policy_bundle_ref": "policy:wanbexpress-sandbox-v1"
+    }
+  ]
+}

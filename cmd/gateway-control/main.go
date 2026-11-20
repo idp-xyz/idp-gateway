@@ -22,7 +22,12 @@
 //
 //	gateway-control sync-jwks --url <JWKS 地址> --output <文件> [--once] …
 //
-// 它们的结局和退出码在 revoke.go、history.go、jwks.go 的开头写着；下面说的退出码是前五条命令的，加上 rollback。
+// 另有一条把出站编译规格编译成网关配置和 gateway-authz 登记表，或只做 RouteIntent 预检（compile.go）：
+//
+//	gateway-control compile --spec <规格> --output-gateway <yaml> --output-policy <json> [--agentgateway <二进制>] [--lock-file <锁>] [--tls-dir <目录>]
+//	gateway-control compile --preflight-only --intents <意图.json> [--provider-registry <登记表>]
+//
+// 它们的结局和退出码在 revoke.go、history.go、jwks.go、compile.go 的开头写着；下面说的退出码是前五条命令的，加上 rollback。
 //
 // publish 把一份网关配置发布到池里，网关不重启。restart 发布一份要重启网关才能全部生效的配置
 // （启动设置变了的那种），会让这个池中断一下；不给 --snapshot 时，用的是这个池上最后一次得到确认的那一份。
@@ -76,7 +81,8 @@
 // （Prometheus 的文本格式），每看完一眼更新一次：池现在的样子、对账的结局、上一眼是什么时候看完的。
 // 告警靠的是这些数（deploy/compose 里有一份规则）。那个地址占不了时它不启动，退出码 1。
 //
-// 它不在请求路径上。RouteIntent 到网关配置的编译、批准（要等 Fabric 的发布意图）还没有；发布的状态只记
+// 它不在请求路径上。RouteIntent 到网关配置的编译是单独的 compile 命令（compile.go），不在这几条发布命令里；
+// 批准（要等 Fabric 的发布意图）还没有。发布的状态只记
 // G03 状态机里发布器自己经手的那一段（STAGED 到 ACTIVE、FAILED、UNKNOWN），见 ADR-0013 第 2 条。
 package main
 
@@ -127,6 +133,7 @@ const (
 	commandKeep      = "keep"
 	// rollback 回到历史里的一份快照（history.go）：flag 与 publish、restart 同一套。
 	commandRollback = "rollback"
+	commandCompile  = "compile"
 )
 
 // dockerRunner 是 scratch.Config.Docker 的类型；nil 表示用本机的 docker 命令行。
@@ -151,8 +158,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, docker do
 	if len(args) > 0 && isJWKSCommand(args[0]) {
 		return runJWKS(ctx, args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == commandCompile {
+		return runCompile(ctx, args[1:], stdout, stderr)
+	}
 	if len(args) == 0 || !known[args[0]] {
 		fmt.Fprintln(stderr, "usage: gateway-control publish|restart|reconcile|place|keep [flags]   (gateway-control <command> --help lists them)")
+		fmt.Fprintln(stderr, "       gateway-control compile --spec <file> --output-gateway <file> --output-policy <file>")
+		fmt.Fprintln(stderr, "       gateway-control compile --preflight-only --intents <file> [--provider-registry <file>]")
 		fmt.Fprintln(stderr, "       gateway-control revoke|restore|revocations [flags]   (revoke or lift the revocation of a Provider account in gateway-authz, or read its table)")
 		fmt.Fprintln(stderr, "       gateway-control releases|release|rollback [flags]   (the release history of a pool: list it, show one release, roll back to one)")
 		fmt.Fprintln(stderr, "       gateway-control sync-jwks [flags]   (copy a JWKS document from an identity provider to a local file and keep it fresh)")
