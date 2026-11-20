@@ -1,0 +1,22 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "go.idp.xyz/idp-gateway"
+    }
+  },
+  "components": [
+    {
+      "type": "application",
+      "name": "go.idp.xyz/idp-gateway"
+    },
+    {
+      "type": "library",
+      "name": "stdlib",
+      "version": "go1.26.8"
+    }
+  ]
+}

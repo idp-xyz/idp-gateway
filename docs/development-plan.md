@@ -273,7 +273,7 @@ flowchart TD
 
     调用方没有送 `traceparent`。ExtAuthZ 替身只收到 `host`，没有 `traceparent`。上游替身也没有。网关这一行没有 `trace.id`，也没有 `span.id`。没有生成 trace id。
 - 多实例：撤销和封禁这一份文件，几个 `gateway-authz` 可以打开同一份。下一次判定看得到对方写下的条目；写之前占住锁文件，把磁盘上已有的表并进来再写整份（[ADR-0012](adr/ADR-0012.md) V1.4）。单机仍是单点（ADR-0010 的「成本与剩余风险」）。压测和 11 项故障演练要的多实例部署没有做。顺丰国际这一家，几个 `gateway-authz` 实例各取各的访问令牌，会互相作废（[ADR-0014](adr/ADR-0014.md)）；一次重启也是一次新的取令牌，生产上同样作废前一枚。令牌这一步没有解决。
-- 安全测试；镜像的签名和 SBOM。`GW-GAP-13`。
+- 安全测试没有做。2026-11-21 查锁定的 1.7.0：索引的 cosign 标签是 HTTP 200，层类型 `application/vnd.dev.cosign.simplesigning.v1+json`，清单摘要 `sha256:b30c7b1ff7cfed11a0caae9ca76fa4950d1510989b2f15c82e704e3d89145a59`，正文点名的摘要是锁定索引，名字是 `ghcr.io/agentgateway/agentgateway`；OCI referrers 和 linux/amd64 的 cosign 标签都是 HTTP 404。没有拿可信密钥核对。上游镜像没有附 SBOM。本模块的 SBOM 在 `deploy/sbom/idp-gateway.cdx.json`。`STD-CP5` 仍是 `NOT_RUN`。本仓库没有能给上游镜像签名的密钥。`GW-GAP-13`。
 - 第 2 节留下来的：按 Operation 封禁已经做了（ADR-0012 V1.3）。撤销在多个实例之间，文件这一份按上面那条。没有用到的认证方式还没有做。
 - 运行交接：六个门禁各自的证据，和各篇 ADR 的状态，由仓库所有者决定。
 

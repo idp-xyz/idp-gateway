@@ -59,13 +59,15 @@ python3 scripts/agentgateway_release.py     # 要联网；只用标准库
 | 项 | 做了什么，结果如何 |
 |---|---|
 | 镜像从哪来 | 上游 1.7.0 的发布说明写的镜像名是 `cr.agentgateway.dev/agentgateway:v1.7.0`，当天这个标签解析到锁定的索引摘要。镜像标签（OCI label）里记的源码提交、二进制自己报告的提交，都与锁定文件一致。索引上附着 BuildKit 生成的构建证明，写的是上游仓库的一次 GitHub Actions 运行和同一个提交 |
-| 签名 | **没有验证。** 没有查上游是否给镜像签名，本机也没有验签工具。上面那份构建证明本身没有验过签，它证明不了镜像是谁构建的 |
+| 签名 | **没有验证。** 2026-11-21 用登记库的 HTTP 接口查了锁定索引 `sha256:60216aafb03d37f94e952ff3d51d2f630a65b10ecaebdc0a864882f92610c45b` 和 linux/amd64 清单 `sha256:460dda874be2dfa95fa5713c1f46f26079dce78df576008df704e54a59d5780d`，没有下载镜像层。OCI referrers 两次都是 HTTP 404，正文 `MANIFEST_UNKNOWN`。`docker buildx imagetools inspect` 看到索引本身，以及两份 `attestation-manifest`（`sha256:690e01f0474386ae893d509af8e7fbaae0261b4927681577fd983642c56ef1cd`、`sha256:34127a1b2d8b21528494112184073d5387fffc892f47bf9965bfa75c802179e6`，predicate 都是 `https://slsa.dev/provenance/v1`），没有签名描述符。索引的 cosign 标签 `sha256-60216aafb03d37f94e952ff3d51d2f630a65b10ecaebdc0a864882f92610c45b.sig` 是 HTTP 200：清单摘要 `sha256:b30c7b1ff7cfed11a0caae9ca76fa4950d1510989b2f15c82e704e3d89145a59`，两层类型都是 `application/vnd.dev.cosign.simplesigning.v1+json`，摘要都是 `sha256:0e38e496c2dd79b10471b14944bdb1c2f2d1f5d3c3441320a21a20633b1a20da`。这一层 249 字节的正文写着 `cosign container image signature`，`docker-manifest-digest` 是锁定索引，`docker-reference` 是 `ghcr.io/agentgateway/agentgateway`。linux/amd64 的 cosign 标签是 HTTP 404。本仓库没有拿可信密钥核对这份签名。上面那份构建证明本身没有验过签 |
 | 许可证 | Apache-2.0（上游仓库在锁定提交上的 `LICENSE`，镜像标签也这样写）。没有逐个查依赖的许可证 |
 | 镜像里的系统包 | 基础镜像是 Chainguard 的 `glibc-dynamic`（wolfi），7 个包。trivy 0.76.2（漏洞库更新于 2026-11-10）没有报出已知漏洞 |
 | 网关自己的依赖 | 镜像没有附 SBOM，trivy 也没能从二进制里读出依赖，所以查的是源码在锁定提交上的 `Cargo.lock`（827 个包）。命中 5 条已知公告（3 条 HIGH、2 条 MEDIUM），全部在 `rmcp` 0.10.0 上：`CVE-2026-42559`、`CVE-2026-63127`、`CVE-2026-63128`、`CVE-2026-64684`、`GHSA-c9xm-49cp-xcr9`。这个版本在 `crates/agentgateway/Cargo.toml` 里列在 `[dev-dependencies]` 下（上游测试用的旧版 SSE 客户端），不编进发布的二进制；编进去的是 `rmcp` 3.6.0，没有命中。锁文件比二进制的实际依赖宽，所以"没有命中"的结论对二进制成立，"命中"的要像这样逐条看 |
 | 上游公告 | `scripts/agentgateway_release.py`：1.7.0 是最新的正式发布版，没有影响它的已发布安全公告 |
 | 镜像里有什么 | 以 65532 用户运行，入口是 `/app/agentgateway`。没有 shell，也没有 wget、curl：进不到容器里去读它的管理地址，见 ADR-0010 第 5 条 |
 | 没有查的 | 内嵌管理界面的前端依赖；arm64 的镜像（只记了摘要，没有跑过） |
+
+2026-11-21 在锁定索引的 cosign 标签上看到签名清单，类型 `application/vnd.dev.cosign.simplesigning.v1+json`，清单摘要 `sha256:b30c7b1ff7cfed11a0caae9ca76fa4950d1510989b2f15c82e704e3d89145a59`；正文点名的摘要就是这个索引，本仓库没有拿可信密钥核对。上游镜像仍然没有附上 SBOM。
 
 ## 配置例子（安全警告）
 
