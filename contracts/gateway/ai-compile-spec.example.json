@@ -1,0 +1,39 @@
+{
+  "traffic_class": "AI",
+  "pool": {
+    "name": "ai-test",
+    "environment": "TEST",
+    "public_hostname": "ai.example",
+    "path_prefix": "/llm",
+    "listen_port": 8091,
+    "bind_address": "127.0.0.1",
+    "admin_addr": "127.0.0.1:15100",
+    "stats_addr": "127.0.0.1:15120",
+    "readiness_addr": "127.0.0.1:15121",
+    "readback_port": 8444,
+    "publisher_identity": "spiffe://idp.test/gateway-control/publisher",
+    "tls_dir": "tls",
+    "jwt_issuer": "https://issuer.example/ai",
+    "jwt_audiences": ["example-ai"],
+    "jwks_file": "tls/jwks.json",
+    "notes": "Example only. A deployment replaces public_hostname, jwt_issuer, jwt_audiences, the provider base_url, and the API key file. None of these values is a product constant. This pool is not the carrier egress pool. The key is a file path; the file contents are not in this document."
+  },
+  "intent": {
+    "intent_id": "gwi-ai-001",
+    "ai_protocol": "LLM",
+    "ai_target_ref": "ai:telos/model-router-v1",
+    "authz_profile": "ai-identity-v1",
+    "approval_ref": "APPROVAL-PENDING-003",
+    "expected_generation": 0,
+    "policy_bundle_ref": "policy:ai-standard-v1"
+  },
+  "provider": {
+    "name": "example",
+    "kind": "openai",
+    "api_key_file": "tls/ai-api-key",
+    "base_url": "https://api.openai.example:443/v1"
+  },
+  "models": [
+    { "name": "example-model" }
+  ]
+}

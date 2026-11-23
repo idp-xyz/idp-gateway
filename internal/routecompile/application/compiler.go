@@ -35,6 +35,12 @@ func (c Compiler) CompileIngress(ctx context.Context, spec domain.IngressSpec, g
 	return c.finish(ctx, art, err, gatewayPath, policyPath, tlsDir, jwksFile)
 }
 
+// CompileAI 编译 AI 规格。写文件和原生校验与 Compile 相同。
+func (c Compiler) CompileAI(ctx context.Context, spec domain.AISpec, gatewayPath, policyPath, tlsDir, jwksFile string) (Result, error) {
+	art, err := domain.CompileAI(spec)
+	return c.finish(ctx, art, err, gatewayPath, policyPath, tlsDir, jwksFile)
+}
+
 func (c Compiler) finish(ctx context.Context, art domain.CompiledArtifacts, compileErr error, gatewayPath, policyPath, tlsDir, jwksFile string) (Result, error) {
 	if compileErr != nil {
 		return Result{}, compileErr

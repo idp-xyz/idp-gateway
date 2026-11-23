@@ -137,6 +137,38 @@ func TestCompileIngressExampleNative(t *testing.T) {
 	}
 }
 
+func TestCompileAIExampleNative(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(home, ".local", "opt", "agentgateway", "1.7.0", "agentgateway")
+	if _, err := os.Stat(binary); err != nil {
+		t.Skip("pinned agentgateway 1.7.0 is not installed")
+	}
+	root := repoRoot(t)
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{
+		"compile",
+		"--spec", filepath.Join(root, "contracts/gateway/ai-compile-spec.example.json"),
+		"--output-gateway", filepath.Join(dir, "gateway.yaml"),
+		"--output-policy", filepath.Join(dir, "policy.json"),
+		"--agentgateway", binary,
+		"--lock-file", filepath.Join(root, "deploy", "agentgateway", "agentgateway.lock.json"),
+	}, &stdout, &stderr, nil)
+	if code != exitActive {
+		t.Fatalf("code %d out %s err %s", code, stdout.String(), stderr.String())
+	}
+	var line map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &line); err != nil {
+		t.Fatal(err)
+	}
+	if line["native_validated"] != true || line["routes"] != float64(1) {
+		t.Fatalf("line %#v stderr %s", line, stderr.String())
+	}
+}
+
 func loadFile(t *testing.T, path string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(path)
