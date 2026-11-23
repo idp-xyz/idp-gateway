@@ -283,7 +283,7 @@ flowchart TD
 ## 6. 没有排的
 
 - **Ingress 网关和 AI 网关。** 入口编译在 [ADR-0016](adr/ADR-0016.md) V1.1。AI 的 LLM 编译在同一篇 V1.2（2026-11-23）：回环上没有 JWT 是 401，相符的 JWT 把 `/llm` 前缀去掉并把密钥文件交给替身，调用方得到 HTTP 200。2026-11-23 把编译出的入口配置用 `gateway-control publish` 发到单机池，`deploy/compose/compose.yml` 没有改，替身在测试目录的叠加文件里。两次完整运行都是 14 个用例、52 项检查通过：没有 JWT 是 401，相符的 JWT 经 front 得到替身的 200，替身看到网关的客户端证书，调用方的 JWT 没有进替身。这不是验收通过，逐项在 [ADR-0016](adr/ADR-0016.md) V1.3。两份示例里的主机名都不是产品常量。都没有加进 `compose.yml`，也没有当成产品池。MCP 和 A2A 的编译已经有了，见 [ADR-0016](adr/ADR-0016.md) V1.4。LLM 的输出现在绑上主机、方法和路径，过滤请求头，并去掉 `location` 和 `set-cookie` 两个应答头，也见 V1.4。Fabric 的批准没有做。
-- **管理后台。** `portal/prototypes/` 和 UX 用例仍冻结（[governance/README.md](governance/README.md)）。2026-11-23 的第一段是回环上的 `gateway-console`：读审计 JSONL，撤销、恢复和封禁走已经有的 `revokerclient`。新路由的批准和发布仍留给 Fabric。回滚仍在 `gateway-control` 里，没有搬出来。见 [ADR-0019](adr/ADR-0019.md)，状态是 Proposed，不是把冻结解开。
+- **管理后台。** `portal/prototypes/` 和 UX 用例仍冻结（[governance/README.md](governance/README.md)）。2026-11-23 的第一段是回环上的 `gateway-console`：读审计 JSONL，撤销、恢复和封禁走已经有的 `revokerclient`。页面在 `console/`，构建后用 `--ui` 由同一个进程提供。新路由的批准和发布仍留给 Fabric。回滚仍在 `gateway-control` 里，没有搬出来。见 [ADR-0019](adr/ADR-0019.md)，状态是 Proposed，不是把冻结解开。
 - **与 API Fabric 的发布对接。** 只有契约（`contracts/fabric/`）；要等第 4 节的编译器，和 Fabric 一侧。
 
 ## 缺口清单对到哪里

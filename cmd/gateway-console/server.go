@@ -95,7 +95,7 @@ func (s *console) audit(w http.ResponseWriter, r *http.Request) {
 
 func (s *console) revocations(w http.ResponseWriter, r *http.Request) {
 	if s.client == nil {
-		http.NotFound(w, r)
+		writeError(w, http.StatusNotFound, "revoker is not configured")
 		return
 	}
 	switch r.Method {
@@ -136,7 +136,7 @@ func (s *console) revocations(w http.ResponseWriter, r *http.Request) {
 
 func (s *console) bans(w http.ResponseWriter, r *http.Request) {
 	if s.client == nil {
-		http.NotFound(w, r)
+		writeError(w, http.StatusNotFound, "revoker is not configured")
 		return
 	}
 	if r.Method != http.MethodPost {

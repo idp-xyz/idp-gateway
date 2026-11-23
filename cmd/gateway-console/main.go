@@ -1,7 +1,7 @@
 // Command gateway-console 是回环上的管理 BFF。它读一份审计 JSONL，并在给了撤销者证书时，
 // 把撤销、恢复和封禁交给 gateway-authz 已经有的接口。它不发布路由，也不回滚快照。
 //
-//	gateway-console [--listen 127.0.0.1:19100] [--audit-log <文件>]
+//	gateway-console [--listen 127.0.0.1:19100] [--audit-log <文件>] [--ui <目录>]
 //	    [--authz <host:port> --authz-name <名字> --tls-cert <文件> --tls-key <文件> --tls-ca <文件>]
 //	    [--timeout 5s]
 //
@@ -40,6 +40,7 @@ const (
 type options struct {
 	listen   string
 	auditLog string
+	ui       string
 	address  string
 	name     string
 	cert     string
@@ -74,20 +75,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return exitError
 		}
 	}
+	handler := handlerFor(o.auditLog, client, o.ui)
 	listener, err := net.Listen("tcp", o.listen)
 	if err != nil {
 		fmt.Fprintln(stderr, "gateway-console:", err)
 		return exitError
 	}
 	server := &http.Server{
-		Handler:           newConsole(o.auditLog, client),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    8 << 10,
 	}
-	fmt.Fprintf(stderr, "gateway-console: listening on %s audit=%t authz=%t\n", listener.Addr(), o.auditLog != "", o.authzSet)
+	fmt.Fprintf(stderr, "gateway-console: listening on %s audit=%t authz=%t ui=%t\n", listener.Addr(), o.auditLog != "", o.authzSet, o.ui != "")
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	errc := make(chan error, 1)
@@ -116,6 +118,7 @@ func parse(args []string, stderr io.Writer) (options, error) {
 	flags.SetOutput(stderr)
 	flags.StringVar(&o.listen, "listen", defaultListen, "监听地址，只能是回环 IP 加端口，例如 127.0.0.1:19100")
 	flags.StringVar(&o.auditLog, "audit-log", "", "审计 JSONL。不给则 GET /v1/audit 是 404。文件须是普通文件且组和其他人不可读")
+	flags.StringVar(&o.ui, "ui", "", "静态页面目录，通常是 console/dist。不给则只有 /v1 接口。必须是目录，不能是符号链接")
 	flags.StringVar(&o.address, "authz", "", "gateway-authz 的地址，host:port。和证书四个参数一起给，或不给")
 	flags.StringVar(&o.name, "authz-name", "", "验证 gateway-authz 证书时要对上的名字")
 	flags.StringVar(&o.cert, "tls-cert", "", "撤销者的证书（PEM）")
@@ -133,6 +136,11 @@ func parse(args []string, stderr io.Writer) (options, error) {
 	}
 	if strings.ContainsAny(o.auditLog, "\r\n") {
 		return o, errors.New("--audit-log must be a single line")
+	}
+	if o.ui != "" {
+		if err := checkUIDir(o.ui); err != nil {
+			return o, err
+		}
 	}
 	given := 0
 	for _, v := range []string{o.address, o.name, o.cert, o.key, o.ca} {
