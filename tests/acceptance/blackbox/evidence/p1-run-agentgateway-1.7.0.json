@@ -1,12 +1,12 @@
 {
   "title": "IDP Gateway black-box suite: real agentgateway, gateway-authz (acceptance build), mock provider",
-  "started_at_utc": "2026-11-23T11:14:54.495873+00:00",
-  "finished_at_utc": "2026-11-23T11:16:13.026891+00:00",
+  "started_at_utc": "2026-11-23T11:27:45.419021+00:00",
+  "finished_at_utc": "2026-11-23T11:28:58.340630+00:00",
   "operator": "tops",
   "host": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "python": "3.12.3",
   "command": ".venv/bin/python tests/acceptance/blackbox/run.py",
-  "repository_commit": "d646fa5d3034124c5487dbac7bbcedc6c3588967",
+  "repository_commit": "9b6d339fdee21f9237e200d9cb10731bed535a50",
   "repository_dirty_files": 0,
   "repository_dirty_files_ignores": "tests/acceptance/blackbox/evidence/",
   "agentgateway": {
@@ -111,9 +111,9 @@
     "what_ran": "cmd/gateway-authz built with the acceptance tag; not the product build",
     "build_command": "go build -trimpath -tags acceptance -o tests/acceptance/blackbox/.run/gateway-authz ./cmd/gateway-authz",
     "go": "go version go1.26.8 linux/amd64",
-    "source_sha256": "b279274f8d71e26c85e254eb44ac1b9f4ad7e5aef7fae1e05b64e8e020a6c67f",
+    "source_sha256": "b24793a110be7850057d00b947ac1fbe39ccc435a97033a75b80bf5b1c25301f",
     "source_sha256_covers": "go.mod and every non-test .go file under cmd/ and internal/",
-    "binary_sha256": "9a5cb9d149a1765c9c233d8bfc87ffede8359ffa76b3d205cfb7c4b847b3f099",
+    "binary_sha256": "bc4c695a1da30496f60b6c0ab2eefd28744aa198c7953b4ad1b81ae39005044e",
     "policy_from": "tests/acceptance/blackbox/policy.poc.json",
     "credentials_from": "three files written for the run, not recorded: Bearer tokens (--credentials), account numbers with developer tokens (--developer-tokens), and OAuth2 clients (--oauth-clients)",
     "revocations": "a file written for the run (--revocations), empty at the start; changed through the acceptance controls and, in P1-RV-02 to 05, through the product interface and, in P1-RV-06 to 11, through gateway-control",
@@ -124,7 +124,7 @@
   "gateway_control": {
     "what_ran": "cmd/gateway-control, the product build (no tag); P1-RV-06 to 11 run its revoke, restore and revocations commands against the gateway-authz above, under the revoker certificate made for the run",
     "build_command": "go build -trimpath -o tests/acceptance/blackbox/.run/gateway-control ./cmd/gateway-control",
-    "binary_sha256": "4e0371d36c3b47e2cf950efa8356a6f4662a075820f9d3ce8f3109e830832710"
+    "binary_sha256": "c2ce8e120c7c363c27ccf94e1a1da235798485a0c33b4f5cafb43f7a60d75d0c"
   },
   "mocks_sha256": {
     "mock_broker.py": "2eed2fca25e57907ccfb7a45acb0c77974cf3597a80fa9600a90699fe3cfff02",
@@ -1121,7 +1121,7 @@
           "x-client-trace"
         ],
         "traceparent_the_provider_received": [
-          "00-0af7651916cd43dd8537bf50925c1ba0-8b7251cde4db5451-01"
+          "00-0af7651916cd43dd8537bf50925c1ba0-bb91a30aa4e9864d-01"
         ]
       },
       "indicative_for": [
@@ -1572,7 +1572,7 @@
       ],
       "observed": {
         "status": 500,
-        "seconds": 0.002
+        "seconds": 0.001
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1598,7 +1598,7 @@
       ],
       "observed": {
         "status": 503,
-        "seconds": 1.002
+        "seconds": 1.003
       },
       "indicative_for": [
         "GW-ST-008",
@@ -1763,7 +1763,7 @@
         },
         "pdp_slower_than_the_timeout": {
           "status": 503,
-          "seconds": 1.003
+          "seconds": 1.002
         },
         "gateway_log_line_when_the_pdp_cannot_be_asked": {
           "level": "info",
@@ -2327,7 +2327,7 @@
             503
           ]
         },
-        "seconds_slow": 2.003,
+        "seconds_slow": 2.002,
         "provider_hits": 3
       },
       "indicative_for": [
@@ -2683,7 +2683,7 @@
       "observed": {
         "Gatekeeper answers 500": {
           "status": 503,
-          "seconds": 0.005
+          "seconds": 0.004
         },
         "Gatekeeper slower than the broker waits": {
           "status": 503,
@@ -2695,7 +2695,7 @@
         },
         "broker down": {
           "status": 503,
-          "seconds": 0.002
+          "seconds": 0.001
         }
       },
       "indicative_for": [
@@ -3333,7 +3333,7 @@
           "revoked_accounts": [
             {
               "account_id": "account-blue",
-              "revoked_at": "2026-11-23T11:15:34Z",
+              "revoked_at": "2026-11-23T11:28:21Z",
               "revoked_by": "spiffe://idp.test/egress/revoker",
               "reason": "black-box: credential reported leaked"
             }
@@ -3658,7 +3658,7 @@
         },
         "revocations": {
           "exit": 0,
-          "stdout": "{\"command\":\"revocations\",\"outcome\":\"LISTED\",\"http_status\":200,\"revocation_epoch\":17,\"revoked_accounts\":[{\"account_id\":\"account-blue\",\"revoked_at\":\"2026-11-23T11:15:35Z\",\"revoked_by\":\"spiffe://idp.test/egress/revoker\",\"reason\":\"black-box: revoked with gateway-control\"}]}\n",
+          "stdout": "{\"command\":\"revocations\",\"outcome\":\"LISTED\",\"http_status\":200,\"revocation_epoch\":17,\"revoked_accounts\":[{\"account_id\":\"account-blue\",\"revoked_at\":\"2026-11-23T11:28:22Z\",\"revoked_by\":\"spiffe://idp.test/egress/revoker\",\"reason\":\"black-box: revoked with gateway-control\"}]}\n",
           "stderr": "gateway-control: LISTED: 1 revoked account(s), revocation epoch 17\n"
         },
         "revoke_again": {
@@ -4072,7 +4072,7 @@
         }
       ],
       "observed": {
-        "seconds_until_the_new_route_was_served": 0.31,
+        "seconds_until_the_new_route_was_served": 0.3,
         "seconds_until_the_route_was_gone_again": 0.34
       },
       "indicative_for": [
@@ -4124,13 +4124,13 @@
         }
       ],
       "observed": {
-        "seconds_until_the_failure_was_reported": 0.31,
+        "seconds_until_the_failure_was_reported": 0.3,
         "configReload": {
           "synchronized": false,
           "lastError": "routes[8]: unknown field `notAFieldOfARoute` at line 529 column 3"
         },
         "api_config_effective_shows_the_rejected_file": true,
-        "seconds_until_the_reload_was_reported_applied_again": 0.31
+        "seconds_until_the_reload_was_reported_applied_again": 0.4
       },
       "indicative_for": [
         "GW-AT-014",
@@ -4466,10 +4466,10 @@
         "gateway_line_fields": {
           "route": "default/mockcarrier-labels-create",
           "http.status": "201",
-          "authz_decision_id": "dec-36c4be9ab1ba",
+          "authz_decision_id": "dec-bc257ed0d4d8",
           "tenant_ref": "tenant-blue",
-          "provider_reference_id": "CO-801a64bac1",
-          "provider_request_id": "PC-fceb85809077"
+          "provider_reference_id": "CO-099b8d4e92",
+          "provider_request_id": "PC-9fad9b1e922f"
         },
         "gateway_authz_lines_with_the_decision": 1
       },
@@ -4836,36 +4836,36 @@
         "a tenant with no grant: the gateway line": {
           "http.status": "403",
           "reason": "DirectResponse",
-          "authz_decision_id": "dec-4283e85db4d2",
+          "authz_decision_id": "dec-4031d1e93185",
           "tenant_ref": "tenant-red",
           "provider_reference_id": null
         },
         "a tenant with no grant: the 403 body": {
-          "decision_id": "dec-4283e85db4d2",
+          "decision_id": "dec-4031d1e93185",
           "result": "DENY",
           "reason_code": "TENANT_NOT_GRANTED",
           "policy_version": "poc-p1",
           "revocation_epoch": 24
         },
         "a tenant with no grant: the X-Idp-Decision-Id header of the 403": [
-          "dec-4283e85db4d2"
+          "dec-4031d1e93185"
         ],
         "a revoked account: the gateway line": {
           "http.status": "403",
           "reason": "DirectResponse",
-          "authz_decision_id": "dec-76635f815fee",
+          "authz_decision_id": "dec-494d182764d6",
           "tenant_ref": "tenant-blue",
           "provider_reference_id": null
         },
         "a revoked account: the 403 body": {
-          "decision_id": "dec-76635f815fee",
+          "decision_id": "dec-494d182764d6",
           "result": "DENY",
           "reason_code": "ACCOUNT_REVOKED",
           "policy_version": "poc-p1",
           "revocation_epoch": 25
         },
         "a revoked account: the X-Idp-Decision-Id header of the 403": [
-          "dec-76635f815fee"
+          "dec-494d182764d6"
         ],
         "the PDP cannot be asked: the gateway line": {
           "http.status": "503",
@@ -5014,7 +5014,7 @@
         },
         "header_forged_after_allow_gateway_line_fields": {
           "route": "default/mockcarrier-tracking-get",
-          "authz_decision_id": "dec-532fc31b40c1",
+          "authz_decision_id": "dec-e299bb869390",
           "tenant_ref": "tenant-blue"
         }
       },
@@ -5094,18 +5094,18 @@
           "http.status": "403",
           "reason": "DirectResponse",
           "route": "default/mockcarrier-manifests-get-broker",
-          "authz_decision_id": "dec-05b534551f8c",
+          "authz_decision_id": "dec-12fba3266850",
           "tenant_ref": "tenant-blue"
         },
         "a tenant asking for another tenant's account: the 403 body": {
-          "decision_id": "dec-05b534551f8c",
+          "decision_id": "dec-12fba3266850",
           "result": "DENY",
           "reason_code": "ACCOUNT_NOT_GRANTED",
           "policy_version": "poc-p1",
           "revocation_epoch": 26
         },
         "a tenant asking for another tenant's account: the X-Idp-Decision-Id header of the 403": [
-          "dec-05b534551f8c"
+          "dec-12fba3266850"
         ],
         "a tenant asking for another tenant's account: the gateway-authz line": {
           "endpoint": "/v1/egress/authorizations/decision",
@@ -5115,18 +5115,18 @@
           "http.status": "403",
           "reason": "DirectResponse",
           "route": "default/mockcarrier-manifests-get-broker",
-          "authz_decision_id": "dec-54a6427eaccb",
+          "authz_decision_id": "dec-a6fd011a5776",
           "tenant_ref": "tenant-blue"
         },
         "a revoked account: the 403 body": {
-          "decision_id": "dec-54a6427eaccb",
+          "decision_id": "dec-a6fd011a5776",
           "result": "DENY",
           "reason_code": "ACCOUNT_REVOKED",
           "policy_version": "poc-p1",
           "revocation_epoch": 27
         },
         "a revoked account: the X-Idp-Decision-Id header of the 403": [
-          "dec-54a6427eaccb"
+          "dec-a6fd011a5776"
         ],
         "a revoked account: the gateway-authz line": {
           "endpoint": "/v1/egress/authorizations/decision",
@@ -5262,7 +5262,7 @@
         }
       ],
       "observed": {
-        "seconds_between_the_two_fetches": 4.71
+        "seconds_between_the_two_fetches": 4.7
       },
       "indicative_for": [
         "GW-FR-018",
@@ -5303,7 +5303,7 @@
           200,
           200
         ],
-        "seconds_slowest": 0.491
+        "seconds_slowest": 0.462
       },
       "indicative_for": [
         "GW-FR-018",
@@ -5513,85 +5513,85 @@
         "the endpoint answers 500": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.003,
+          "seconds": 0.002,
           "endpoint_asked": 1
         },
         "the endpoint answers 401": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.004,
+          "seconds": 0.003,
           "endpoint_asked": 1
         },
         "the endpoint redirects": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.003,
+          "seconds": 0.002,
           "endpoint_asked": 1
         },
         "token_type is not Bearer": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.045,
+          "seconds": 0.049,
           "endpoint_asked": 1
         },
         "there is no token_type": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.003,
+          "seconds": 0.046,
           "endpoint_asked": 1
         },
         "there is no expires_in": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.003,
+          "seconds": 0.046,
           "endpoint_asked": 1
         },
         "expires_in is 0": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.003,
+          "seconds": 0.044,
           "endpoint_asked": 1
         },
         "expires_in is a string": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.044,
+          "seconds": 0.047,
           "endpoint_asked": 1
         },
         "the access token is empty": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.047,
+          "seconds": 0.048,
           "endpoint_asked": 1
         },
         "the answer is not JSON": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.003,
+          "seconds": 0.047,
           "endpoint_asked": 1
         },
         "the answer is a JSON array": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.044,
+          "seconds": 0.047,
           "endpoint_asked": 1
         },
         "the endpoint closes the connection without answering": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.003,
+          "seconds": 0.002,
           "endpoint_asked": 1
         },
         "the endpoint answers after the timeout": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.804,
+          "seconds": 0.802,
           "endpoint_asked": 1
         },
         "nobody listens at the token endpoint": {
           "status": 503,
           "reason_code": "CREDENTIAL_UNAVAILABLE",
-          "seconds": 0.003
+          "seconds": 0.002
         },
         "cached token due for renewal, endpoint broken": {
           "statuses": [
@@ -5599,7 +5599,7 @@
             503
           ],
           "endpoint_asked": 3,
-          "seconds_into_its_life_when_asked": 5.77
+          "seconds_into_its_life_when_asked": 5.76
         }
       },
       "indicative_for": [
