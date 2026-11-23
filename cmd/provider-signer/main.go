@@ -28,6 +28,8 @@ import (
 	"syscall"
 	"time"
 
+	"go.idp.xyz/idp-gateway/internal/platform/audit"
+	"go.idp.xyz/idp-gateway/internal/platform/otlp"
 	"go.idp.xyz/idp-gateway/internal/platform/workloadtls"
 	"go.idp.xyz/idp-gateway/internal/providersigner/adapters/carrierhttp"
 	"go.idp.xyz/idp-gateway/internal/providersigner/adapters/httpapi"
@@ -62,6 +64,9 @@ type options struct {
 	maxResponseBytes   int64
 	cbFailureThreshold int
 	cbOpenDuration     time.Duration
+	otlpTracesURL      string
+	auditLog           string
+	metricsListen      string
 }
 
 func parse(args []string, output io.Writer) (options, error) {
@@ -92,6 +97,9 @@ func parse(args []string, output io.Writer) (options, error) {
 	flags.Int64Var(&o.maxResponseBytes, "max-response-bytes", 4<<20, "接受承运商的应答正文的上限（字节），必须大于 0")
 	flags.IntVar(&o.cbFailureThreshold, "cb-failure-threshold", 0, "被动熔断：连续多少次承运商故障后打开电路。0 表示关闭；必须 >= 0")
 	flags.DurationVar(&o.cbOpenDuration, "cb-open-duration", 30*time.Second, "电路打开后持续的时间；--cb-failure-threshold 大于 0 时必须大于 0")
+	add(&o.otlpTracesURL, "otlp-traces-url", "OTLP/HTTP JSON 的 traces 地址，例如 http://127.0.0.1:4318/v1/traces；不设则不导出", false)
+	add(&o.auditLog, "audit-log", "追加写入的审计 JSONL；权限须为 0600，不设则不写", false)
+	add(&o.metricsListen, "metrics-listen", "只提供 GET /metrics 的明文 HTTP 地址，例如 127.0.0.1:19092；不设则没有指标端口，mTLS 监听仍只有操作表里的 POST", false)
 	if err := flags.Parse(args); err != nil {
 		return o, err
 	}
@@ -120,6 +128,14 @@ func parse(args []string, output io.Writer) (options, error) {
 		return o, errors.New("--cb-failure-threshold must not be negative")
 	case o.cbFailureThreshold > 0 && o.cbOpenDuration <= 0:
 		return o, errors.New("--cb-open-duration must be greater than zero")
+	}
+	if o.otlpTracesURL != "" {
+		if err := otlp.ValidateEndpoint(o.otlpTracesURL); err != nil {
+			return o, fmt.Errorf("--otlp-traces-url: %w", err)
+		}
+	}
+	if strings.ContainsAny(o.auditLog, "\r\n") || strings.ContainsAny(o.metricsListen, "\r\n") {
+		return o, errors.New("--audit-log and --metrics-listen must be a single line")
 	}
 	return o, nil
 }
@@ -155,37 +171,131 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 	if err != nil {
 		return err
 	}
-
-	listener, err := net.Listen("tcp", o.listen)
+	api := httpapi.New(service, o.gatewayIdentity, logger)
+	traces, sink, metrics, err := openSignerTelemetry(o)
 	if err != nil {
 		return err
 	}
-	server := newServer(httpapi.New(service, o.gatewayIdentity, logger), tlsConfig, o.carrierTimeout, logger)
+	defer func() {
+		if traces != nil {
+			_ = traces.Close(context.Background())
+		}
+		if sink != nil {
+			_ = sink.Close()
+		}
+	}()
+	if o.otlpTracesURL != "" || o.auditLog != "" || o.metricsListen != "" {
+		api.WithTelemetry(httpapi.Telemetry{Service: "idp-provider-signer", Traces: traces, Audit: sink, Metrics: metrics})
+	}
+
+	var metricsLn net.Listener
+	if o.metricsListen != "" {
+		metricsLn, err = net.Listen("tcp", o.metricsListen)
+		if err != nil {
+			return fmt.Errorf("--metrics-listen: %w", err)
+		}
+	}
+	listener, err := net.Listen("tcp", o.listen)
+	if err != nil {
+		if metricsLn != nil {
+			_ = metricsLn.Close()
+		}
+		return err
+	}
+	server := newServer(api, tlsConfig, o.carrierTimeout, logger)
 	logger.Info("provider-signer listening", "addr", listener.Addr().String(),
 		"gateway_identity", o.gatewayIdentity, "carrier_host", carrier.Host(), "carrier_scheme", carrier.Scheme(),
 		"plain_http_host", o.plainHTTPHost, "lang", o.lang, "carrier_timeout", o.carrierTimeout.String(),
 		"max_request_bytes", o.maxRequestBytes, "max_response_bytes", o.maxResponseBytes,
 		"operations", len(domain.Operations()),
 		"cb_failure_threshold", o.cbFailureThreshold, "cb_open_duration", o.cbOpenDuration.String())
+	if o.otlpTracesURL != "" || o.auditLog != "" || o.metricsListen != "" {
+		logger.Info("provider-signer telemetry", "otlp", o.otlpTracesURL, "audit_log", o.auditLog, "metrics_listen", o.metricsListen)
+	}
 	if ready != nil {
 		ready(listener.Addr())
 	}
 
-	served := make(chan error, 1)
+	var metricsSrv *http.Server
+	served := make(chan error, 2)
 	go func() { served <- server.ServeTLS(listener, "", "") }()
+	if metricsLn != nil {
+		metricsSrv = &http.Server{
+			Handler:           metrics,
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       10 * time.Second,
+			WriteTimeout:      10 * time.Second,
+			IdleTimeout:       60 * time.Second,
+			MaxHeaderBytes:    64 << 10,
+			ErrorLog:          log.New(&serverLogWriter{logger: logger}, "", 0),
+		}
+		go func() { served <- metricsSrv.Serve(metricsLn) }()
+	}
 	select {
 	case err := <-served:
+		stopCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = server.Shutdown(stopCtx)
+		if metricsSrv != nil {
+			_ = metricsSrv.Shutdown(stopCtx)
+		}
+		stop()
+		if errors.Is(err, http.ErrServerClosed) {
+			logger.Info("provider-signer stopped")
+			return nil
+		}
 		return err
 	case <-ctx.Done():
 	}
-	// 停止接受新连接，等在途的调用答完。
+	// 停止接受新连接，等在途的调用答完。导出器在函数返回时刷出剩余 span。
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdown); err != nil {
 		return fmt.Errorf("shutdown: %w", err)
 	}
+	if metricsSrv != nil {
+		if err := metricsSrv.Shutdown(shutdown); err != nil {
+			return fmt.Errorf("metrics shutdown: %w", err)
+		}
+	}
 	logger.Info("provider-signer stopped")
 	return nil
+}
+
+func openSignerTelemetry(o options) (*otlp.Exporter, *audit.FileSink, *httpapi.SignerMetrics, error) {
+	var traces *otlp.Exporter
+	var sink *audit.FileSink
+	var err error
+	closePartial := func() {
+		if traces != nil {
+			_ = traces.Close(context.Background())
+		}
+		if sink != nil {
+			_ = sink.Close()
+		}
+	}
+	if o.otlpTracesURL != "" {
+		traces, err = otlp.NewExporter(otlp.Config{Endpoint: o.otlpTracesURL, ServiceName: "idp-provider-signer"})
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("--otlp-traces-url: %w", err)
+		}
+	}
+	if o.auditLog != "" {
+		sink, err = audit.Open(o.auditLog)
+		if err != nil {
+			closePartial()
+			return nil, nil, nil, fmt.Errorf("--audit-log: %w", err)
+		}
+	}
+	var metrics *httpapi.SignerMetrics
+	if o.metricsListen != "" {
+		metrics = httpapi.NewSignerMetrics(func() (uint64, uint64, uint64) {
+			if traces == nil {
+				return 0, 0, 0
+			}
+			return traces.Stats()
+		})
+	}
+	return traces, sink, metrics, nil
 }
 
 // newServer 按规定的时限和上限构造 http.Server。单独成函数，是为了让测试能直接核对这些数。

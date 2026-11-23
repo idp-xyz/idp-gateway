@@ -1,5 +1,5 @@
-// Package httpapi 是 provider-signer 面向网关的 HTTP 接口：一张写死的操作表里的几个 POST 路径，
-// 此外没有任何别的接口（没有健康检查，没有指标，没有管理接口）。
+// Package httpapi 是 provider-signer 面向网关的 HTTP 接口：一张写死的操作表里的几个 POST 路径。
+// 这张监听上没有健康检查、没有指标、没有管理接口。指标如果打开，在另一个只提供 GET /metrics 的明文监听上。
 //
 // 调用方是谁只看 TLS 握手中已验证的客户端证书，不看任何请求头。
 package httpapi
@@ -11,16 +11,18 @@ import (
 	"strings"
 	"time"
 
+	"go.idp.xyz/idp-gateway/internal/platform/otlp"
 	"go.idp.xyz/idp-gateway/internal/platform/workloadtls"
 	"go.idp.xyz/idp-gateway/internal/providersigner/application"
 	"go.idp.xyz/idp-gateway/internal/providersigner/domain"
 )
 
-// Handler 是本服务的全部 HTTP 接口。
+// Handler 是本服务面向网关的全部 HTTP 接口。tel 为零时不追踪、不审计、不加指标。
 type Handler struct {
 	service *application.Service
 	gateway string
 	log     *slog.Logger
+	tel     Telemetry
 }
 
 // New 构造 Handler。gatewayIdentity 是唯一被服务的对端身份（证书里的 URI）。
@@ -92,5 +94,17 @@ func (h *Handler) record(r *http.Request, operation domain.Operation, result app
 		slog.Int("request_bytes", result.RequestBytes),
 		slog.Int("response_bytes", len(result.Body)),
 	)
+	var trace otlp.TraceContext
+	traced := false
+	for _, value := range r.Header.Values("Traceparent") {
+		parsed, ok := otlp.ParseTraceparentValue(value)
+		if !ok {
+			continue
+		}
+		trace, traced = parsed, true
+		attrs = append(attrs, slog.String("traceparent", value), slog.String("trace_id", parsed.TraceID))
+		break
+	}
 	h.log.LogAttrs(r.Context(), slog.LevelInfo, "signer call", attrs...)
+	h.observe(r, operation, result, elapsed, trace, traced)
 }

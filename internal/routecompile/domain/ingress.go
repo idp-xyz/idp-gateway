@@ -32,21 +32,22 @@ type IngressSpec struct {
 
 // IngressPool 是入口监听和调用方 JWT 的那一组。没有承运商，也没有凭证。
 type IngressPool struct {
-	Name              string   `json:"name"`
-	Environment       string   `json:"environment"`
-	PublicHostname    string   `json:"public_hostname"`
-	ListenPort        int      `json:"listen_port"`
-	BindAddress       string   `json:"bind_address"`
-	AdminAddr         string   `json:"admin_addr"`
-	StatsAddr         string   `json:"stats_addr"`
-	ReadinessAddr     string   `json:"readiness_addr"`
-	ReadbackPort      int      `json:"readback_port"`
-	PublisherIdentity string   `json:"publisher_identity"`
-	TLSDir            string   `json:"tls_dir"`
-	JWTIssuer         string   `json:"jwt_issuer"`
-	JWTAudiences      []string `json:"jwt_audiences"`
-	JWKSFile          string   `json:"jwks_file"`
-	Notes             string   `json:"notes,omitempty"`
+	Name              string       `json:"name"`
+	Environment       string       `json:"environment"`
+	PublicHostname    string       `json:"public_hostname"`
+	ListenPort        int          `json:"listen_port"`
+	BindAddress       string       `json:"bind_address"`
+	AdminAddr         string       `json:"admin_addr"`
+	StatsAddr         string       `json:"stats_addr"`
+	ReadinessAddr     string       `json:"readiness_addr"`
+	ReadbackPort      int          `json:"readback_port"`
+	PublisherIdentity string       `json:"publisher_identity"`
+	TLSDir            string       `json:"tls_dir"`
+	JWTIssuer         string       `json:"jwt_issuer"`
+	JWTAudiences      []string     `json:"jwt_audiences"`
+	JWKSFile          string       `json:"jwks_file"`
+	Notes             string       `json:"notes,omitempty"`
+	Tracing           *TracingSpec `json:"tracing,omitempty"`
 }
 
 // IngressBackend 是入口后面的那个服务。upstream_tls 只能是 VERIFY_REQUIRED。
@@ -212,6 +213,7 @@ func ingressIssues(spec IngressSpec) []Issue {
 	if !relativePath(spec.Pool.TLSDir) || !relativePath(spec.Pool.JWKSFile) {
 		add("TLS_PATH", "tls_dir and jwks_file must be relative paths")
 	}
+	issues = append(issues, tracingIssues(spec.Pool.Tracing, spec.Pool.Environment)...)
 	seenName := map[string]struct{}{}
 	seenMatch := map[string]struct{}{}
 	for _, route := range spec.Routes {
@@ -344,7 +346,7 @@ func emitIngressGateway(spec IngressSpec) []byte {
 }
 
 func ingressFrontend(spec IngressSpec) *ynode {
-	return ym(
+	pairs := []ypair{
 		yp("networkAuthorization", ym(
 			yp("rules", yq(
 				ym(yp("allow", ys("destination.port == "+strconv.Itoa(spec.Pool.ListenPort)))),
@@ -356,7 +358,11 @@ func ingressFrontend(spec IngressSpec) *ynode {
 				yp("tenant_ref", ys(fixedTenantRef)),
 			)),
 		)),
-	)
+	}
+	if spec.Pool.Tracing != nil {
+		pairs = append(pairs, yp("tracing", tracingPolicy(spec.Pool.Tracing, false)))
+	}
+	return ym(pairs...)
 }
 
 func ingressBusinessRoute(spec IngressSpec, name, method string, route IngressRoute) *ynode {

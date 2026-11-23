@@ -7,6 +7,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -98,12 +99,13 @@ func (c Callers) MayCall(path, identity string) bool {
 	return false
 }
 
-// Handler 是本服务的全部 HTTP 接口。
+// Handler 是本服务的全部 HTTP 接口。tel 为零时不追踪、不审计、不加指标。
 type Handler struct {
 	service *application.Service
 	callers Callers
 	log     *slog.Logger
 	now     func() time.Time
+	tel     Telemetry
 }
 
 // New 构造 Handler。
@@ -112,6 +114,9 @@ func New(service *application.Service, callers Callers, logger *slog.Logger) *Ha
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.tel.active() {
+		r = r.WithContext(context.WithValue(r.Context(), obsClock{}, time.Now()))
+	}
 	switch r.URL.Path {
 	case PathHealth:
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -280,11 +285,13 @@ func (h *Handler) decision(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		writeJSON(w, http.StatusMethodNotAllowed, errorBody{Error: "method_not_allowed"})
+		h.observeClientError(r, PathDecision, caller, http.StatusMethodNotAllowed, "method_not_allowed")
 		return
 	}
 	request, err := readDecisionRequest(w, r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errorBody{Error: "invalid_decision_request"})
+		h.observeClientError(r, PathDecision, caller, http.StatusBadRequest, "invalid_decision_request")
 		return
 	}
 	in := application.Input{
@@ -398,6 +405,7 @@ func (h *Handler) changeRevocation(w http.ResponseWriter, r *http.Request, calle
 	request, err := readRevocationRequest(w, r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errorBody{Error: "invalid_revocation_request"})
+		h.observeClientError(r, PathRevocations, caller, http.StatusBadRequest, "invalid_revocation_request")
 		return
 	}
 	account, action := *request.AccountID, "restore"
@@ -434,6 +442,7 @@ func (h *Handler) changeRevocation(w http.ResponseWriter, r *http.Request, calle
 		attrs = append(attrs, slog.String("error", err.Error()))
 	}
 	h.log.LogAttrs(r.Context(), level, "egress revocation", attrs...)
+	h.observeMutation(r, PathRevocations, caller, account, "", action, request.Reason, body.Error, status, change.Epoch, err)
 }
 
 func readRevocationRequest(w http.ResponseWriter, r *http.Request) (*revocationRequest, error) {
@@ -466,11 +475,13 @@ func plainText(s string, limit int) bool {
 
 // refuse 回答没有进入判定的请求：调用方身份不对，或可信上下文有歧义。
 func (h *Handler) refuse(w http.ResponseWriter, r *http.Request, endpoint, caller string, status int, reason string) {
+	epoch := h.service.RevocationEpoch(r.Context())
 	writeJSON(w, status, denialBody{Result: resultDeny, ReasonCode: reason,
-		PolicyVersion: h.service.PolicyVersion(), RevocationEpoch: h.service.RevocationEpoch(r.Context())})
+		PolicyVersion: h.service.PolicyVersion(), RevocationEpoch: epoch})
 	h.log.LogAttrs(r.Context(), slog.LevelWarn, "egress authorization refused",
 		slog.String("endpoint", endpoint), slog.String("caller", caller), slog.Int("status", status),
 		slog.String("result", resultDeny), slog.String("reason", reason))
+	h.observeRefusal(r, endpoint, caller, status, reason, epoch)
 }
 
 // record 为每次判定写一行日志。ExtAuthZ 请求带着 traceparent 时，这一行记上那个值。
@@ -495,6 +506,7 @@ func (h *Handler) record(r *http.Request, endpoint, caller string, status int, r
 		attrs = append(attrs, slog.String("error", err.Error()))
 	}
 	h.log.LogAttrs(r.Context(), level, "egress authorization", attrs...)
+	h.observeDecision(r, endpoint, caller, status, result, in, out, err)
 }
 
 // incomingTraceparent 取调用方送来的那一个 traceparent。没有这个头，或值是空的，就不算有。

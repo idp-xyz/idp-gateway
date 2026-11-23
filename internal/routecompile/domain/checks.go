@@ -105,6 +105,7 @@ func poolIssues(pool PoolSpec) []Issue {
 			add("FRONTEND_LIMITS", "max_connections must be from 1 to 1000000")
 		}
 	}
+	issues = append(issues, tracingIssues(pool.Tracing, pool.Environment)...)
 	return issues
 }
 

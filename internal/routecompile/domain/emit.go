@@ -16,12 +16,14 @@ const (
 	ySeq
 	yStr
 	yInt
+	yFloat
 )
 
 type ynode struct {
 	kind  ykind
 	str   string
 	n     int
+	f     float64
 	pairs []ypair
 	items []*ynode
 }
@@ -31,8 +33,9 @@ type ypair struct {
 	val *ynode
 }
 
-func ys(s string) *ynode { return &ynode{kind: yStr, str: s} }
-func yi(n int) *ynode    { return &ynode{kind: yInt, n: n} }
+func ys(s string) *ynode  { return &ynode{kind: yStr, str: s} }
+func yi(n int) *ynode     { return &ynode{kind: yInt, n: n} }
+func yf(n float64) *ynode { return &ynode{kind: yFloat, f: n} }
 func ym(pairs ...ypair) *ynode {
 	return &ynode{kind: yMap, pairs: pairs}
 }
@@ -105,6 +108,9 @@ func frontend(spec CompileSpec) *ynode {
 		if lim.MaxConnections != nil {
 			pairs = append(pairs, yp("tcp", ym(yp("maxConnections", yi(*lim.MaxConnections)))))
 		}
+	}
+	if spec.Pool.Tracing != nil {
+		pairs = append(pairs, yp("tracing", tracingPolicy(spec.Pool.Tracing, true)))
 	}
 	return ym(pairs...)
 }
@@ -385,6 +391,8 @@ func (n *ynode) writeScalar(b *bytes.Buffer) {
 	switch n.kind {
 	case yInt:
 		b.WriteString(strconv.Itoa(n.n))
+	case yFloat:
+		b.WriteString(formatSampling(n.f))
 	default:
 		b.WriteByte('\'')
 		b.WriteString(strings.ReplaceAll(n.str, "'", "''"))

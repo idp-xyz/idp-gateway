@@ -79,6 +79,7 @@ func (h *Handler) changeOperationBan(w http.ResponseWriter, r *http.Request, cal
 	request, err := readOperationBanRequest(w, r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errorBody{Error: "invalid_operation_ban_request"})
+		h.observeClientError(r, PathOperationBans, caller, http.StatusBadRequest, "invalid_operation_ban_request")
 		return
 	}
 	operation, action := *request.OperationID, "lift"
@@ -114,6 +115,7 @@ func (h *Handler) changeOperationBan(w http.ResponseWriter, r *http.Request, cal
 		attrs = append(attrs, slog.String("error", err.Error()))
 	}
 	h.log.LogAttrs(r.Context(), level, "egress operation ban", attrs...)
+	h.observeMutation(r, PathOperationBans, caller, "", operation, action, request.Reason, body.Error, status, change.Epoch, err)
 }
 
 func readOperationBanRequest(w http.ResponseWriter, r *http.Request) (*operationBanRequest, error) {

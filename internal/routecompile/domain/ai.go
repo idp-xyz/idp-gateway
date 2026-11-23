@@ -48,22 +48,23 @@ type AISpec struct {
 
 // AIPool 是这个 AI 池的监听和调用方 JWT。path_prefix 挂在协议路径前面。
 type AIPool struct {
-	Name              string   `json:"name"`
-	Environment       string   `json:"environment"`
-	PublicHostname    string   `json:"public_hostname"`
-	PathPrefix        string   `json:"path_prefix"`
-	ListenPort        int      `json:"listen_port"`
-	BindAddress       string   `json:"bind_address"`
-	AdminAddr         string   `json:"admin_addr"`
-	StatsAddr         string   `json:"stats_addr"`
-	ReadinessAddr     string   `json:"readiness_addr"`
-	ReadbackPort      int      `json:"readback_port"`
-	PublisherIdentity string   `json:"publisher_identity"`
-	TLSDir            string   `json:"tls_dir"`
-	JWTIssuer         string   `json:"jwt_issuer"`
-	JWTAudiences      []string `json:"jwt_audiences"`
-	JWKSFile          string   `json:"jwks_file"`
-	Notes             string   `json:"notes,omitempty"`
+	Name              string       `json:"name"`
+	Environment       string       `json:"environment"`
+	PublicHostname    string       `json:"public_hostname"`
+	PathPrefix        string       `json:"path_prefix"`
+	ListenPort        int          `json:"listen_port"`
+	BindAddress       string       `json:"bind_address"`
+	AdminAddr         string       `json:"admin_addr"`
+	StatsAddr         string       `json:"stats_addr"`
+	ReadinessAddr     string       `json:"readiness_addr"`
+	ReadbackPort      int          `json:"readback_port"`
+	PublisherIdentity string       `json:"publisher_identity"`
+	TLSDir            string       `json:"tls_dir"`
+	JWTIssuer         string       `json:"jwt_issuer"`
+	JWTAudiences      []string     `json:"jwt_audiences"`
+	JWKSFile          string       `json:"jwks_file"`
+	Notes             string       `json:"notes,omitempty"`
+	Tracing           *TracingSpec `json:"tracing,omitempty"`
 }
 
 // AIIntent 是拼进预检的那一条 AI RouteIntent。ai_protocol 决定编译哪一支。
@@ -286,6 +287,7 @@ func aiPoolIssues(spec AISpec) []Issue {
 	if !relativePath(spec.Pool.TLSDir) || !relativePath(spec.Pool.JWKSFile) {
 		add("TLS_PATH", "tls_dir and jwks_file must be relative paths")
 	}
+	issues = append(issues, tracingIssues(spec.Pool.Tracing, spec.Pool.Environment)...)
 	return issues
 }
 
@@ -645,6 +647,21 @@ func aiMethodMatch(prefix, method string) *ynode {
 	)
 }
 
+func aiFrontend(spec AISpec) *ynode {
+	pairs := []ypair{
+		yp("networkAuthorization", ym(
+			yp("rules", yq(
+				ym(yp("allow", ys("destination.port == "+strconv.Itoa(spec.Pool.ListenPort)))),
+				ym(yp("allow", ys("destination.port == "+strconv.Itoa(spec.Pool.ReadbackPort)+" && source.spiffeId == "+strconv.Quote(spec.Pool.PublisherIdentity)))),
+			)),
+		)),
+	}
+	if spec.Pool.Tracing != nil {
+		pairs = append(pairs, yp("tracing", tracingPolicy(spec.Pool.Tracing, false)))
+	}
+	return ym(pairs...)
+}
+
 // emitAIDocument 写出 AI 池的监听。llm 为 nil 时不写 llm 段，MCP 和 A2A 走这里。
 // LLM 的键顺序与原先手写的那一份相同。
 func emitAIDocument(spec AISpec, llm *ynode, routes []*ynode) []byte {
@@ -655,14 +672,7 @@ func emitAIDocument(spec AISpec, llm *ynode, routes []*ynode) []byte {
 			yp("readinessAddr", ys(spec.Pool.ReadinessAddr)),
 			yp("storage", ym(yp("mode", ys("readOnly")))),
 		)),
-		yp("frontendPolicies", ym(
-			yp("networkAuthorization", ym(
-				yp("rules", yq(
-					ym(yp("allow", ys("destination.port == "+strconv.Itoa(spec.Pool.ListenPort)))),
-					ym(yp("allow", ys("destination.port == "+strconv.Itoa(spec.Pool.ReadbackPort)+" && source.spiffeId == "+strconv.Quote(spec.Pool.PublisherIdentity)))),
-				)),
-			)),
-		)),
+		yp("frontendPolicies", aiFrontend(spec)),
 		yp("gateways", ym(
 			yp("read-back", ym(
 				yp("port", yi(spec.Pool.ReadbackPort)),

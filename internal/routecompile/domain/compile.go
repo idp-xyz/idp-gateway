@@ -134,6 +134,7 @@ type PoolSpec struct {
 	ExtAuthz          ExtAuthzSpec   `json:"ext_authz"`
 	AccessLog         AccessLogSpec  `json:"access_log"`
 	FrontendLimits    *FrontendLimit `json:"frontend_limits,omitempty"`
+	Tracing           *TracingSpec   `json:"tracing,omitempty"`
 }
 
 // FrontendLimit 是池入口的并发上限，给后续的流量治理用。不写就不出现在配置里。

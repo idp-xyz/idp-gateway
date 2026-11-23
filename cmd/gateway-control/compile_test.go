@@ -191,6 +191,84 @@ func TestCompileAILoopbackNative(t *testing.T) {
 	}
 }
 
+func TestCompileTracingNative(t *testing.T) {
+	root := repoRoot(t)
+	cases := []struct {
+		name    string
+		spec    string
+		service string
+		egress  bool
+	}{
+		{"egress", "deploy/providers/wanbexpress/compile-spec.json", "idp-egress-gateway", true},
+		{"ingress", "contracts/gateway/ingress-compile-spec.example.json", "idp-ingress-gateway", false},
+		{"ai", "contracts/gateway/ai-compile-spec.example.json", "idp-ai-gateway", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			doc := mapFromFile(t, filepath.Join(root, c.spec))
+			pool := doc["pool"].(map[string]any)
+			pool["tracing"] = map[string]any{
+				"host":            "otel-collector:4318",
+				"service_name":    c.service,
+				"random_sampling": 0.25,
+			}
+			dir := t.TempDir()
+			spec := filepath.Join(dir, "spec.json")
+			raw, err := json.Marshal(doc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(spec, raw, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			home, err := os.UserHomeDir()
+			if err != nil {
+				t.Fatal(err)
+			}
+			binary := filepath.Join(home, ".local", "opt", "agentgateway", "1.7.0", "agentgateway")
+			if _, err := os.Stat(binary); err != nil {
+				t.Skip("pinned agentgateway 1.7.0 is not installed")
+			}
+			var stdout, stderr bytes.Buffer
+			code := run(context.Background(), []string{
+				"compile", "--spec", spec,
+				"--output-gateway", filepath.Join(dir, "gateway.yaml"),
+				"--output-policy", filepath.Join(dir, "policy.json"),
+				"--agentgateway", binary,
+				"--lock-file", filepath.Join(root, "deploy", "agentgateway", "agentgateway.lock.json"),
+			}, &stdout, &stderr, nil)
+			if code != exitActive {
+				t.Fatalf("code %d out %s err %s", code, stdout.String(), stderr.String())
+			}
+			var line map[string]any
+			if err := json.Unmarshal(stdout.Bytes(), &line); err != nil {
+				t.Fatal(err)
+			}
+			if line["native_validated"] != true {
+				t.Fatalf("line %#v", line)
+			}
+			gw, err := os.ReadFile(filepath.Join(dir, "gateway.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := string(gw)
+			for _, needle := range []string{
+				"host: 'otel-collector:4318'",
+				"randomSampling: 0.25",
+				"clientSampling: 1.0",
+				`service.name: '"` + c.service + `"'`,
+			} {
+				if !strings.Contains(text, needle) {
+					t.Fatalf("missing %s", needle)
+				}
+			}
+			if c.egress != strings.Contains(text, "authz_decision_id: 'has(extauthz.decision_id)") {
+				t.Fatalf("authz attribute egress=%v\n%s", c.egress, text)
+			}
+		})
+	}
+}
+
 func compileNativeSpec(t *testing.T, spec string) map[string]any {
 	t.Helper()
 	home, err := os.UserHomeDir()

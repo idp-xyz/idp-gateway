@@ -22,7 +22,7 @@ const (
 )
 
 // requestPath 是在出站请求路径上的包：每一次出站调用都要等它们答完。
-var requestPath = []string{"internal/egressauthz", "internal/platform/workloadtls", "cmd/gateway-authz", "internal/providersigner", "cmd/provider-signer"}
+var requestPath = []string{"internal/egressauthz", "internal/platform/workloadtls", "internal/platform/otlp", "internal/platform/audit", "cmd/gateway-authz", "internal/providersigner", "cmd/provider-signer"}
 
 // notInDomain 是 domain 包不得导入的标准库包：规则不做 I/O，不认识传输协议，不写日志。
 var notInDomain = []string{"net", "net/http", "os", "os/exec", "io/fs", "log", "log/slog", "database/sql", "syscall"}

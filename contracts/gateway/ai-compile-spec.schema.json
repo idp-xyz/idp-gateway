@@ -112,7 +112,21 @@
           "items": { "type": "string", "minLength": 1 }
         },
         "jwks_file": { "type": "string", "minLength": 1 },
-        "notes": { "type": "string" }
+        "notes": { "type": "string" },
+        "tracing": { "$ref": "#/$defs/tracing" }
+      }
+    },
+    "tracing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "service_name"],
+      "properties": {
+        "host": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*:[1-9][0-9]*$" },
+        "protocol": { "type": "string", "enum": ["http", "grpc"] },
+        "path": { "type": "string", "pattern": "^/[^\\s?#]*$" },
+        "service_name": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{1,63}$" },
+        "random_sampling": { "type": "number", "minimum": 0, "maximum": 1 },
+        "client_sampling": { "type": "number", "minimum": 0, "maximum": 1 }
       }
     },
     "intent": {

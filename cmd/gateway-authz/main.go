@@ -47,6 +47,8 @@ import (
 	"go.idp.xyz/idp-gateway/internal/egressauthz/adapters/sfopenapi"
 	"go.idp.xyz/idp-gateway/internal/egressauthz/application"
 	"go.idp.xyz/idp-gateway/internal/egressauthz/ports"
+	"go.idp.xyz/idp-gateway/internal/platform/audit"
+	"go.idp.xyz/idp-gateway/internal/platform/otlp"
 	"go.idp.xyz/idp-gateway/internal/platform/workloadtls"
 )
 
@@ -87,6 +89,9 @@ type options struct {
 	gatekeeperCA           string
 	gatekeeperName         string
 	rateLimits             string
+	otlpTracesURL          string
+	auditLog               string
+	metricsListen          string
 }
 
 func parse(args []string, output io.Writer) (options, error) {
@@ -130,6 +135,9 @@ func parse(args []string, output io.Writer) (options, error) {
 	add(&o.gatekeeperName, "gatekeeper-name", "验证 PDP 一端证书时要对上的名字", false)
 	add(&o.rateLimits, "rate-limits", "按 Provider 账户限流的配额文件（JSON：version 与 buckets）。不设则不限流。"+
 		"文件里没有秘密，0644 或 0600 都可以；启动时读不成就不启动；文件被换掉之后重读，新文件读不成就沿用上一份", false)
+	add(&o.otlpTracesURL, "otlp-traces-url", "OTLP/HTTP JSON 的 traces 地址，例如 http://127.0.0.1:4318/v1/traces；不设则不导出", false)
+	add(&o.auditLog, "audit-log", "追加写入的审计 JSONL；权限须为 0600，不设则不写", false)
+	add(&o.metricsListen, "metrics-listen", "只提供 GET /metrics 的明文 HTTP 地址，例如 127.0.0.1:19091；不设则没有指标端口，也不把 /metrics 加到 mTLS 监听上", false)
 	if err := flags.Parse(args); err != nil {
 		return o, err
 	}
@@ -178,6 +186,14 @@ func parse(args []string, output io.Writer) (options, error) {
 	if o.revokerIdentity != "" && (o.revokerIdentity == o.gatewayIdentity || o.revokerIdentity == o.brokerIdentity) {
 		return o, errors.New("--revoker-identity must differ from --gateway-identity and --broker-identity: " +
 			"who asks for credentials may not be who lifts a revocation")
+	}
+	if o.otlpTracesURL != "" {
+		if err := otlp.ValidateEndpoint(o.otlpTracesURL); err != nil {
+			return o, fmt.Errorf("--otlp-traces-url: %w", err)
+		}
+	}
+	if strings.ContainsAny(o.auditLog, "\r\n") || strings.ContainsAny(o.metricsListen, "\r\n") {
+		return o, errors.New("--audit-log and --metrics-listen must be a single line")
 	}
 	return o, nil
 }
@@ -344,7 +360,23 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 	}
 	callers := httpapi.Callers{Gateway: o.gatewayIdentity, Broker: o.brokerIdentity, Revoker: o.revokerIdentity}
 	service := application.New(policy, credentials, revocations, options...)
-	var handler http.Handler = httpapi.New(service, callers, logger)
+	api := httpapi.New(service, callers, logger)
+	traces, sink, metrics, err := openAuthzTelemetry(o, service)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if traces != nil {
+			_ = traces.Close(context.Background())
+		}
+		if sink != nil {
+			_ = sink.Close()
+		}
+	}()
+	if o.otlpTracesURL != "" || o.auditLog != "" || o.metricsListen != "" {
+		api.WithTelemetry(httpapi.Telemetry{Service: "idp-gateway-authz", Traces: traces, Audit: sink, Metrics: metrics})
+	}
+	var handler http.Handler = api
 	var serverLog io.Writer = &serverLogWriter{logger: logger}
 	handler, serverLog, err = install(handler, serverLog, seams{listen: o.listen, callers: callers,
 		revocationsInMemory: inMemory, revocationsInFile: ledger, logger: logger})
@@ -352,8 +384,18 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 		return err
 	}
 
+	var metricsLn net.Listener
+	if o.metricsListen != "" {
+		metricsLn, err = net.Listen("tcp", o.metricsListen)
+		if err != nil {
+			return fmt.Errorf("--metrics-listen: %w", err)
+		}
+	}
 	listener, err := net.Listen("tcp", o.listen)
 	if err != nil {
+		if metricsLn != nil {
+			_ = metricsLn.Close()
+		}
 		return err
 	}
 	server := &http.Server{
@@ -374,25 +416,96 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 		"gateway_identity", o.gatewayIdentity, "broker_identity", o.brokerIdentity, "revoker_identity", o.revokerIdentity,
 		"grants", grantSource, "gatekeeper_mtls", pdpTLS != nil,
 		"rate_limits", rateLimits, "rate_limit_buckets", rateLimitBuckets)
+	if o.otlpTracesURL != "" || o.auditLog != "" || o.metricsListen != "" {
+		logger.Info("gateway-authz telemetry", "otlp", o.otlpTracesURL, "audit_log", o.auditLog, "metrics_listen", o.metricsListen)
+	}
 	if ready != nil {
 		ready(listener.Addr())
 	}
 
-	served := make(chan error, 1)
+	var metricsSrv *http.Server
+	served := make(chan error, 2)
 	go func() { served <- server.ServeTLS(listener, "", "") }()
+	if metricsLn != nil {
+		metricsSrv = &http.Server{
+			Handler:           metrics,
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       10 * time.Second,
+			WriteTimeout:      10 * time.Second,
+			IdleTimeout:       60 * time.Second,
+			MaxHeaderBytes:    64 << 10,
+			ErrorLog:          log.New(serverLog, "", 0),
+		}
+		go func() { served <- metricsSrv.Serve(metricsLn) }()
+	}
 	select {
 	case err := <-served:
+		stopCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = server.Shutdown(stopCtx)
+		if metricsSrv != nil {
+			_ = metricsSrv.Shutdown(stopCtx)
+		}
+		stop()
+		if errors.Is(err, http.ErrServerClosed) {
+			logger.Info("gateway-authz stopped")
+			return nil
+		}
 		return err
 	case <-ctx.Done():
 	}
-	// 停止接受新连接，等在途的判定答完。
+	// 停止接受新连接，等在途的判定答完。导出器在函数返回时刷出剩余 span。
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdown); err != nil {
 		return fmt.Errorf("shutdown: %w", err)
 	}
+	if metricsSrv != nil {
+		if err := metricsSrv.Shutdown(shutdown); err != nil {
+			return fmt.Errorf("metrics shutdown: %w", err)
+		}
+	}
 	logger.Info("gateway-authz stopped")
 	return nil
+}
+
+// openAuthzTelemetry 按三个可选开关打开导出器、审计文件和指标。任一失败时关掉已经打开的。
+func openAuthzTelemetry(o options, service *application.Service) (*otlp.Exporter, *audit.FileSink, *httpapi.AuthzMetrics, error) {
+	var traces *otlp.Exporter
+	var sink *audit.FileSink
+	var err error
+	closePartial := func() {
+		if traces != nil {
+			_ = traces.Close(context.Background())
+		}
+		if sink != nil {
+			_ = sink.Close()
+		}
+	}
+	if o.otlpTracesURL != "" {
+		traces, err = otlp.NewExporter(otlp.Config{Endpoint: o.otlpTracesURL, ServiceName: "idp-gateway-authz", ServiceVersion: buildFlavor})
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("--otlp-traces-url: %w", err)
+		}
+	}
+	if o.auditLog != "" {
+		sink, err = audit.Open(o.auditLog)
+		if err != nil {
+			closePartial()
+			return nil, nil, nil, fmt.Errorf("--audit-log: %w", err)
+		}
+	}
+	var metrics *httpapi.AuthzMetrics
+	if o.metricsListen != "" {
+		metrics = httpapi.NewAuthzMetrics(func() uint64 {
+			return service.RevocationEpoch(context.Background())
+		}, func() (uint64, uint64, uint64) {
+			if traces == nil {
+				return 0, 0, 0
+			}
+			return traces.Stats()
+		})
+	}
+	return traces, sink, metrics, nil
 }
 
 // credentialSources 依次问各个凭证来源：前一个没有这个账户的凭证，才问后一个。别的错误原样
