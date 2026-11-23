@@ -269,6 +269,7 @@ func (s IngressSpec) intentRaws() []map[string]any {
 	return out
 }
 
+// ingressRouteCount 只数业务路由。回读路由不计入，出站的 RouteCount 同样不计入 read-back。
 func ingressRouteCount(spec IngressSpec) int {
 	n := 0
 	for _, route := range spec.Routes {
@@ -305,6 +306,7 @@ func emitIngressGateway(spec IngressSpec) []byte {
 			routes = append(routes, ingressBusinessRoute(spec, names[i], method, route))
 		}
 	}
+	routes = append(routes, readBackRoute(spec.Pool.AdminAddr))
 	root := ym(
 		yp("config", ym(
 			yp("adminAddr", ys(spec.Pool.AdminAddr)),

@@ -347,16 +347,7 @@ func emitAIGateway(spec AISpec) []byte {
 			)),
 		)),
 		yp("llm", emitAILLM(spec, base)),
-		yp("routes", yq(ym(
-			yp("name", ys("read-back")),
-			yp("gateways", stringSeq([]string{"read-back"})),
-			yp("matches", yq(
-				ym(yp("path", ym(yp("exact", ys("/config_dump")))), yp("method", ys("GET"))),
-				ym(yp("path", ym(yp("exact", ys("/api/runtime")))), yp("method", ys("GET"))),
-			)),
-			yp("policies", ym(yp("timeout", ym(yp("requestTimeout", ys("2s")))))),
-			yp("backends", yq(ym(yp("host", ys(spec.Pool.AdminAddr))))),
-		))),
+		yp("routes", yq(readBackRoute(spec.Pool.AdminAddr))),
 	)
 	var buf bytes.Buffer
 	root.write(&buf, 0, false)

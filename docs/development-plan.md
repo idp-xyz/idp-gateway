@@ -281,7 +281,7 @@ flowchart TD
 
 ## 6. 没有排的
 
-- **Ingress 网关和 AI 网关。** 入口编译在 [ADR-0016](adr/ADR-0016.md) V1.1。AI 的 LLM 编译在同一篇 V1.2（2026-11-23）：回环上没有 JWT 是 401，相符的 JWT 把 `/llm` 前缀去掉并把密钥文件交给替身，调用方得到 HTTP 200。入口示例的监听在同一天启动过：没有 JWT 是 401，带 JWT 时停在示例上游的 DNS。两份示例里的主机名都不是产品常量。都没有加进 `compose.yml`，也没有当成产品池。`MCP`、`A2A` 和 Fabric 的批准没有做。
+- **Ingress 网关和 AI 网关。** 入口编译在 [ADR-0016](adr/ADR-0016.md) V1.1。AI 的 LLM 编译在同一篇 V1.2（2026-11-23）：回环上没有 JWT 是 401，相符的 JWT 把 `/llm` 前缀去掉并把密钥文件交给替身，调用方得到 HTTP 200。2026-11-23 把编译出的入口配置用 `gateway-control publish` 发到单机池，`deploy/compose/compose.yml` 没有改，替身在测试目录的叠加文件里。两次完整运行都是 14 个用例、52 项检查通过：没有 JWT 是 401，相符的 JWT 经 front 得到替身的 200，替身看到网关的客户端证书，调用方的 JWT 没有进替身。这不是验收通过，逐项在 [ADR-0016](adr/ADR-0016.md) V1.3。两份示例里的主机名都不是产品常量。都没有加进 `compose.yml`，也没有当成产品池。`MCP`、`A2A` 和 Fabric 的批准没有做。
 - **管理后台。** 范围冻结（[governance/README.md](governance/README.md)），解冻的条件之一是仓库所有者决定 ADR-0008。
 - **与 API Fabric 的发布对接。** 只有契约（`contracts/fabric/`）；要等第 4 节的编译器，和 Fabric 一侧。
 

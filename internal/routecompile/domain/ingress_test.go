@@ -23,8 +23,26 @@ func TestCompileIngressExample(t *testing.T) {
 			t.Fatalf("missing route %s\n%s", name, text)
 		}
 	}
-	if strings.Count(text, "- name: ") != 2 {
+	// 两条业务路由，加上回读路由。回读不计入 RouteCount。
+	if strings.Count(text, "- name: ") != 3 {
 		t.Fatalf("route name count\n%s", text)
+	}
+	getAt := strings.Index(text, "name: 'public-shipments-get-get'")
+	headAt := strings.Index(text, "name: 'public-shipments-get-head'")
+	backAt := strings.Index(text, "name: 'read-back'")
+	if getAt < 0 || headAt < getAt || backAt < headAt {
+		t.Fatalf("read-back route is not after the business routes\n%s", text)
+	}
+	for _, needle := range []string{
+		"exact: '/config_dump'",
+		"exact: '/api/runtime'",
+		"requestTimeout: '2s'",
+		"host: '" + spec.Pool.AdminAddr + "'",
+		"gateways:\n  - 'read-back'",
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("missing %s\n%s", needle, text)
+		}
 	}
 	for _, needle := range []string{
 		"api.cargopai.example",

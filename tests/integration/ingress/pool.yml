@@ -1,0 +1,58 @@
+# Laid over deploy/compose/compose.yml by pool.py. The pool file is not changed.
+# This adds the stand-in backend and one listener the published file does not name.
+#
+# standin: TLS, requires a client certificate from the pool CA, records each completed
+#          HTTP request. Its network alias is the spec's upstream_host (a DNS name; the
+#          compiler refuses a name without a dot). The gateway reaches it through the
+#          egress rules, which allow only hosts named in the published file.
+# outsider: a listener the published file does not name.
+services:
+  standin:
+    image: ${TOOLS_IMAGE:?}
+    command:
+      - python
+      - -u
+      - /opt/standin.py
+      - --cert
+      - /tls/server.crt
+      - --key
+      - /tls/server.key
+      - --client-ca
+      - /tls/client-ca.crt
+      - --bind
+      - 0.0.0.0
+      - --port
+      - "9443"
+      - --records
+      - /state/records.jsonl
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    user: "${GATEWAY_USER:?}"
+    volumes:
+      - "${STANDIN_SCRIPT:?}:/opt/standin.py:ro"
+      - "${STANDIN_CERT:?}:/tls/server.crt:ro"
+      - "${STANDIN_KEY:?}:/tls/server.key:ro"
+      - "${STANDIN_CLIENT_CA:?}:/tls/client-ca.crt:ro"
+      - "${STANDIN_STATE:?}:/state"
+    networks:
+      default:
+        aliases:
+          - stand-in.ingress.example
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 2s
+
+  outsider:
+    image: ${TOOLS_IMAGE:?}
+    command: ["python", "-m", "http.server", "8000", "--bind", "0.0.0.0", "--directory", "/tmp"]
+    user: "65534:65534"
+    tmpfs:
+      - /tmp
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 2s

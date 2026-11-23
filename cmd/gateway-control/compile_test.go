@@ -103,6 +103,11 @@ func TestCompileIngressExample(t *testing.T) {
 	if !strings.Contains(string(gw), "name: 'public-shipments-get-get'") || !strings.Contains(string(gw), "name: 'public-shipments-get-head'") {
 		t.Fatalf("gateway yaml missing example routes:\n%s", gw)
 	}
+	for _, needle := range []string{"name: 'read-back'", "exact: '/config_dump'", "exact: '/api/runtime'", "host: '127.0.0.1:15000'", "requestTimeout: '2s'"} {
+		if !strings.Contains(string(gw), needle) {
+			t.Fatalf("gateway yaml missing %s:\n%s", needle, gw)
+		}
+	}
 }
 
 func TestCompileIngressExampleNative(t *testing.T) {

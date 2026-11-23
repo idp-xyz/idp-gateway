@@ -44,7 +44,7 @@ func emitGateway(spec CompileSpec) []byte {
 	for _, route := range spec.Routes {
 		routes = append(routes, businessRoute(spec, route))
 	}
-	routes = append(routes, readBackRoute(spec))
+	routes = append(routes, readBackRoute(spec.Pool.AdminAddr))
 	root := ym(
 		yp("config", ym(
 			yp("adminAddr", ys(spec.Pool.AdminAddr)),
@@ -211,7 +211,9 @@ func backendPolicies(spec CompileSpec) *ynode {
 	return ym(pairs...)
 }
 
-func readBackRoute(spec CompileSpec) *ynode {
+// readBackRoute 是回读口上的那一条。出站、入口和 AI 用同一条：发布器靠它读
+// GET /config_dump 和 GET /api/runtime，转到 adminAddr。它不是业务路由。
+func readBackRoute(adminAddr string) *ynode {
 	return ym(
 		yp("name", ys("read-back")),
 		yp("gateways", stringSeq([]string{"read-back"})),
@@ -220,7 +222,7 @@ func readBackRoute(spec CompileSpec) *ynode {
 			ym(yp("path", ym(yp("exact", ys("/api/runtime")))), yp("method", ys("GET"))),
 		)),
 		yp("policies", ym(yp("timeout", ym(yp("requestTimeout", ys("2s")))))),
-		yp("backends", yq(ym(yp("host", ys(spec.Pool.AdminAddr))))),
+		yp("backends", yq(ym(yp("host", ys(adminAddr))))),
 	)
 }
 

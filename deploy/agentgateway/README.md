@@ -73,7 +73,7 @@ python3 scripts/agentgateway_release.py     # 要联网；只用标准库
 
 `agentgateway.local.example.yaml` 仅供展示 Standalone 路由语法轮廓，**并非可以直接暴露给业务网络的受保护 Gateway**：当前示例没有 JWT/ExtAuthZ、TLS、真实 Secret Manager 对接。它已通过 agentgateway 1.7.0 的 `--validate-only` 语法检查，但从未启动运行。只用于隔离本地 Mock 研究。
 
-**端口约定**：本机用到的端口是 `27610`（本示例）、`27611-27620`（黑盒套件，见 `tests/acceptance/blackbox/README.md`）、`27621-27623`（联调用的本机 Gatekeeper）、`27618-27622`（compose 套件）、`27630`（egressnet）、`27631-27634`（万邦的池）、`27641-27645`（顺丰国际的池）。这些都低于 Linux 临时端口范围（默认 32768–60999），不会被出站连接临时占用，也不用 3000/8080 这类常见开发端口。`27610` 为本示例监听端口。本示例的占位上游是一个文档保留地址（`192.0.2.1`，RFC 5737），那里没有任何服务。
+**端口约定**：本机用到的端口是 `27610`（本示例）、`27611-27620`（黑盒套件，见 `tests/acceptance/blackbox/README.md`）、`27621-27623`（联调用的本机 Gatekeeper）、`27618-27622`（compose 套件）、`27630`（egressnet）、`27631-27634`（万邦的池）、`27641-27645`（顺丰国际的池）、`27651-27654`（入口的池，见 `tests/integration/ingress/README.md`）。这些都低于 Linux 临时端口范围（默认 32768–60999），不会被出站连接临时占用，也不用 3000/8080 这类常见开发端口。`27610` 为本示例监听端口。本示例的占位上游是一个文档保留地址（`192.0.2.1`，RFC 5737），那里没有任何服务。
 
 agentgateway 的监听器不写 `bindAddress` 时对本机所有网卡开放，本示例写了 `bindAddress: 127.0.0.1`。在环境里没有 `SESSION_KEY` 时启动，它还会把生成的密钥写进配置文件；它的管理地址上还有能改运行配置的接口，默认会把改动写回配置文件，要关掉得设 `config.storage.mode: readOnly`。后两样本示例没有处理，处理过并跑过的写法见 `tests/acceptance/blackbox/README.md` 的"默认配置不安全的地方"。
 
