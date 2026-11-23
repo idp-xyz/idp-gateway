@@ -261,3 +261,58 @@ func sfRoutes() []RouteSpec {
 		routeBase("sfintl-labels-print", "labels.print", "POST", "/providers/sfintl/v1/label-prints", "exact", "/sfintl/v1/label-prints", TLSVerifyRequired),
 	}
 }
+
+func TestCredentialHeaderDefaultsToAuthorization(t *testing.T) {
+	baseline, err := Compile(wanbSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	same := wanbSpec()
+	same.Provider.CredentialHeader = "authorization"
+	again, err := Compile(same)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(again.GatewayYAML) != string(baseline.GatewayYAML) || string(again.PolicyJSON) != string(baseline.PolicyJSON) {
+		t.Fatal("写明 authorization 改变了编译结果")
+	}
+	if strings.Contains(string(baseline.PolicyJSON), "credential_header") {
+		t.Fatal("默认登记表写出了 credential_header")
+	}
+
+	spec := wanbSpec()
+	spec.Provider.CredentialHeader = "x-api-key"
+	art, err := Compile(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(art.GatewayYAML)
+	for _, needle := range []string{
+		`request.headers["x-api-key"].startsWith("Hc-OweDeveloper ")`,
+		"'x-api-key'",
+		`"x-api-key"`,
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("缺少 %s\n%s", needle, text)
+		}
+	}
+	if !strings.Contains(string(art.PolicyJSON), `"credential_header": "x-api-key"`) {
+		t.Fatalf("登记表没有凭证头：%s", art.PolicyJSON)
+	}
+	if strings.Contains(text, `request.headers["authorization"].startsWith`) {
+		t.Fatal("自定义头仍然检查 authorization")
+	}
+}
+
+func TestCredentialHeaderIsRejected(t *testing.T) {
+	for _, name := range []string{"X-Api-Key", "cookie", "x-idp-token", "x-forwarded-for", "not a header", ""} {
+		if name == "" {
+			continue
+		}
+		spec := wanbSpec()
+		spec.Provider.CredentialHeader = name
+		if err := mustRefuse(t, spec); !refusalHas(err, "CREDENTIAL_HEADER") {
+			t.Fatalf("%q: %v", name, err)
+		}
+	}
+}

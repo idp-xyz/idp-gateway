@@ -164,7 +164,7 @@ func extAuthz(spec CompileSpec, route RouteSpec) *ynode {
 				yp("traceparent", ys(`request.headers["traceparent"]`)),
 			)),
 			yp("metadata", ym(yp("decision_id", ys(`response.headers["x-idp-decision-id"]`)))),
-			yp("includeResponseHeaders", stringSeq([]string{"authorization"})),
+			yp("includeResponseHeaders", stringSeq([]string{spec.Provider.credentialHeader()})),
 		)))),
 	)
 }
@@ -175,8 +175,8 @@ func backendPolicies(spec CompileSpec) *ynode {
 		pairs = append(pairs, yp("backendTLS", certBundle(spec.Pool.TLSDir, spec.Provider.BackendTLS.Hostname)))
 	}
 	pairs = append(pairs,
-		yp("authorization", ym(yp("rules", yq(ym(yp("allow", ys(backendAuthRule(spec.Provider.CredentialScheme)))))))),
-		yp("transformations", ym(yp("request", ym(yp("replace", ys(reviewedHeaderFilter)))))),
+		yp("authorization", ym(yp("rules", yq(ym(yp("allow", ys(backendAuthRule(spec.Provider.CredentialScheme, spec.Provider.credentialHeader())))))))),
+		yp("transformations", ym(yp("request", ym(yp("replace", ys(headerFilter(spec.Provider.credentialHeader()))))))),
 	)
 	header := []ypair{yp("remove", stringSeq(removedRequestHeaders))}
 	if len(spec.Provider.SetRequestHeaders) > 0 {
@@ -257,8 +257,34 @@ func pathRule(route RouteSpec) string {
 	return "request.path == " + strconv.Quote(route.LogicalPath)
 }
 
-func backendAuthRule(scheme string) string {
-	return "request.headers[" + strconv.Quote("authorization") + "].startsWith(" + strconv.Quote(scheme) + ")"
+func (p ProviderSpec) credentialHeader() string {
+	header, err := canonicalCredentialHeader(p.CredentialHeader)
+	if err != nil {
+		return "authorization"
+	}
+	return header
+}
+
+// policyCredentialHeader 在登记表里省略 authorization，旧文件因此不用改。
+func policyCredentialHeader(header string) string {
+	if header == "authorization" {
+		return ""
+	}
+	return header
+}
+
+// headerFilter 是转发给上游的请求头名单。默认名单与评审过的配置逐字相同。
+func headerFilter(header string) string {
+	if header == "authorization" {
+		return reviewedHeaderFilter
+	}
+	names := []string{"accept", "authorization", "content-type", "idempotency-key", "traceparent", "x-client-trace", header}
+	sort.Strings(names)
+	return `request.headers.filterKeys(k, k in ["` + strings.Join(names, `", "`) + `"])`
+}
+
+func backendAuthRule(scheme, header string) string {
+	return "request.headers[" + strconv.Quote(header) + "].startsWith(" + strconv.Quote(scheme) + ")"
 }
 
 func regexEscape(path string) string {
@@ -346,6 +372,7 @@ func emitPolicy(spec CompileSpec) []byte {
 			UpstreamHostname:     spec.Provider.UpstreamHost,
 			Port:                 spec.Provider.UpstreamPort,
 			CredentialBindingRef: spec.Provider.CredentialBindingRef,
+			CredentialHeader:     policyCredentialHeader(spec.Provider.credentialHeader()),
 			AllowedTenants:       append([]string(nil), spec.Access.AllowedTenants...),
 			AccountsByTenant:     copyAccounts(spec.Access.AccountsByTenant),
 			AllowedServiceIDs:    append([]string(nil), spec.Access.AllowedServiceIDs...),
@@ -383,6 +410,7 @@ type policyRow struct {
 	UpstreamHostname     string              `json:"upstream_hostname"`
 	Port                 int                 `json:"port"`
 	CredentialBindingRef string              `json:"credential_binding_ref"`
+	CredentialHeader     string              `json:"credential_header,omitempty"`
 	AllowedTenants       []string            `json:"allowed_tenants"`
 	AccountsByTenant     map[string][]string `json:"accounts_by_tenant"`
 	AllowedServiceIDs    []string            `json:"allowed_service_ids"`

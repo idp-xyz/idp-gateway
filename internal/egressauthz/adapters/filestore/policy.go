@@ -33,6 +33,7 @@ type operationRow struct {
 	AllowedTenants       []string            `json:"allowed_tenants"`
 	AllowedServiceIDs    []string            `json:"allowed_service_ids"`
 	AccountsByTenant     map[string][]string `json:"accounts_by_tenant"`
+	CredentialHeader     string              `json:"credential_header,omitempty"`
 }
 
 // LoadPolicy 读登记表文件，格式见 contracts/gateway/policies/egress-policy.example.json。
@@ -69,7 +70,13 @@ func parsePolicy(raw []byte) (domain.Policy, error) {
 	}
 	policy := domain.Policy{Version: *doc.Version}
 	for _, row := range doc.Operations {
-		policy.Operations = append(policy.Operations, domain.Operation(row))
+		op := domain.Operation(row)
+		header, err := domain.CanonicalCredentialHeader(op.CredentialHeader)
+		if err != nil {
+			return domain.Policy{}, err
+		}
+		op.CredentialHeader = header
+		policy.Operations = append(policy.Operations, op)
 	}
 	return policy, nil
 }

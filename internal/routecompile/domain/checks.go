@@ -120,6 +120,9 @@ func providerIssues(p ProviderSpec) []Issue {
 	if !credentialSchemePattern.MatchString(p.CredentialScheme) {
 		add("CREDENTIAL_SCHEME", "credential_scheme must be a token followed by a single space")
 	}
+	if _, err := canonicalCredentialHeader(p.CredentialHeader); err != nil {
+		add("CREDENTIAL_HEADER", err.Error())
+	}
 	if !strings.HasPrefix(p.CredentialBindingRef, "gatekeeper:") {
 		add("CREDENTIAL_BINDING", "credential_binding_ref must start with gatekeeper:")
 	}

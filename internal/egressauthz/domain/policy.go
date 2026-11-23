@@ -6,6 +6,7 @@
 package domain
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 )
@@ -43,6 +44,8 @@ type Operation struct {
 	AllowedTenants       []string
 	AllowedServiceIDs    []string
 	AccountsByTenant     map[string][]string
+	// CredentialHeader 是放行时写凭证的响应头。空串表示 authorization。
+	CredentialHeader string
 }
 
 // Policy 是一个版本的登记表。
@@ -67,11 +70,13 @@ const (
 	ReasonNoMatchingOperation      Reason = "NO_MATCHING_ALLOWLIST_OPERATION"
 )
 
-// Decision 是一次判定的结果。CredentialBindingRef 只在放行时有值。
+// Decision 是一次判定的结果。CredentialBindingRef 和 CredentialHeader 只在放行时有值。
+// CredentialHeader 为空表示凭证写在 authorization。
 type Decision struct {
 	Allowed              bool
 	Reason               Reason
 	CredentialBindingRef string
+	CredentialHeader     string
 }
 
 func deny(reason Reason) Decision { return Decision{Reason: reason} }
@@ -111,7 +116,7 @@ func (p Policy) Evaluate(principal *Principal, req Request) Decision {
 		if op.CredentialBindingRef == "" {
 			return deny(ReasonCredentialBindingMissing)
 		}
-		return Decision{Allowed: true, Reason: ReasonActiveAccountGrant, CredentialBindingRef: op.CredentialBindingRef}
+		return Decision{Allowed: true, Reason: ReasonActiveAccountGrant, CredentialBindingRef: op.CredentialBindingRef, CredentialHeader: op.CredentialHeader}
 	}
 	return deny(ReasonNoMatchingOperation)
 }
@@ -183,4 +188,36 @@ func (op Operation) matches(req Request) bool {
 	}
 	// 按段比较前缀：/a/b 在 /a 之下，/ab 不在。
 	return req.Path == op.PathPrefix || strings.HasPrefix(req.Path, op.PathPrefix+"/")
+}
+
+// CanonicalCredentialHeader 把登记表里的凭证头收成运行时用的名字。
+// 空串和 authorization 都返回空串，表示写 Authorization。不允许的名字返回错误。
+func CanonicalCredentialHeader(name string) (string, error) {
+	if name == "" || name == "authorization" {
+		return "", nil
+	}
+	if !credentialHeaderName(name) {
+		return "", fmt.Errorf("credential_header %q is not a permitted header name", name)
+	}
+	return name, nil
+}
+
+func credentialHeaderName(name string) bool {
+	if len(name) == 0 || name[0] < 'a' || name[0] > 'z' || strings.HasPrefix(name, "x-idp-") {
+		return false
+	}
+	for _, c := range name {
+		if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' {
+			continue
+		}
+		return false
+	}
+	switch name {
+	case "cookie", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+		"te", "trailer", "transfer-encoding", "upgrade",
+		"x-provider-account", "x-forwarded-host", "x-forwarded-for", "x-forwarded-proto", "forwarded",
+		"x-idp-verified-subject", "x-idp-verified-tenant", "x-idp-verified-env":
+		return false
+	}
+	return true
 }

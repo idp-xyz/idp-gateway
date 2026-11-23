@@ -15,6 +15,36 @@ var envReference = regexp.MustCompile(`\$\{|\$[A-Z_]`)
 // 凭证方案必须是一个词加一个结尾空格，和网关里 startsWith 的前缀一致。
 var credentialSchemePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]* $`)
 
+// 凭证头是一个小写的 HTTP 头名。空串和 authorization 都表示原来的 Authorization。
+var credentialHeaderPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
+// canonicalCredentialHeader 把规格里的凭证头收成编译时用的名字。
+// 空串和 authorization 都是 authorization。别的名字必须是小写头名，并且不是会被删掉的、
+// 逐跳的、cookie，或 x-idp- 开头的头。凭证只放在这个请求头里，不放进查询参数。
+func canonicalCredentialHeader(name string) (string, error) {
+	if name == "" || name == "authorization" {
+		return "authorization", nil
+	}
+	if !credentialHeaderPattern.MatchString(name) || strings.HasPrefix(name, "x-idp-") || forbiddenCredentialHeader(name) {
+		return "", fmt.Errorf("credential_header %q is not a permitted header name", name)
+	}
+	return name, nil
+}
+
+func forbiddenCredentialHeader(name string) bool {
+	switch name {
+	case "cookie", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+		"te", "trailer", "transfer-encoding", "upgrade":
+		return true
+	}
+	for _, removed := range removedRequestHeaders {
+		if name == removed {
+			return true
+		}
+	}
+	return false
+}
+
 // 评审过的请求头删除名单。承运商两份配置用的都是这九个，不是更多。
 var removedRequestHeaders = []string{
 	"x-provider-account",
@@ -89,11 +119,14 @@ type AccessLogSpec struct {
 
 // ProviderSpec 是这一家承运商在这个池上的上游和凭证方案。
 type ProviderSpec struct {
-	ProviderID           string            `json:"provider_id"`
-	PolicyVersion        string            `json:"policy_version"`
-	EnforceTLSUpstream   bool              `json:"enforce_tls_upstream"`
-	CredentialScheme     string            `json:"credential_scheme"`
-	CredentialBindingRef string            `json:"credential_binding_ref"`
+	ProviderID           string `json:"provider_id"`
+	PolicyVersion        string `json:"policy_version"`
+	EnforceTLSUpstream   bool   `json:"enforce_tls_upstream"`
+	CredentialScheme     string `json:"credential_scheme"`
+	CredentialBindingRef string `json:"credential_binding_ref"`
+	// CredentialHeader 是上游要的凭证头。不写、空串、authorization 都表示 Authorization。
+	// 凭证只放在这个请求头里，不放进查询参数。
+	CredentialHeader     string            `json:"credential_header,omitempty"`
 	UpstreamHost         string            `json:"upstream_host"`
 	UpstreamPort         int               `json:"upstream_port"`
 	RewriteAuthority     string            `json:"rewrite_authority"`
