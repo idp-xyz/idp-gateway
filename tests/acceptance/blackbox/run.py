@@ -1749,7 +1749,9 @@ def _(c):
             lifted['status'] == 200 and body_json(lifted) == {'account_id': 'account-blue', 'revoked': False, 'changed': True, 'revocation_epoch': epoch + 2})
     c.check('blue is allowed again', gw('GET', TRACKING + '/TRK-1', blue())['status'] == 200)
     on_disk = json.loads(REVOCATIONS.read_text(encoding='utf-8'))
-    c.check('the file gateway-authz keeps says the same: nothing revoked, at that epoch', on_disk == {'epoch': epoch + 2, 'revoked_accounts': {}})
+    # Since ADR-0012 V1.3 the file holds two tables, and gateway-authz writes both: an empty one is {}.
+    c.check('the file gateway-authz keeps says the same: nothing revoked, nothing banned, at that epoch',
+            on_disk == {'epoch': epoch + 2, 'revoked_accounts': {}, 'banned_operations': {}})
     said = (RUN / 'gateway-authz.log').read_text(encoding='utf-8', errors='replace')
     c.check('gateway-authz logged the revocation with who made it and why',
             any('"msg":"egress revocation"' in line and '"action":"revoke"' in line and pki.ID['revoker'] in line
