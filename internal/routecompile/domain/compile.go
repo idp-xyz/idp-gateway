@@ -18,9 +18,47 @@ var credentialSchemePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]* $`)
 // 凭证头是一个小写的 HTTP 头名。空串和 authorization 都表示原来的 Authorization。
 var credentialHeaderPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
+// 凭证用的查询参数名。只收不需要转义的字符。
+var credentialQueryParameterPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,63}$`)
+
+// credentialPlacement 是凭证落在上游请求上的位置。
+//
+// 默认是 Authorization 头：网关把 PDP 应答里的这一个头复制到上游请求上（ADR-0008 第 4 条）。
+// 调用方的 JWT 在验签之后已经被网关拿掉，所以那时请求上的 Authorization 只能来自 PDP。
+//
+// 别的请求头和查询参数没有这个前提：调用方可以自己带一个同名的头或参数。在锁定的 1.7.0 上量过，
+// PDP 放行却没有交出凭证时，复制响应头的写法会让调用方自带的值通过兜底规则到达上游。所以这两种
+// 位置不复制响应头：凭证读进 extauthz.credential，核对方案前缀，去掉前缀，再由 backendAuth 放上去。
+// 同一情形下那种写法答 403。上游收不到 Authorization。
+type credentialPlacement struct {
+	header string
+	query  string
+}
+
+// copied 报告是不是默认的那一种：复制 Authorization 响应头。
+func (p credentialPlacement) copied() bool { return p.query == "" && p.header == "authorization" }
+
+// placementOf 读出规格里凭证的位置。请求头和查询参数只能选一样。
+func placementOf(p ProviderSpec) (credentialPlacement, error) {
+	if p.CredentialQueryParameter != "" {
+		if p.CredentialHeader != "" {
+			return credentialPlacement{}, fmt.Errorf("credential_header and credential_query_parameter cannot both be set")
+		}
+		if !credentialQueryParameterPattern.MatchString(p.CredentialQueryParameter) {
+			return credentialPlacement{}, fmt.Errorf("credential_query_parameter %q is not a permitted parameter name", p.CredentialQueryParameter)
+		}
+		return credentialPlacement{query: p.CredentialQueryParameter}, nil
+	}
+	header, err := canonicalCredentialHeader(p.CredentialHeader)
+	if err != nil {
+		return credentialPlacement{}, err
+	}
+	return credentialPlacement{header: header}, nil
+}
+
 // canonicalCredentialHeader 把规格里的凭证头收成编译时用的名字。
 // 空串和 authorization 都是 authorization。别的名字必须是小写头名，并且不是会被删掉的、
-// 逐跳的、cookie，或 x-idp- 开头的头。凭证只放在这个请求头里，不放进查询参数。
+// 逐跳的、cookie，或 x-idp- 开头的头。
 func canonicalCredentialHeader(name string) (string, error) {
 	if name == "" || name == "authorization" {
 		return "authorization", nil
@@ -124,18 +162,21 @@ type ProviderSpec struct {
 	EnforceTLSUpstream   bool   `json:"enforce_tls_upstream"`
 	CredentialScheme     string `json:"credential_scheme"`
 	CredentialBindingRef string `json:"credential_binding_ref"`
-	// CredentialHeader 是上游要的凭证头。不写、空串、authorization 都表示 Authorization。
-	// 凭证只放在这个请求头里，不放进查询参数。
-	CredentialHeader     string            `json:"credential_header,omitempty"`
-	UpstreamHost         string            `json:"upstream_host"`
-	UpstreamPort         int               `json:"upstream_port"`
-	RewriteAuthority     string            `json:"rewrite_authority"`
-	BackendTLS           *BackendTLSSpec   `json:"backend_tls,omitempty"`
-	SetRequestHeaders    map[string]string `json:"set_request_headers,omitempty"`
-	RouteTimeout         string            `json:"route_timeout"`
-	PlainHTTPSandboxHost string            `json:"plain_http_sandbox_host,omitempty"`
-	InternalBackendHost  string            `json:"internal_backend_host,omitempty"`
-	LocalRateLimit       []RateLimitSpec   `json:"local_rate_limit,omitempty"`
+	// CredentialHeader 是上游要的凭证头。不写、空串、authorization 都表示 Authorization，
+	// 上游收到带方案前缀的整个值。写成别的头名时，上游在那个头里收到去掉方案前缀的值。
+	CredentialHeader string `json:"credential_header,omitempty"`
+	// CredentialQueryParameter 是上游要的凭证查询参数。上游收到去掉方案前缀的值，
+	// 调用方自带的同名参数被换掉。不能和 CredentialHeader 一起写。
+	CredentialQueryParameter string            `json:"credential_query_parameter,omitempty"`
+	UpstreamHost             string            `json:"upstream_host"`
+	UpstreamPort             int               `json:"upstream_port"`
+	RewriteAuthority         string            `json:"rewrite_authority"`
+	BackendTLS               *BackendTLSSpec   `json:"backend_tls,omitempty"`
+	SetRequestHeaders        map[string]string `json:"set_request_headers,omitempty"`
+	RouteTimeout             string            `json:"route_timeout"`
+	PlainHTTPSandboxHost     string            `json:"plain_http_sandbox_host,omitempty"`
+	InternalBackendHost      string            `json:"internal_backend_host,omitempty"`
+	LocalRateLimit           []RateLimitSpec   `json:"local_rate_limit,omitempty"`
 }
 
 // BackendTLSSpec 表示到上游要做双向 TLS。证书文件名由池的 tls_dir 决定，这里只写校验用的主机名。

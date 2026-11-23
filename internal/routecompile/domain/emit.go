@@ -141,6 +141,31 @@ func businessRoute(spec CompileSpec, route RouteSpec) *ynode {
 
 func extAuthz(spec CompileSpec, route RouteSpec) *ynode {
 	env := strconv.Quote(spec.Pool.Environment)
+	// PDP 那一跳只有一种写法：凭证在 Authorization 应答头里（contracts/gatekeeper/openapi.yaml）。
+	// 默认把这个头复制到上游请求上。凭证要放在别处时不复制，只把它读进 extauthz.credential。
+	metadata := []ypair{yp("decision_id", ys(`response.headers["x-idp-decision-id"]`))}
+	var copyHeaders []ypair
+	if spec.Provider.placement().copied() {
+		copyHeaders = []ypair{yp("includeResponseHeaders", stringSeq([]string{"authorization"}))}
+	} else {
+		metadata = append(metadata, yp("credential", ys(`response.headers["authorization"]`)))
+	}
+	exchange := append([]ypair{
+		yp("path", ys(strconv.Quote("/v1/extauthz/check"))),
+		yp("addRequestHeaders", ym(
+			yp("x-idp-verified-subject", ys("jwt.sub")),
+			yp("x-idp-verified-tenant", ys("jwt.tenant_id")),
+			yp("x-idp-verified-env", ys(env)),
+			yp("x-idp-route-id", ys(strconv.Quote(route.RouteID))),
+			yp("x-idp-provider-id", ys(strconv.Quote(spec.Provider.ProviderID))),
+			yp("x-idp-operation-id", ys(strconv.Quote(route.OperationID))),
+			yp("x-idp-environment", ys(env)),
+			yp("x-idp-method", ys("request.method")),
+			yp("x-idp-path", ys("request.path")),
+			yp("traceparent", ys(`request.headers["traceparent"]`)),
+		)),
+		yp("metadata", ym(metadata...)),
+	}, copyHeaders...)
 	return ym(
 		yp("host", ys(spec.Pool.ExtAuthz.Host)),
 		yp("failureMode", ym(yp("denyWithStatus", yi(503)))),
@@ -149,23 +174,7 @@ func extAuthz(spec CompileSpec, route RouteSpec) *ynode {
 			yp("backendTLS", certBundle(spec.Pool.TLSDir, spec.Pool.ExtAuthz.Hostname)),
 			yp("http", ym(yp("requestTimeout", ys(spec.Pool.ExtAuthz.Timeout)))),
 		)),
-		yp("protocol", ym(yp("http", ym(
-			yp("path", ys(strconv.Quote("/v1/extauthz/check"))),
-			yp("addRequestHeaders", ym(
-				yp("x-idp-verified-subject", ys("jwt.sub")),
-				yp("x-idp-verified-tenant", ys("jwt.tenant_id")),
-				yp("x-idp-verified-env", ys(env)),
-				yp("x-idp-route-id", ys(strconv.Quote(route.RouteID))),
-				yp("x-idp-provider-id", ys(strconv.Quote(spec.Provider.ProviderID))),
-				yp("x-idp-operation-id", ys(strconv.Quote(route.OperationID))),
-				yp("x-idp-environment", ys(env)),
-				yp("x-idp-method", ys("request.method")),
-				yp("x-idp-path", ys("request.path")),
-				yp("traceparent", ys(`request.headers["traceparent"]`)),
-			)),
-			yp("metadata", ym(yp("decision_id", ys(`response.headers["x-idp-decision-id"]`)))),
-			yp("includeResponseHeaders", stringSeq([]string{spec.Provider.credentialHeader()})),
-		)))),
+		yp("protocol", ym(yp("http", ym(exchange...)))),
 	)
 }
 
@@ -174,10 +183,26 @@ func backendPolicies(spec CompileSpec) *ynode {
 	if spec.Provider.BackendTLS != nil {
 		pairs = append(pairs, yp("backendTLS", certBundle(spec.Pool.TLSDir, spec.Provider.BackendTLS.Hostname)))
 	}
-	pairs = append(pairs,
-		yp("authorization", ym(yp("rules", yq(ym(yp("allow", ys(backendAuthRule(spec.Provider.CredentialScheme, spec.Provider.credentialHeader())))))))),
-		yp("transformations", ym(yp("request", ym(yp("replace", ys(headerFilter(spec.Provider.credentialHeader()))))))),
-	)
+	placement := spec.Provider.placement()
+	scheme := spec.Provider.CredentialScheme
+	if placement.copied() {
+		pairs = append(pairs,
+			yp("authorization", ym(yp("rules", yq(ym(yp("allow", ys(backendAuthRule(scheme)))))))),
+			yp("transformations", ym(yp("request", ym(yp("replace", ys(reviewedHeaderFilter)))))),
+		)
+	} else {
+		// 这条规则在 backendAuth 之前求值：那时凭证还不在请求上，所以看的是 extauthz.credential。
+		// backendAuth 把去掉方案前缀的值放到指定位置，调用方自带的同名头或参数被换掉。
+		// 转发名单在 backendAuth 之后求值，所以凭证头要列在里面；Authorization 不在里面。
+		pairs = append(pairs,
+			yp("authorization", ym(yp("rules", yq(ym(yp("allow", ys(placedCredentialRule(scheme)))))))),
+			yp("backendAuth", ym(yp("key", ym(
+				yp("expression", ys("extauthz.credential.stripPrefix("+strconv.Quote(scheme)+")")),
+				yp("location", placement.location()),
+			)))),
+			yp("transformations", ym(yp("request", ym(yp("replace", ys(placedHeaderFilter(placement))))))),
+		)
+	}
 	header := []ypair{yp("remove", stringSeq(removedRequestHeaders))}
 	if len(spec.Provider.SetRequestHeaders) > 0 {
 		header = append([]ypair{yp("set", stringMap(spec.Provider.SetRequestHeaders))}, header...)
@@ -257,34 +282,43 @@ func pathRule(route RouteSpec) string {
 	return "request.path == " + strconv.Quote(route.LogicalPath)
 }
 
-func (p ProviderSpec) credentialHeader() string {
-	header, err := canonicalCredentialHeader(p.CredentialHeader)
+// placement 是通过了 specIssues 的规格里凭证的位置。规格没有通过检查时回到默认的 Authorization。
+func (p ProviderSpec) placement() credentialPlacement {
+	placement, err := placementOf(p)
 	if err != nil {
-		return "authorization"
+		return credentialPlacement{header: "authorization"}
 	}
-	return header
+	return placement
 }
 
-// policyCredentialHeader 在登记表里省略 authorization，旧文件因此不用改。
-func policyCredentialHeader(header string) string {
-	if header == "authorization" {
-		return ""
+// location 是 backendAuth 放凭证的地方。只用在不复制响应头的两种位置上。
+func (p credentialPlacement) location() *ynode {
+	if p.query != "" {
+		return ym(yp("queryParameter", ym(yp("name", ys(p.query)))))
 	}
-	return header
+	return ym(yp("header", ym(yp("name", ys(p.header)))))
 }
 
-// headerFilter 是转发给上游的请求头名单。默认名单与评审过的配置逐字相同。
-func headerFilter(header string) string {
-	if header == "authorization" {
-		return reviewedHeaderFilter
+// placedHeaderFilter 是凭证不在 Authorization 里时转发给上游的请求头名单。
+// 里面没有 authorization：这种路由上，上游不该收到这个头。
+func placedHeaderFilter(p credentialPlacement) string {
+	names := []string{"accept", "content-type", "idempotency-key", "traceparent", "x-client-trace"}
+	if p.query == "" {
+		names = append(names, p.header)
 	}
-	names := []string{"accept", "authorization", "content-type", "idempotency-key", "traceparent", "x-client-trace", header}
 	sort.Strings(names)
 	return `request.headers.filterKeys(k, k in ["` + strings.Join(names, `", "`) + `"])`
 }
 
-func backendAuthRule(scheme, header string) string {
-	return "request.headers[" + strconv.Quote(header) + "].startsWith(" + strconv.Quote(scheme) + ")"
+func backendAuthRule(scheme string) string {
+	return "request.headers[" + strconv.Quote("authorization") + "].startsWith(" + strconv.Quote(scheme) + ")"
+}
+
+// placedCredentialRule 要求 PDP 交出了凭证、方案前缀对得上、前缀后面还有内容。
+// 没有交出凭证时 extauthz.credential 不存在，这条规则不放行，调用方自带的值到不了上游。
+func placedCredentialRule(scheme string) string {
+	return "has(extauthz.credential) && extauthz.credential.startsWith(" + strconv.Quote(scheme) +
+		") && size(extauthz.credential) > " + strconv.Itoa(len(scheme))
 }
 
 func regexEscape(path string) string {
@@ -372,7 +406,6 @@ func emitPolicy(spec CompileSpec) []byte {
 			UpstreamHostname:     spec.Provider.UpstreamHost,
 			Port:                 spec.Provider.UpstreamPort,
 			CredentialBindingRef: spec.Provider.CredentialBindingRef,
-			CredentialHeader:     policyCredentialHeader(spec.Provider.credentialHeader()),
 			AllowedTenants:       append([]string(nil), spec.Access.AllowedTenants...),
 			AccountsByTenant:     copyAccounts(spec.Access.AccountsByTenant),
 			AllowedServiceIDs:    append([]string(nil), spec.Access.AllowedServiceIDs...),
@@ -410,7 +443,6 @@ type policyRow struct {
 	UpstreamHostname     string              `json:"upstream_hostname"`
 	Port                 int                 `json:"port"`
 	CredentialBindingRef string              `json:"credential_binding_ref"`
-	CredentialHeader     string              `json:"credential_header,omitempty"`
 	AllowedTenants       []string            `json:"allowed_tenants"`
 	AccountsByTenant     map[string][]string `json:"accounts_by_tenant"`
 	AllowedServiceIDs    []string            `json:"allowed_service_ids"`

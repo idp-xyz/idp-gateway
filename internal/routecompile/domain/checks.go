@@ -120,8 +120,9 @@ func providerIssues(p ProviderSpec) []Issue {
 	if !credentialSchemePattern.MatchString(p.CredentialScheme) {
 		add("CREDENTIAL_SCHEME", "credential_scheme must be a token followed by a single space")
 	}
-	if _, err := canonicalCredentialHeader(p.CredentialHeader); err != nil {
-		add("CREDENTIAL_HEADER", err.Error())
+	placement, err := placementOf(p)
+	if err != nil {
+		add("CREDENTIAL_LOCATION", err.Error())
 	}
 	if !strings.HasPrefix(p.CredentialBindingRef, "gatekeeper:") {
 		add("CREDENTIAL_BINDING", "credential_binding_ref must start with gatekeeper:")
@@ -161,6 +162,10 @@ func providerIssues(p ProviderSpec) []Issue {
 	for key, value := range p.SetRequestHeaders {
 		if !headerName(key) || value == "" || strings.ContainsAny(value, "\n\r") {
 			add("REQUEST_HEADER", "set_request_headers has an unacceptable name or value")
+		}
+		// 这些头是在凭证放上去之后才写的：同名的一项会把 PDP 交出的凭证换成规格里的常量。
+		if err == nil && (key == "authorization" || key == placement.header) {
+			add("REQUEST_HEADER", "set_request_headers must not name the credential header")
 		}
 	}
 	for _, limit := range p.LocalRateLimit {

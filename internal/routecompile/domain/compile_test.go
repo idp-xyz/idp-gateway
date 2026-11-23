@@ -262,7 +262,8 @@ func sfRoutes() []RouteSpec {
 	}
 }
 
-func TestCredentialHeaderDefaultsToAuthorization(t *testing.T) {
+// 不写凭证位置，或者写明 authorization，编出来的和评审过的两份配置是同一份字节。
+func TestCredentialDefaultsToTheAuthorizationHeader(t *testing.T) {
 	baseline, err := Compile(wanbSpec())
 	if err != nil {
 		t.Fatal(err)
@@ -276,11 +277,30 @@ func TestCredentialHeaderDefaultsToAuthorization(t *testing.T) {
 	if string(again.GatewayYAML) != string(baseline.GatewayYAML) || string(again.PolicyJSON) != string(baseline.PolicyJSON) {
 		t.Fatal("写明 authorization 改变了编译结果")
 	}
-	if strings.Contains(string(baseline.PolicyJSON), "credential_header") {
-		t.Fatal("默认登记表写出了 credential_header")
+	text := string(baseline.GatewayYAML)
+	for _, needle := range []string{
+		`request.headers["authorization"].startsWith("Hc-OweDeveloper ")`,
+		"includeResponseHeaders:",
+		reviewedHeaderFilter,
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("默认配置缺少 %s", needle)
+		}
 	}
+	for _, banned := range []string{"backendAuth", "extauthz.credential", "credential: "} {
+		if strings.Contains(text, banned) {
+			t.Fatalf("默认配置里出现了 %s", banned)
+		}
+	}
+	if strings.Contains(string(baseline.PolicyJSON), "credential_header") || strings.Contains(string(baseline.PolicyJSON), "credential_query_parameter") {
+		t.Fatal("登记表里出现了凭证位置：PDP 那一跳只用 Authorization 应答头")
+	}
+}
 
+// 凭证放在别的请求头里：不复制响应头，凭证读进 extauthz.credential，去掉方案前缀后由 backendAuth 放上去。
+func TestCredentialPlacedInAnotherHeader(t *testing.T) {
 	spec := wanbSpec()
+	spec.Provider.CredentialScheme = "Bearer "
 	spec.Provider.CredentialHeader = "x-api-key"
 	art, err := Compile(spec)
 	if err != nil {
@@ -288,31 +308,111 @@ func TestCredentialHeaderDefaultsToAuthorization(t *testing.T) {
 	}
 	text := string(art.GatewayYAML)
 	for _, needle := range []string{
-		`request.headers["x-api-key"].startsWith("Hc-OweDeveloper ")`,
-		"'x-api-key'",
-		`"x-api-key"`,
+		`credential: 'response.headers["authorization"]'`,
+		`allow: 'has(extauthz.credential) && extauthz.credential.startsWith("Bearer ") && size(extauthz.credential) > 7'`,
+		`expression: 'extauthz.credential.stripPrefix("Bearer ")'`,
+		"header:\n",
+		"name: 'x-api-key'",
+		`k in ["accept", "content-type", "idempotency-key", "traceparent", "x-api-key", "x-client-trace"]`,
 	} {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("缺少 %s\n%s", needle, text)
 		}
 	}
-	if !strings.Contains(string(art.PolicyJSON), `"credential_header": "x-api-key"`) {
-		t.Fatalf("登记表没有凭证头：%s", art.PolicyJSON)
+	for _, banned := range []string{"includeResponseHeaders", `request.headers["authorization"]`, `request.headers["x-api-key"]`, "queryParameter", `"authorization",`} {
+		if strings.Contains(text, banned) {
+			t.Fatalf("出现了 %s\n%s", banned, text)
+		}
 	}
-	if strings.Contains(text, `request.headers["authorization"].startsWith`) {
-		t.Fatal("自定义头仍然检查 authorization")
+	if n := strings.Count(text, "backendAuth:"); n != len(spec.Routes) {
+		t.Fatalf("backendAuth 出现 %d 次，路由 %d 条", n, len(spec.Routes))
+	}
+	if strings.Contains(string(art.PolicyJSON), "x-api-key") {
+		t.Fatalf("登记表里出现了凭证头：%s", art.PolicyJSON)
 	}
 }
 
-func TestCredentialHeaderIsRejected(t *testing.T) {
-	for _, name := range []string{"X-Api-Key", "cookie", "x-idp-token", "x-forwarded-for", "not a header", ""} {
-		if name == "" {
-			continue
+// 凭证放在查询参数里：同一种写法，位置换成 queryParameter；转发名单里没有 authorization。
+func TestCredentialPlacedInAQueryParameter(t *testing.T) {
+	spec := wanbSpec()
+	spec.Provider.CredentialScheme = "Bearer "
+	spec.Provider.CredentialQueryParameter = "api_key"
+	art, err := Compile(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(art.GatewayYAML)
+	for _, needle := range []string{
+		`credential: 'response.headers["authorization"]'`,
+		`allow: 'has(extauthz.credential) && extauthz.credential.startsWith("Bearer ") && size(extauthz.credential) > 7'`,
+		`expression: 'extauthz.credential.stripPrefix("Bearer ")'`,
+		"queryParameter:\n",
+		"name: 'api_key'",
+		`k in ["accept", "content-type", "idempotency-key", "traceparent", "x-client-trace"]`,
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("缺少 %s\n%s", needle, text)
 		}
+	}
+	for _, banned := range []string{"includeResponseHeaders", `request.headers["authorization"]`, `"authorization",`, "header:\n"} {
+		if strings.Contains(text, banned) {
+			t.Fatalf("出现了 %s\n%s", banned, text)
+		}
+	}
+	if strings.Contains(string(art.PolicyJSON), "api_key") {
+		t.Fatalf("登记表里出现了查询参数名：%s", art.PolicyJSON)
+	}
+}
+
+func TestCredentialLocationIsRefused(t *testing.T) {
+	for _, name := range []string{"X-Api-Key", "cookie", "x-idp-token", "x-forwarded-for", "not a header", "proxy-authorization"} {
 		spec := wanbSpec()
 		spec.Provider.CredentialHeader = name
-		if err := mustRefuse(t, spec); !refusalHas(err, "CREDENTIAL_HEADER") {
-			t.Fatalf("%q: %v", name, err)
+		if err := mustRefuse(t, spec); !refusalHas(err, "CREDENTIAL_LOCATION") {
+			t.Fatalf("请求头 %q: %v", name, err)
 		}
+	}
+	for _, name := range []string{"api key", "a&b", "a=b", "1key", "k%65y", strings.Repeat("k", 65)} {
+		spec := wanbSpec()
+		spec.Provider.CredentialQueryParameter = name
+		if err := mustRefuse(t, spec); !refusalHas(err, "CREDENTIAL_LOCATION") {
+			t.Fatalf("查询参数 %q: %v", name, err)
+		}
+	}
+	both := wanbSpec()
+	both.Provider.CredentialHeader = "x-api-key"
+	both.Provider.CredentialQueryParameter = "api_key"
+	if err := mustRefuse(t, both); !refusalHas(err, "CREDENTIAL_LOCATION") {
+		t.Fatalf("两样都写: %v", err)
+	}
+	// 规格里写明 authorization 再加一个查询参数，同样是两样都写。
+	both = wanbSpec()
+	both.Provider.CredentialHeader = "authorization"
+	both.Provider.CredentialQueryParameter = "api_key"
+	if err := mustRefuse(t, both); !refusalHas(err, "CREDENTIAL_LOCATION") {
+		t.Fatalf("authorization 加查询参数: %v", err)
+	}
+}
+
+// set_request_headers 是在凭证放上去之后写的：同名的一项会把凭证换成规格里的常量。
+func TestSetRequestHeadersCannotNameTheCredentialHeader(t *testing.T) {
+	spec := wanbSpec()
+	spec.Provider.CredentialScheme = "Bearer "
+	spec.Provider.CredentialHeader = "x-api-key"
+	spec.Provider.SetRequestHeaders = map[string]string{"x-api-key": "constant"}
+	if err := mustRefuse(t, spec); !refusalHas(err, "REQUEST_HEADER") {
+		t.Fatalf("同名的凭证头: %v", err)
+	}
+	spec = wanbSpec()
+	spec.Provider.SetRequestHeaders = map[string]string{"authorization": "constant"}
+	if err := mustRefuse(t, spec); !refusalHas(err, "REQUEST_HEADER") {
+		t.Fatalf("authorization: %v", err)
+	}
+	spec = wanbSpec()
+	spec.Provider.CredentialScheme = "Bearer "
+	spec.Provider.CredentialQueryParameter = "api_key"
+	spec.Provider.SetRequestHeaders = map[string]string{"authorization": "constant"}
+	if err := mustRefuse(t, spec); !refusalHas(err, "REQUEST_HEADER") {
+		t.Fatalf("查询参数的路由上写 authorization: %v", err)
 	}
 }

@@ -69,29 +69,6 @@ func TestParsePolicyRejectsWhatItCannotFullyRead(t *testing.T) {
 	if err != nil || len(policy.Operations) != 1 || policy.Operations[0].PathPrefix != "/a" {
 		t.Fatalf("%+v, %v", policy, err)
 	}
-	if policy.Operations[0].CredentialHeader != "" {
-		t.Fatal("没有凭证头的行被读成了别的头")
-	}
-}
-
-func TestCredentialHeaderOnAPolicyRow(t *testing.T) {
-	row := `{"provider_id":"p","operation_id":"o","environment":"TEST","method":"GET","path_prefix":"/a",` +
-		`"credential_binding_ref":"b","allowed_tenants":["t"],"allowed_service_ids":["s"],"accounts_by_tenant":{"t":["a"]},"credential_header":"x-api-key"}`
-	policy, err := parsePolicy([]byte(`{"version":"1","registered_operations":[` + row + `]}`))
-	if err != nil || policy.Operations[0].CredentialHeader != "x-api-key" {
-		t.Fatalf("%+v %v", policy, err)
-	}
-	got := policy.Evaluate(&domain.Principal{ServiceID: "s", TenantID: "t", Environment: "TEST"},
-		domain.Request{ProviderID: "p", OperationID: "o", Environment: "TEST", Method: "GET", Path: "/a", AccountID: "a"})
-	if !got.Allowed || got.CredentialHeader != "x-api-key" {
-		t.Fatalf("%+v", got)
-	}
-	for _, name := range []string{"cookie", "X-Api-Key", "x-idp-token"} {
-		bad := strings.Replace(row, "x-api-key", name, 1)
-		if _, err := parsePolicy([]byte(`{"version":"1","registered_operations":[` + bad + `]}`)); err == nil {
-			t.Fatalf("%s 被接受了", name)
-		}
-	}
 }
 
 // 前缀缺失或为 null 的行读得进来，但不授权任何请求。

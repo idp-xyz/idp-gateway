@@ -63,8 +63,6 @@ type Outcome struct {
 	Account string
 	// BindingRef 只在放行时有值。
 	BindingRef string
-	// CredentialHeader 是放行时写凭证的响应头。空串表示 Authorization。
-	CredentialHeader string
 	// RateLimited 为 true 时这次请求因配额被拒绝：Allowed 为 false，RetryAfter 是至少 1 的秒数。
 	RateLimited bool
 	// RetryAfter 是调用方应当等待的秒数，只在 RateLimited 为 true 时大于 0。
@@ -210,7 +208,6 @@ func (s *Service) Decide(ctx context.Context, in Input) (Outcome, error) {
 	}
 	out.Allowed = true
 	out.BindingRef = decision.CredentialBindingRef
-	out.CredentialHeader = decision.CredentialHeader
 	return out, nil
 }
 

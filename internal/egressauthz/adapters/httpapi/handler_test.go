@@ -198,29 +198,6 @@ func TestExtAuthzReleasesEachTenantsOwnCredentialInAHeaderOnly(t *testing.T) {
 	}
 }
 
-func TestExtAuthzWritesTheCredentialOnTheRegisteredHeader(t *testing.T) {
-	f := newFixture(t)
-	f.handler = nil
-	policy := domain.Policy{Version: "policy-7", Operations: []domain.Operation{{
-		ProviderID: "mockcarrier", OperationID: "tracking.get", Environment: "TEST", Method: "GET",
-		PathPrefix: tracking, CredentialBindingRef: binding, CredentialHeader: "x-api-key",
-		AllowedTenants: []string{"tenant-blue"}, AllowedServiceIDs: []string{"parcel-service"},
-		AccountsByTenant: map[string][]string{"tenant-blue": {"account-blue"}},
-	}}}
-	service := application.New(policy, f.credentials, f.revocations)
-	f.handler = New(service, Callers{Gateway: gatewayID, Broker: brokerID}, slog.New(slog.NewJSONHandler(f.logs, nil)))
-	recorder := f.call("gateway", "GET", PathExtAuthz, trusted("tenant-blue"), "")
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("%d %s", recorder.Code, recorder.Body)
-	}
-	if recorder.Header().Get("X-Api-Key") != blueToken || recorder.Header().Get("Authorization") != "" {
-		t.Fatalf("凭证头：%v", recorder.Header())
-	}
-	if strings.Contains(recorder.Body.String(), blueToken) || strings.Contains(f.logs.String(), blueToken) {
-		t.Fatal("凭证出现在正文或日志里")
-	}
-}
-
 // 判定日志只在 ExtAuthZ 请求自己带着 traceparent 时写下那个值。没有这个头就不写，也不另造。
 func TestExtAuthzDecisionLogCarriesCallerTraceparent(t *testing.T) {
 	const parent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"

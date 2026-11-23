@@ -158,8 +158,8 @@ type errorBody struct {
 	Error string `json:"error"`
 }
 
-// 放行时响应头携带本次请求要用的 Provider 凭证。头名来自登记表；空串是 Authorization。
-// 凭证不在正文里，也不写进日志。
+// extAuthz 是 agentgateway 的 HTTP ExtAuthZ 交换：2xx 表示放行，其余都表示不转发。
+// 放行时 Authorization 响应头携带本次请求要用的 Provider 凭证。
 func (h *Handler) extAuthz(w http.ResponseWriter, r *http.Request) {
 	caller := workloadtls.PeerIdentity(r.TLS)
 	// 只有网关可以要凭证。同一信任域里的其他工作负载，包括只能要判定的 Broker，都不行。
@@ -203,19 +203,12 @@ func (h *Handler) extAuthz(w http.ResponseWriter, r *http.Request) {
 			PolicyVersion: out.PolicyVersion, RevocationEpoch: out.RevocationEpoch})
 		h.record(r, PathExtAuthz, caller, http.StatusForbidden, resultDeny, in, out, nil)
 	default:
-		w.Header().Set(credentialHeaderName(out.CredentialHeader), credential.Reveal())
+		w.Header().Set("Authorization", credential.Reveal())
 		w.Header().Set(headerDecisionID, out.DecisionID)
 		writeJSON(w, http.StatusOK, allowBody{DecisionID: out.DecisionID, Result: resultAllow, ReasonCode: out.Reason,
 			PolicyVersion: out.PolicyVersion, RevocationEpoch: out.RevocationEpoch})
 		h.record(r, PathExtAuthz, caller, http.StatusOK, resultAllow, in, out, nil)
 	}
-}
-
-func credentialHeaderName(name string) string {
-	if name == "" {
-		return "Authorization"
-	}
-	return name
 }
 
 func trustedContext(header http.Header) (application.Input, bool) {
