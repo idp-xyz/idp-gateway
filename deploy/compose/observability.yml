@@ -1,0 +1,42 @@
+# 可选的观测叠加文件。不改 compose.yml 里的七个服务，也不被任何一个 systemd 单元引用。
+# 不启动容器，不拉取镜像。idp-otel、idp-jaeger、idp-prometheus、idp-grafana 若已在本机运行，这里只记下它们的地址。
+#
+#   docker compose -f compose.yml -f gateway-authz.yml -f provider-signer.yml -f observability.yml config
+#
+# 单独 `docker compose -f observability.yml up -d` 什么容器都不起。
+# 看守和开机的单元仍只对 compose.yml 跑 `docker compose up -d`。把本文件加进那条命令之前，它们不会带上这里的变量。
+#
+# 2026-11-23 在这台机器上用 docker ps 看到的主机回环（这次没有为它们新起容器）：
+#   idp-otel        127.0.0.1:4317  127.0.0.1:4318  另有 127.0.0.1:13133
+#   idp-jaeger      127.0.0.1:16686。容器里的 4317 和 4318 没有发布到主机。
+#   idp-prometheus  127.0.0.1:9090
+#   idp-grafana     127.0.0.1:3000
+# 容器自己的 127.0.0.1 不是主机。下面带默认值的几项，是给跑在主机上的进程。进程在容器里时要改成它够得着的地址。
+#
+# 指标端口这次没有看到有人在听。gateway-authz 的参数说明里举例是 127.0.0.1:19091，
+# provider-signer 举例是 127.0.0.1:19092。那两个例子只写在这里，不作为默认值。
+#
+# compose 合并文件时，command 是整份换掉，不会在末尾追加。所以本文件不改 gateway-authz 和 signer 的 command：
+# 改了会丢掉 gateway-authz.yml 或 provider-signer.yml 里已经写上的参数。要导出、要审计、要指标，由操作员把下面三项加到那条 command 的末尾。
+# 三个都不加时，程序和以前一样。
+#
+#   --otlp-traces-url=${GATEWAY_OTLP_TRACES_URL}
+#   --audit-log=${GATEWAY_AUTHZ_AUDIT_LOG}          # signer 用 GATEWAY_SIGNER_AUDIT_LOG，路径在仓库外，权限将是 0600
+#   --metrics-listen=${GATEWAY_AUTHZ_METRICS_LISTEN} # signer 用 GATEWAY_SIGNER_METRICS_LISTEN
+#
+# 数据面的 tracing 不在这个文件里。它在发布的快照里，由 pool.tracing 编成 frontendPolicies.tracing。
+# 编出来的 host 是一行 host: '名字:端口'。pin-egress.sh 会摘出带引号的这种行。名字以后若是 otel-collector:4318，发布时会被钉住。
+# 127.0.0.1 只在非 PROD 的规格里过得了编译。网关在 netns 里时，它的 127.0.0.1 也不是主机上的 idp-otel。
+
+x-idp-observability:
+  otlp_traces_url: ${GATEWAY_OTLP_TRACES_URL:-http://127.0.0.1:4318/v1/traces}
+  otlp_grpc: ${GATEWAY_OTLP_GRPC:-127.0.0.1:4317}
+  prometheus_url: ${GATEWAY_PROMETHEUS_URL:-http://127.0.0.1:9090}
+  grafana_url: ${GATEWAY_GRAFANA_URL:-http://127.0.0.1:3000}
+  jaeger_ui: ${GATEWAY_JAEGER_UI:-http://127.0.0.1:16686}
+  authz_metrics_listen: ${GATEWAY_AUTHZ_METRICS_LISTEN:-}
+  signer_metrics_listen: ${GATEWAY_SIGNER_METRICS_LISTEN:-}
+  authz_audit_log: ${GATEWAY_AUTHZ_AUDIT_LOG:-}
+  signer_audit_log: ${GATEWAY_SIGNER_AUDIT_LOG:-}
+
+services: {}

@@ -1,0 +1,103 @@
+# 告警规则（Prometheus）。看的是 gateway-authz、provider-signer，以及数据面 statsAddr 上的 /metrics。
+# 怎么接、各条是什么意思，见同目录 README.md 的「Trace、审计和初始门槛」。
+#
+# 抓取任务的名字要和下面 job 对得上。管理口的 /metrics 这次是 404，数在 statsAddr 的 /metrics。
+# 各条的时长和 0.05 这个比例是执笔时取的，没有对着真实的容量目标调过。
+# 这些是初始的运行告警，不是签过的 SLO，也不是批准过的错误预算。
+#
+# 这里只管什么时候该叫人。叫到谁、怎么叫（Alertmanager 的路由和接收人）不在这个仓库里。
+groups:
+  - name: idp-gateway-slo
+    rules:
+      - alert: GatewayAuthzMetricsDown
+        expr: up{job="idp-gateway-authz"} == 0 or absent(up{job="idp-gateway-authz"})
+        for: 1m
+        labels:
+          severity: critical
+          slo: initial
+        annotations:
+          summary: "读不到 gateway-authz 的指标：它没有在跑，或者够不着"
+          description: "这是初始运行告警，不是签过的 SLO。指标在 --metrics-listen 的 /metrics，不在 mTLS 监听上。别的 authz 规则读的都是它自己给的数，它没了它们就都不响。"
+
+      - alert: GatewaySignerMetricsDown
+        expr: up{job="idp-gateway-signer"} == 0 or absent(up{job="idp-gateway-signer"})
+        for: 1m
+        labels:
+          severity: critical
+          slo: initial
+        annotations:
+          summary: "读不到 provider-signer 的指标：它没有在跑，或者够不着"
+          description: "这是初始运行告警，不是签过的 SLO。熔断那一条读的是签名器自己给的数，它没了那一条就不响。"
+
+      - alert: GatewayDataPlaneMetricsDown
+        expr: up{job="idp-gateway-dataplane"} == 0 or absent(up{job="idp-gateway-dataplane"})
+        for: 1m
+        labels:
+          severity: critical
+          slo: initial
+        annotations:
+          summary: "读不到数据面的指标：网关没有在跑，或者抓的不是 statsAddr"
+          description: "这是初始运行告警，不是签过的 SLO。锁定的 1.7.0 把数放在 statsAddr 的 /metrics；adminAddr 的 /metrics 是 404。5xx 那一条读的是这里的数，它没了那一条就不响。"
+
+      - alert: GatewayAuthzOTLPFailed
+        expr: increase(idp_gateway_authz_otlp_spans_failed_total[5m]) > 0
+        labels:
+          severity: warning
+          slo: initial
+        annotations:
+          summary: "gateway-authz 有 span 没有被收集器收下"
+          description: "过去 5 分钟里 idp_gateway_authz_otlp_spans_failed_total 涨过。这是初始运行告警，不是签过的 SLO。导出失败不拒绝调用方的请求。看收集器够不够得着 --otlp-traces-url。"
+
+      - alert: GatewayAuthzOTLPDropped
+        expr: increase(idp_gateway_authz_otlp_spans_dropped_total[5m]) > 0
+        labels:
+          severity: warning
+          slo: initial
+        annotations:
+          summary: "gateway-authz 在送出之前丢掉了 span"
+          description: "过去 5 分钟里 idp_gateway_authz_otlp_spans_dropped_total 涨过。这是初始运行告警，不是签过的 SLO。缓冲满了就会丢，调用方的请求还是照常。"
+
+      - alert: GatewaySignerOTLPFailed
+        expr: increase(idp_gateway_signer_otlp_spans_failed_total[5m]) > 0
+        labels:
+          severity: warning
+          slo: initial
+        annotations:
+          summary: "provider-signer 有 span 没有被收集器收下"
+          description: "过去 5 分钟里 idp_gateway_signer_otlp_spans_failed_total 涨过。这是初始运行告警，不是签过的 SLO。导出失败不改对承运商那一跳的应答。"
+
+      - alert: GatewaySignerOTLPDropped
+        expr: increase(idp_gateway_signer_otlp_spans_dropped_total[5m]) > 0
+        labels:
+          severity: warning
+          slo: initial
+        annotations:
+          summary: "provider-signer 在送出之前丢掉了 span"
+          description: "过去 5 分钟里 idp_gateway_signer_otlp_spans_dropped_total 涨过。这是初始运行告警，不是签过的 SLO。"
+
+      - alert: GatewaySignerCircuitOpen
+        expr: idp_gateway_signer_circuit_open == 1
+        for: 2m
+        labels:
+          severity: warning
+          slo: initial
+        annotations:
+          summary: "签名器的熔断开着，已经 2 分钟"
+          description: "idp_gateway_signer_circuit_open 是 1。这是初始运行告警，不是签过的 SLO。熔断开着时签名器答 503，error 是 carrier_circuit_open，不去连承运商。--cb-failure-threshold 默认是 0，默认不熔断。"
+
+      # 0.05 是执笔时写上的初始比例，不是容量目标，也没有人批准它当错误预算。
+      # 安静的时候一笔 503 会让这个比例变成 1。status 标签在锁定的 1.7.0 上见过 "200" 和 "503"。
+      - alert: GatewayDataPlane5xxRatio
+        expr: >-
+          (
+            sum(rate(agentgateway_requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(agentgateway_requests_total[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          slo: initial
+        annotations:
+          summary: "数据面 5xx 的比例连着 5 分钟高于 0.05"
+          description: "这是初始运行门槛，不是签过的 SLO，也不是批准过的错误预算。数是 agentgateway_requests_total 的 status 标签。没有按延迟告警：延迟门槛没有量过，也没有人批准。"

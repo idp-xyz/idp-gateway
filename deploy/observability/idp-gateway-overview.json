@@ -1,0 +1,202 @@
+{
+  "uid": "idp-gateway-overview",
+  "title": "idp-gateway overview",
+  "description": "只画这次见过的序列。数据面的名字来自锁定的 agentgateway 1.7.0 在 statsAddr /metrics 上的正文。gateway-authz 和 provider-signer 的名字来自各自的 metrics.go。这不是 SLO，没有错误预算，也没有延迟门槛。",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "timezone": "browser",
+  "fiscalYearStartMonth": 0,
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "tags": ["idp-gateway"],
+  "links": [],
+  "annotations": {"list": []},
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1,
+        "regex": ""
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "数据面请求",
+      "description": "agentgateway_requests_total。status 见过 200 和 503。不是 SLO。",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (status) (rate(agentgateway_requests_total[5m]))",
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"drawStyle": "line", "fillOpacity": 10}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "数据面请求耗时",
+      "description": "agentgateway_request_duration_seconds。图上的分位只是把见过的直方图画出来，不是批准过的延迟目标。",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(agentgateway_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(agentgateway_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"drawStyle": "line", "fillOpacity": 0}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "授权判定",
+      "description": "idp_gateway_authz_decisions_total。标签里没有账户、租户、主体或令牌。",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (result, reason) (rate(idp_gateway_authz_decisions_total[5m]))",
+          "legendFormat": "{{result}} {{reason}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"drawStyle": "line", "fillOpacity": 10}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "授权判定耗时",
+      "description": "idp_gateway_authz_decision_duration_seconds。不是批准过的延迟目标。",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(idp_gateway_authz_decision_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"drawStyle": "line", "fillOpacity": 0}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "gateway-authz 的 OTLP",
+      "description": "idp_gateway_authz_otlp_spans_failed_total 和 idp_gateway_authz_otlp_spans_dropped_total。导出失败不拒绝请求。",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 16},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(idp_gateway_authz_otlp_spans_failed_total[5m])",
+          "legendFormat": "failed"
+        },
+        {
+          "refId": "B",
+          "expr": "increase(idp_gateway_authz_otlp_spans_dropped_total[5m])",
+          "legendFormat": "dropped"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "fillOpacity": 10}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "签名器熔断",
+      "description": "idp_gateway_signer_circuit_open。1 是开着。默认阈值是 0，默认不熔断。不是 SLO。",
+      "gridPos": {"h": 8, "w": 4, "x": 8, "y": 16},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(idp_gateway_signer_circuit_open)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "short", "min": 0, "max": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}},
+        "overrides": []
+      },
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "none", "textMode": "value"}
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "签名器调用",
+      "description": "idp_gateway_signer_calls_total。",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(idp_gateway_signer_calls_total[5m]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"drawStyle": "line", "fillOpacity": 10}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "provider-signer 的 OTLP",
+      "description": "idp_gateway_signer_otlp_spans_failed_total 和 idp_gateway_signer_otlp_spans_dropped_total。",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(idp_gateway_signer_otlp_spans_failed_total[5m])",
+          "legendFormat": "failed"
+        },
+        {
+          "refId": "B",
+          "expr": "increase(idp_gateway_signer_otlp_spans_dropped_total[5m])",
+          "legendFormat": "dropped"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "fillOpacity": 10}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "签名器调用耗时",
+      "description": "idp_gateway_signer_call_duration_seconds。不是批准过的延迟目标。",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(idp_gateway_signer_call_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"drawStyle": "line", "fillOpacity": 0}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    }
+  ]
+}

@@ -371,6 +371,28 @@ docker compose -f compose.yml -f jwks.yml up -d
 - **先取到，再发布。** 进程起来先取一轮。第一份引用 `tls/jwks.json` 的发布，要等这一轮成功之后。
 - **看守不会把它拉起来。** systemd 单元没有改。看守的单元仍只对 `compose.yml` 跑 `docker compose up -d`。操作员没有把 `-f jwks.yml` 加进那条命令之前，这个进程不由看守重启。
 
+## Trace、审计和初始门槛（叠加文件）
+
+`observability.yml` 是叠加文件，不改 `compose.yml` 的七个服务，也不在两个 systemd 单元里。它不启动容器，也不拉取镜像。单独拿它 `up`，什么都不起。
+
+```bash
+docker compose -f compose.yml -f gateway-authz.yml -f provider-signer.yml -f observability.yml config
+```
+
+看守和开机的单元仍只对 `compose.yml` 跑 `docker compose up -d`。操作员没有把 `-f observability.yml` 写进那两条命令之前，它们不会带上这个文件。
+
+2026-11-23 在这台机器上看到的，是已经在跑的宿主容器，这次没有为它们新起一个：`idp-otel` 把 `127.0.0.1:4317` 和 `127.0.0.1:4318` 发布出来（还有 `127.0.0.1:13133`），`idp-jaeger` 只把 `127.0.0.1:16686` 发布出来（容器里的 4317 和 4318 没有到主机），`idp-prometheus` 是 `127.0.0.1:9090`，`idp-grafana` 是 `127.0.0.1:3000`。文件里这几个地址是给跑在主机上的进程的默认值。容器里的 `127.0.0.1` 不是主机，进程在容器里时要改成它够得着的地址。
+
+`gateway-authz` 和 `provider-signer` 的指标端口这次没有人在听。参数说明里的 `127.0.0.1:19091` 和 `127.0.0.1:19092` 只是例子，叠加文件里这两项默认是空的，不写成正在使用的配置。
+
+compose 合并时 `command` 整份换掉，不会在末尾加参数。这个文件因此不改那两条 command，免得把 `provider-signer.yml` 已经加上的参数盖掉。要打开导出、审计或指标，把 `--otlp-traces-url`、`--audit-log`、`--metrics-listen` 加在对应 command 的末尾。三个都不加，程序和以前一样。审计文件在仓库外，程序把它收成 0600。
+
+数据面的 tracing 在发布的快照里，不在这个文件里。`pool.tracing` 编出来是 `frontendPolicies.tracing`，其中一行是 `host: '名字:端口'`。`pin-egress.sh` 会摘出带引号的这种行；以后若写成 `host: 'otel-collector:4318'`，发布时那个名字会被钉住。`127.0.0.1` 只在非 PROD 的规格里过得了编译。网关在 `netns` 里时，它的回环也不是主机上的 `idp-otel`。
+
+告警在 [`idp-gateway-slo.rules.yml`](idp-gateway-slo.rules.yml)。这次没有把它装进正在跑的 Prometheus。抓取任务要叫 `idp-gateway-authz`、`idp-gateway-signer`、`idp-gateway-dataplane`。三条「读不到」用了 `absent(up{job=...})`：那三个 job 还没配就装上这份规则，会马上叫人。数据面抓的是 statsAddr 的 `/metrics`：锁定的 1.7.0 上，adminAddr 的 `/metrics` 是 404，statsAddr 的 `/metrics` 是 200。各条时长和 5xx 的 0.05 是执笔时取的，没有对着容量目标调过。标签 `slo: initial` 表示这是初始运行告警，不是签过的 SLO，也不是批准过的错误预算。没有按延迟告警。叫到谁不在这个仓库里。
+
+看板是 [`../observability/idp-gateway-overview.json`](../observability/idp-gateway-overview.json)，uid 是 `idp-gateway-overview`。上面只有见过的序列名字。这次没有往正在跑的 Grafana 里导入它。
+
 ## 停
 
 看守在跑时先停它，不然停下的容器会被它起回来。装了两个单元时：`systemctl stop idp-gateway-pool.service`，它先停看守，再跑 `docker compose stop`。
