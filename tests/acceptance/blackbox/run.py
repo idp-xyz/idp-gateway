@@ -1140,14 +1140,25 @@ def _(c):
     c.check('Set-Cookie not passed to the caller', header(r, 'set-cookie') == [])
 
 
-@case('P1-SS-04', 'request carrying two Host headers', '400, as RFC 9112 §3.2 requires; nothing consulted or forwarded',
+@case('P1-SS-04', 'request carrying two Host headers',
+      'accepted on the locked 1.7.0 listener: routed on the first Host; the second is discarded and does not select a backend',
       ('GW-ST-017', 'GW-FR-034'))
 def _(c):
-    r = gw('GET', TRACKING + '/TRK-1', blue(), [('Host', f"127.0.0.1:{PORTS['forbidden']}")])
+    # 2026-11-23 the repository owner accepted this behavior of the pinned 1.7.0 build.
+    # RFC 9112 §3.2 asks for 400. That build does not do it. The front proxy still does (P1-FP-01).
+    f = f"127.0.0.1:{PORTS['forbidden']}"
+    r = gw('GET', TRACKING + '/TRK-1', blue(), [('Host', f)])
+    hits = provider_hits()
     c.note('status', r['status'])
-    c.note('provider_saw_host', [header(h['headers'], 'host') for h in provider_hits()])
-    c.check('status is 400', r['status'] == 400)
-    nothing_forwarded(c)
+    c.note('provider_saw_host', [header(h['headers'], 'host') for h in hits])
+    c.note('second_host', f)
+    c.check('status is 200 and the caller account is the granted one',
+            r['status'] == 200 and body_json(r).get('account') == 'account-blue')
+    c.check('the provider received one request', len(hits) == 1)
+    c.check('the forbidden target received nothing', len(forbidden_hits()) == 0)
+    c.check('the second Host did not reach the provider',
+            all(f not in v for h in hits for _, v in h['headers']))
+    c.check('the PDP was consulted once', len(pdp_log()) == 1)
 
 
 @case('P1-SS-03', 'path tricks against the registered prefix',
@@ -1173,8 +1184,8 @@ def _(c):
 
 
 # ---- front proxy ------------------------------------------------------------------------------------
-# P1-SS-04 stays as it is: it records what the gateway does on its own listener. These cases
-# send requests to the nginx in front of it.
+# P1-SS-04 records what the gateway does on its own listener: it accepts the request.
+# These cases send the same shape to the nginx in front of it, which still answers 400.
 def gateway_log_lines() -> int:
     return len((RUN / 'agentgateway.log').read_text(encoding='utf-8', errors='replace').splitlines())
 
