@@ -49,4 +49,5 @@
 
 - Manifest 的 `capabilities.user_interface` 为 `true`，与"STD-CP4 适用"的表述一致。这只是承认 UI 资产存在并触发 STD-CP4，不代表 UI 已纳入交付范围；是否纳入由仓库所有者决定。
 - **冻结**：在 P1 PoC 的遗留问题处置完、仓库所有者决定 ADR-0008 之前，不新增 Console 页面、不扩充 UX 用例、不修改 `portal/prototypes/`。已有的 UI 资产保留原样。
+- 2026-11-23 仓库所有者允许分阶段做一件运行用的 BFF：`gateway-console` 只听回环，读审计 JSONL，并把撤销、恢复和封禁交给已经有的客户端。这不解开上面的冻结，不改原型，也不包括新路由的批准、发布和回滚。见 [ADR-0019](../adr/ADR-0019.md)，状态是 Proposed。
 - 解冻条件和决定人记录在 `design-status.json` 的 `scope_freeze`。

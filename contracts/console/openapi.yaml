@@ -1,0 +1,129 @@
+openapi: 3.0.3
+info:
+  title: idp-gateway console
+  version: "1.0"
+  description: >
+    Loopback BFF for reading an audit JSONL file and for the revocation and
+    operation-ban calls gateway-control already makes. It does not publish
+    routes and it does not roll back a snapshot.
+servers:
+  - url: http://127.0.0.1:19100
+paths:
+  /v1/audit:
+    get:
+      summary: Recent audit records, newest first
+      parameters:
+        - $ref: "#/components/parameters/limit"
+        - in: query
+          name: trace_id
+          schema: {type: string}
+        - in: query
+          name: decision_id
+          schema: {type: string}
+        - in: query
+          name: outcome
+          schema: {type: string}
+      responses:
+        "200":
+          description: Matching records
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [records]
+                properties:
+                  records:
+                    type: array
+                    items: {type: object}
+        "400": {description: Bad limit}
+        "403": {description: The file is a symlink or readable by others}
+        "404": {description: No audit file was configured, or it is missing}
+  /v1/revocations:
+    get:
+      summary: Read the revocation table
+      responses:
+        "200":
+          description: The table, or an outcome other than success
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Outcome"}
+        "404": {description: Revoker flags were not configured, or gateway-authz has no revoker}
+    post:
+      summary: Revoke or restore one account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RevocationChange"}
+      responses:
+        "200":
+          description: REVOKED or LIFTED
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Outcome"}
+        "400": {description: The body was refused, or gateway-authz refused it}
+        "404": {description: Revoker flags were not configured}
+  /v1/operation-bans:
+    post:
+      summary: Ban or unban one operation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OperationBanChange"}
+      responses:
+        "200":
+          description: BANNED or LIFTED
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Outcome"}
+        "400": {description: The body was refused}
+        "404": {description: Revoker flags were not configured}
+components:
+  parameters:
+    limit:
+      in: query
+      name: limit
+      schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+  schemas:
+    RevocationChange:
+      type: object
+      additionalProperties: false
+      required: [account_id, revoked]
+      properties:
+        account_id: {type: string, minLength: 1, maxLength: 256}
+        revoked: {type: boolean}
+        reason: {type: string, maxLength: 512}
+    OperationBanChange:
+      type: object
+      additionalProperties: false
+      required: [operation_id, banned]
+      properties:
+        operation_id: {type: string, minLength: 1, maxLength: 256}
+        banned: {type: boolean}
+        reason: {type: string, maxLength: 512}
+    Outcome:
+      type: object
+      additionalProperties: false
+      required: [outcome, http_status]
+      properties:
+        outcome: {type: string}
+        http_status: {type: integer}
+        account_id: {type: string}
+        operation_id: {type: string}
+        revoked: {type: boolean}
+        banned: {type: boolean}
+        changed: {type: boolean}
+        revocation_epoch: {type: integer}
+        revoked_accounts:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [account_id, revoked_at, revoked_by, reason]
+            properties:
+              account_id: {type: string}
+              revoked_at: {type: string}
+              revoked_by: {type: string}
+              reason: {type: string}
