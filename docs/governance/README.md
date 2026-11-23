@@ -40,7 +40,7 @@
 - `tests/acceptance/blackbox`：真实 agentgateway 1.7.0，Gatekeeper 和 Provider 都是替身；97 个用例 96 个通过。
 - `tests/integration/gatekeeper`：本机运行的真实 Gatekeeper（检出 `f36dc06`，带本机改动，不是 Gatekeeper 团队运行的环境），Provider 是替身；默认 12 个用例都通过。
 - `tests/integration/wanbexpress`（2026-11-19）：真实 Gatekeeper（同上）、真实 agentgateway、真实的承运商沙箱；联调架子上 10/10、compose 池上 11/11，只有替身上看得到的检查是跳过的。只有一个沙箱账号，两个账户的隔离只在替身上验过；沙箱只有明文 HTTP，到承运商的 TLS 没有验。
-- 被测的 agentgateway 锁在上游镜像的摘要上（`deploy/agentgateway/agentgateway.lock.json`）；来源、许可证和已知漏洞核查过一遍，没有验证镜像签名（记在 `deploy/agentgateway/README.md`）。
+- 被测的 agentgateway 锁在上游镜像的摘要上（`deploy/agentgateway/agentgateway.lock.json`）；来源、许可证和已知漏洞核查过一遍。2026-11-23 用 cosign v3.1.4 核对过锁定索引的签名：身份是上游仓库 `release.yml@refs/tags/v1.7.0`，签发方是 `https://token.actions.githubusercontent.com`，源码提交与锁定的 `git_revision` 相同。这次能说明该索引摘要由这个身份经 Sigstore 签过。镜像里面有什么不能说明，两份构建证明没有验，上游镜像仍然没有 SBOM（记在 `deploy/agentgateway/README.md`）。
 - 没有做的：生产部署、性能、HA、UI。
 
 ## UI/UX 范围冻结
