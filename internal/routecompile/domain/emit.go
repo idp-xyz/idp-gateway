@@ -348,8 +348,13 @@ func (n *ynode) write(b *bytes.Buffer, indent int, inline bool) {
 				b.WriteByte('\n')
 				pair.val.write(b, indent, false)
 			case yMap:
-				b.WriteByte('\n')
-				pair.val.write(b, indent+2, false)
+				// 空映射写成同一行的 {}。A2A 的 a2a: {} 要用这个。非空映射仍是换行缩进，已有输出不变。
+				if len(pair.val.pairs) == 0 {
+					b.WriteString(" {}\n")
+				} else {
+					b.WriteByte('\n')
+					pair.val.write(b, indent+2, false)
+				}
 			default:
 				b.WriteByte(' ')
 				pair.val.writeScalar(b)

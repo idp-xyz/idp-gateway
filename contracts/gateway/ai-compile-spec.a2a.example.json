@@ -1,0 +1,39 @@
+{
+  "traffic_class": "AI",
+  "pool": {
+    "name": "ai-test",
+    "environment": "TEST",
+    "public_hostname": "a2a.example",
+    "path_prefix": "/agent",
+    "listen_port": 8093,
+    "bind_address": "127.0.0.1",
+    "admin_addr": "127.0.0.1:15140",
+    "stats_addr": "127.0.0.1:15141",
+    "readiness_addr": "127.0.0.1:15142",
+    "readback_port": 8446,
+    "publisher_identity": "spiffe://idp.test/gateway-control/publisher",
+    "tls_dir": "tls",
+    "jwt_issuer": "https://issuer.example/ai",
+    "jwt_audiences": ["example-ai"],
+    "jwks_file": "tls/jwks.json",
+    "notes": "Example only. Names ending in .example or .test are not product constants. A deployment replaces public_hostname, jwt_issuer, jwt_audiences, and the agent address. TLS uses this pool's own certificate bundle. An agent whose certificate comes from a public CA is not supported. There is no API key and no agent credential in this document."
+  },
+  "intent": {
+    "intent_id": "gwi-ai-a2a-001",
+    "ai_protocol": "A2A",
+    "ai_target_ref": "ai:example/a2a-agent",
+    "authz_profile": "ai-identity-v1",
+    "approval_ref": "APPROVAL-PENDING-003",
+    "expected_generation": 0,
+    "policy_bundle_ref": "policy:ai-standard-v1"
+  },
+  "a2a": {
+    "agent": {
+      "host": "agent-upstream.example",
+      "port": 443,
+      "tls_hostname": "agent-upstream.example",
+      "path_prefix": "/",
+      "route_timeout": "5s"
+    }
+  }
+}

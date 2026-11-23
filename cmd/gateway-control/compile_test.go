@@ -143,6 +143,56 @@ func TestCompileIngressExampleNative(t *testing.T) {
 }
 
 func TestCompileAIExampleNative(t *testing.T) {
+	line := compileNativeSpec(t, filepath.Join(repoRoot(t), "contracts/gateway/ai-compile-spec.example.json"))
+	if line["native_validated"] != true || line["routes"] != float64(1) {
+		t.Fatalf("line %#v", line)
+	}
+}
+
+func TestCompileAIMCPAndA2AExamplesNative(t *testing.T) {
+	root := repoRoot(t)
+	for _, name := range []string{"ai-compile-spec.mcp.example.json", "ai-compile-spec.a2a.example.json"} {
+		line := compileNativeSpec(t, filepath.Join(root, "contracts/gateway", name))
+		if line["native_validated"] != true || line["routes"] != float64(1) {
+			t.Fatalf("%s %#v", name, line)
+		}
+	}
+}
+
+func TestCompileAILoopbackNative(t *testing.T) {
+	root := repoRoot(t)
+	mcp := mapFromFile(t, filepath.Join(root, "contracts/gateway/ai-compile-spec.mcp.example.json"))
+	target := mcp["mcp"].(map[string]any)["target"].(map[string]any)
+	target["host"] = "127.0.0.1"
+	target["port"] = 27666
+	delete(target, "tls_hostname")
+	line := compileNativeSpec(t, writeSpec(t, mcp))
+	if line["native_validated"] != true || line["routes"] != float64(1) {
+		t.Fatalf("plain mcp %#v", line)
+	}
+	target["tls_hostname"] = "mcp.standin.test"
+	line = compileNativeSpec(t, writeSpec(t, mcp))
+	if line["native_validated"] != true || line["routes"] != float64(1) {
+		t.Fatalf("tls mcp %#v", line)
+	}
+	a2a := mapFromFile(t, filepath.Join(root, "contracts/gateway/ai-compile-spec.a2a.example.json"))
+	agent := a2a["a2a"].(map[string]any)["agent"].(map[string]any)
+	agent["host"] = "127.0.0.1"
+	agent["port"] = 27667
+	delete(agent, "tls_hostname")
+	line = compileNativeSpec(t, writeSpec(t, a2a))
+	if line["native_validated"] != true || line["routes"] != float64(1) {
+		t.Fatalf("plain a2a %#v", line)
+	}
+	agent["tls_hostname"] = "agent.standin.test"
+	line = compileNativeSpec(t, writeSpec(t, a2a))
+	if line["native_validated"] != true || line["routes"] != float64(1) {
+		t.Fatalf("tls a2a %#v", line)
+	}
+}
+
+func compileNativeSpec(t *testing.T, spec string) map[string]any {
+	t.Helper()
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +206,7 @@ func TestCompileAIExampleNative(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run(context.Background(), []string{
 		"compile",
-		"--spec", filepath.Join(root, "contracts/gateway/ai-compile-spec.example.json"),
+		"--spec", spec,
 		"--output-gateway", filepath.Join(dir, "gateway.yaml"),
 		"--output-policy", filepath.Join(dir, "policy.json"),
 		"--agentgateway", binary,
@@ -169,9 +219,29 @@ func TestCompileAIExampleNative(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &line); err != nil {
 		t.Fatal(err)
 	}
-	if line["native_validated"] != true || line["routes"] != float64(1) {
-		t.Fatalf("line %#v stderr %s", line, stderr.String())
+	return line
+}
+
+func mapFromFile(t *testing.T, path string) map[string]any {
+	t.Helper()
+	var doc map[string]any
+	if err := json.Unmarshal(loadFile(t, path), &doc); err != nil {
+		t.Fatal(err)
 	}
+	return doc
+}
+
+func writeSpec(t *testing.T, doc map[string]any) string {
+	t.Helper()
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "spec.json")
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func loadFile(t *testing.T, path string) []byte {

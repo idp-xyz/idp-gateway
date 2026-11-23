@@ -1,0 +1,39 @@
+{
+  "traffic_class": "AI",
+  "pool": {
+    "name": "ai-test",
+    "environment": "TEST",
+    "public_hostname": "mcp.example",
+    "path_prefix": "/mcp",
+    "listen_port": 8092,
+    "bind_address": "127.0.0.1",
+    "admin_addr": "127.0.0.1:15130",
+    "stats_addr": "127.0.0.1:15131",
+    "readiness_addr": "127.0.0.1:15132",
+    "readback_port": 8445,
+    "publisher_identity": "spiffe://idp.test/gateway-control/publisher",
+    "tls_dir": "tls",
+    "jwt_issuer": "https://issuer.example/ai",
+    "jwt_audiences": ["example-ai"],
+    "jwks_file": "tls/jwks.json",
+    "notes": "Example only. Names ending in .example or .test are not product constants. A deployment replaces public_hostname, jwt_issuer, jwt_audiences, and the target address. This step compiles one MCP target. TLS uses this pool's own certificate bundle. A target whose certificate comes from a public CA is not supported. There is no API key and no MCP credential in this document."
+  },
+  "intent": {
+    "intent_id": "gwi-ai-mcp-001",
+    "ai_protocol": "MCP",
+    "ai_target_ref": "ai:example/mcp-target",
+    "authz_profile": "ai-identity-v1",
+    "approval_ref": "APPROVAL-PENDING-003",
+    "expected_generation": 0,
+    "policy_bundle_ref": "policy:ai-standard-v1"
+  },
+  "mcp": {
+    "target": {
+      "name": "example",
+      "host": "mcp-upstream.example",
+      "port": 443,
+      "path": "/mcp",
+      "tls_hostname": "mcp-upstream.example"
+    }
+  }
+}
