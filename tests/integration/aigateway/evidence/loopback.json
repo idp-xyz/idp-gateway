@@ -1,0 +1,772 @@
+{
+ "kind": "AI loopback: gateway-control compile, then the locked agentgateway on the compiled file, stand-ins on 127.0.0.1",
+ "not_an_acceptance_pass": true,
+ "operator_and_approver": "Not recorded. This file records what was run and what was seen. It is not an acceptance pass and it is not a gate decision.",
+ "control": null,
+ "agentgateway": {
+  "version": "1.7.0",
+  "git_revision": "26f5aebe99a36a037fe54f8080a608aca5547e15",
+  "image": "cr.agentgateway.dev/agentgateway",
+  "local_binary_sha256": "c7ef326b7b5702451e94bab55ff484d600d5abdc5344a4cdf7c72fc0bcff9e24"
+ },
+ "repository": {
+  "commit": "9e5e0e3db8a0a267a3744b01705068adbae9cdda",
+  "uncommitted_files": 0
+ },
+ "compiled_gateway_sha256": {
+  "llm": "7537435594eb11e0f0087e92d1c927cfd33be638a8e80d8d3a026406fe71dea4",
+  "mcp-tls": "7bc94fe80e7598d2dc423cbeb999eeb98ee0c9ce828fb99f7968b4b74c5db96a",
+  "mcp-plain": "1524a95a85ccee314d678fe396d5935b937d0fc7eb2c7b15d4e7b399e49d153f",
+  "mcp-other-ca": "491bb8fe127f87eb033095fdcdfbaa136240c7462cba3d8e3bd52119471223e4",
+  "mcp-name": "a35d3889a6e064f4bd5af62b4839c9ea19aa4429a92cde51f8e4bc52f2061bc8",
+  "mcp-down": "2f629c6c0051ba3393318de96f4087eba463eabda82d67b2020afdb8dda69466",
+  "a2a": "c1ebef4ca484b0cf119aa0242074bda7c0237289613b32a762f411e0d3e30702",
+  "a2a-other-ca": "09bac5bd908648a9ab8f987592bca0af5f7eb5f22f43e6d489ed3baca36fac11"
+ },
+ "environment": [
+  "TEST"
+ ],
+ "started_at_utc": "2026-11-23T09:10:32+00:00",
+ "finished_at_utc": "2026-11-23T09:10:40+00:00",
+ "wall_seconds": 8.11,
+ "ports": {
+  "listen": 27661,
+  "stats": 27663,
+  "readiness": 27664,
+  "readback": 27665,
+  "upstream": 27666,
+  "admin": [
+   27667,
+   27668,
+   27669,
+   27670,
+   27671,
+   27672,
+   27673,
+   27674
+  ]
+ },
+ "cases": [
+  {
+   "id": "RB-LLM",
+   "title": "publisher certificate reads config_dump and runtime; another path is 404; no client certificate fails the handshake",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "GET /config_dump with the publisher certificate is 200",
+     "result": "pass"
+    },
+    {
+     "check": "GET /api/runtime with the publisher certificate is 200",
+     "result": "pass"
+    },
+    {
+     "check": "another path on the read-back port is 404",
+     "result": "pass"
+    },
+    {
+     "check": "without a client certificate the TLS handshake fails",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "read-back",
+     "value": {
+      "config_dump": 200,
+      "runtime": 200,
+      "other": 404,
+      "without_certificate": "SSLError"
+     }
+    }
+   ]
+  },
+  {
+   "id": "AUTH-LLM",
+   "title": "missing and wrong tokens are refused; another Host is refused",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "no JWT is 401 and the stand-in received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "wrong audience is 401 and the stand-in received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "wrong issuer is 401 and the stand-in received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "expired token is 401 and the stand-in received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "a token signed by another key is 401 and the stand-in received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "another Host is 403 and the stand-in received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "the caller's JWT never reaches a stand-in",
+     "result": "pass"
+    },
+    {
+     "check": "the gateway log has no JWT and no key material",
+     "result": "pass"
+    }
+   ],
+   "notes": []
+  },
+  {
+   "id": "LLM-01",
+   "title": "chat reaches the stand-in with the key and only the allowlisted headers; the two response headers do not come back",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "POST /llm/v1/chat/completions reaches the stand-in as /v1/chat/completions",
+     "result": "pass"
+    },
+    {
+     "check": "the stand-in saw the API key from the key file",
+     "result": "pass"
+    },
+    {
+     "check": "the caller gets the stand-in's completion",
+     "result": "pass"
+    },
+    {
+     "check": "Cookie, X-Forwarded-For, X-Provider-Account and X-Not-Registered do not reach the stand-in",
+     "result": "pass"
+    },
+    {
+     "check": "Location and Set-Cookie do not reach the caller",
+     "result": "pass"
+    },
+    {
+     "check": "the compiled YAML does not contain the key",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "llm",
+     "value": {
+      "status": 200,
+      "paths": [
+       "/v1/chat/completions"
+      ],
+      "headers": [
+       [
+        "accept",
+        "authorization",
+        "content-length",
+        "content-type",
+        "host",
+        "traceparent"
+       ]
+      ],
+      "location": null,
+      "set_cookie": null
+     }
+    }
+   ]
+  },
+  {
+   "id": "LLM-MODELS",
+   "title": "GET /llm/v1/models is answered by the gateway and lists the spec's model",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "GET /llm/v1/models is 200 and lists example-model",
+     "result": "pass"
+    },
+    {
+     "check": "the stand-in received nothing for GET /llm/v1/models",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "models",
+     "value": {
+      "status": 200,
+      "raw": "{\"object\":\"list\",\"data\":[{\"id\":\"example-model\",\"object\":\"model\",\"created\":1795425033,\"owned_by\":\"openai\"}]}"
+     }
+    }
+   ]
+  },
+  {
+   "id": "LLM-PATHS",
+   "title": "only the two compiled endpoints are forwarded",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "POST /llm/other is 403 and the stand-in received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "POST /llm/v1/embeddings is 403 and the stand-in received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "POST /llm/v1/chat/completions/ is 403 and the stand-in received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "GET /llm/v1/chat/completions is 403 and the stand-in received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "POST /llm/v1/models is 403 and the stand-in received nothing",
+     "result": "pass"
+    }
+   ],
+   "notes": []
+  },
+  {
+   "id": "LLM-UNKNOWN",
+   "title": "a model the spec does not list is 404 and the stand-in received nothing",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "an unlisted model is 404 and the stand-in received nothing",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "query string on the chat path",
+     "value": {
+      "status": 200,
+      "raw_paths": [
+       "/v1/chat/completions?x=1"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "RB-MCP",
+   "title": "publisher certificate reads config_dump and runtime; another path is 404; no client certificate fails the handshake",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "GET /config_dump with the publisher certificate is 200",
+     "result": "pass"
+    },
+    {
+     "check": "GET /api/runtime with the publisher certificate is 200",
+     "result": "pass"
+    },
+    {
+     "check": "another path on the read-back port is 404",
+     "result": "pass"
+    },
+    {
+     "check": "without a client certificate the TLS handshake fails",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "read-back",
+     "value": {
+      "config_dump": 200,
+      "runtime": 200,
+      "other": 404,
+      "without_certificate": "SSLError"
+     }
+    }
+   ]
+  },
+  {
+   "id": "AUTH-MCP",
+   "title": "missing and wrong tokens are refused; another Host is refused",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "no JWT is 401 and the stand-in received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "wrong audience is 401 and the stand-in received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "wrong issuer is 401 and the stand-in received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "expired token is 401 and the stand-in received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "a token signed by another key is 401 and the stand-in received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "another Host is 404 and the stand-in received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "the caller's JWT never reaches a stand-in",
+     "result": "pass"
+    },
+    {
+     "check": "the gateway log has no JWT and no key material",
+     "result": "pass"
+    }
+   ],
+   "notes": []
+  },
+  {
+   "id": "MCP-TLS",
+   "title": "MCP over TLS: session, allowlist, path rule, methods, and the measured response headers",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "initialize is 200 and returns a session id",
+     "result": "pass"
+    },
+    {
+     "check": "notifications/initialized is 202",
+     "result": "pass"
+    },
+    {
+     "check": "tools/list works",
+     "result": "pass"
+    },
+    {
+     "check": "tools/call works",
+     "result": "pass"
+    },
+    {
+     "check": "the target saw the gateway client certificate",
+     "result": "pass"
+    },
+    {
+     "check": "the target saw the rewritten Host",
+     "result": "pass"
+    },
+    {
+     "check": "Cookie, X-Forwarded-For, X-Provider-Account and X-Not-Registered do not reach the target",
+     "result": "pass"
+    },
+    {
+     "check": "a path one segment deeper is 403 and the target received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "PUT is 404 and the target received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "a session id without a JWT is 401 and the target received nothing",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "response headers the caller saw",
+     "value": {
+      "initialize_location": null,
+      "initialize_set_cookie": null,
+      "tools_list_location": null,
+      "tools_list_set_cookie": null
+     }
+    },
+    {
+     "note": "headers the target saw",
+     "value": [
+      [
+       "accept",
+       "content-length",
+       "content-type",
+       "host",
+       "mcp-method",
+       "traceparent"
+      ],
+      [
+       "accept",
+       "content-length",
+       "content-type",
+       "host",
+       "mcp-method",
+       "mcp-name",
+       "mcp-protocol-version",
+       "mcp-session-id",
+       "traceparent"
+      ]
+     ]
+    },
+    {
+     "note": "rewritten host",
+     "value": [
+      "mcp.standin.test",
+      "mcp.standin.test"
+     ]
+    },
+    {
+     "note": "client certificate",
+     "value": [
+      {
+       "cn": "gateway",
+       "uris": [
+        "spiffe://idp.test/ai-pool/gateway"
+       ]
+      }
+     ]
+    },
+    {
+     "note": "DELETE then reuse",
+     "value": {
+      "delete_status": 202,
+      "target_saw_delete": [
+       "DELETE"
+      ],
+      "reuse_status": 200,
+      "target_saw_reuse": [
+       "tools/list"
+      ],
+      "reuse_has_result": true
+     }
+    },
+    {
+     "note": "deeper and put",
+     "value": {
+      "deeper": 403,
+      "put": 404
+     }
+    }
+   ]
+  },
+  {
+   "id": "MCP-PLAIN",
+   "title": "MCP on plain loopback completes a session; the Host the target saw is recorded",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "plain loopback initialize, tools/list and tools/call work",
+     "result": "pass"
+    },
+    {
+     "check": "the gateway log has no JWT and no key material",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "host the target saw",
+     "value": [
+      "127.0.0.1:27666"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "MCP-OTHER-CA",
+   "title": "MCP target certificate from another CA: initialize is 500 and the target application received nothing",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "initialize is HTTP 500 with JSON-RPC -32603",
+     "result": "pass"
+    },
+    {
+     "check": "the target application received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "the gateway log has no JWT and no key material",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "failure",
+     "value": {
+      "status": 500,
+      "code": -32603,
+      "message": "failed to send message",
+      "error": null,
+      "records": 0
+     }
+    }
+   ]
+  },
+  {
+   "id": "MCP-NAME",
+   "title": "MCP tls_hostname does not match the certificate: initialize is 500 and the target application received nothing",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "initialize is HTTP 500 with JSON-RPC -32603",
+     "result": "pass"
+    },
+    {
+     "check": "the target application received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "the gateway log has no JWT and no key material",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "failure",
+     "value": {
+      "status": 500,
+      "code": -32603,
+      "message": "failed to send message",
+      "error": null,
+      "records": 0
+     }
+    }
+   ]
+  },
+  {
+   "id": "MCP-DOWN",
+   "title": "nothing listening for the MCP target: initialize is 500 and the target application received nothing",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "initialize is HTTP 500 with JSON-RPC -32603",
+     "result": "pass"
+    },
+    {
+     "check": "the target application received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "the gateway log has no JWT and no key material",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "failure",
+     "value": {
+      "status": 500,
+      "code": -32603,
+      "message": "failed to send message",
+      "error": null,
+      "records": 0
+     }
+    }
+   ]
+  },
+  {
+   "id": "RB-A2A",
+   "title": "publisher certificate reads config_dump and runtime; another path is 404; no client certificate fails the handshake",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "GET /config_dump with the publisher certificate is 200",
+     "result": "pass"
+    },
+    {
+     "check": "GET /api/runtime with the publisher certificate is 200",
+     "result": "pass"
+    },
+    {
+     "check": "another path on the read-back port is 404",
+     "result": "pass"
+    },
+    {
+     "check": "without a client certificate the TLS handshake fails",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "read-back",
+     "value": {
+      "config_dump": 200,
+      "runtime": 200,
+      "other": 404,
+      "without_certificate": "SSLError"
+     }
+    }
+   ]
+  },
+  {
+   "id": "AUTH-A2A",
+   "title": "missing and wrong tokens are refused; another Host is refused",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "no JWT is 401 and the stand-in received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "wrong audience is 401 and the stand-in received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "wrong issuer is 401 and the stand-in received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "expired token is 401 and the stand-in received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "a token signed by another key is 401 and the stand-in received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "another Host is 404 and the stand-in received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "the caller's JWT never reaches a stand-in",
+     "result": "pass"
+    },
+    {
+     "check": "the gateway log has no JWT and no key material",
+     "result": "pass"
+    }
+   ],
+   "notes": []
+  },
+  {
+   "id": "A2A-TLS",
+   "title": "A2A over TLS: rewritten card, allowlist, method binding, and stripped response headers",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "the card is 200 and url is http://ai.example/agent",
+     "result": "pass"
+    },
+    {
+     "check": "POST /agent reaches the agent at /",
+     "result": "pass"
+    },
+    {
+     "check": "the caller gets the agent's answer",
+     "result": "pass"
+    },
+    {
+     "check": "the agent saw the gateway client certificate",
+     "result": "pass"
+    },
+    {
+     "check": "the agent saw the rewritten Host",
+     "result": "pass"
+    },
+    {
+     "check": "only allowlisted caller headers reach the agent",
+     "result": "pass"
+    },
+    {
+     "check": "Location and Set-Cookie do not reach the caller",
+     "result": "pass"
+    },
+    {
+     "check": "GET /agent is 403 and the agent received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "POST /agent/.well-known/agent-card.json is 403 and the agent received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "GET /agent/.well-known/agent.json is 403 and the agent received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "GET /agent/ is 403 and the agent received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "POST /agent/other is 403 and the agent received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "DELETE /agent is 404 and the agent received nothing",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "card url when the caller sends X-Forwarded-Proto https",
+     "value": "http://ai.example/agent"
+    },
+    {
+     "note": "card url",
+     "value": "http://ai.example/agent"
+    },
+    {
+     "note": "agent saw",
+     "value": {
+      "paths": [
+       "/"
+      ],
+      "host": [
+       "agent.standin.test"
+      ],
+      "headers": [
+       [
+        "accept",
+        "content-length",
+        "content-type",
+        "host",
+        "traceparent"
+       ]
+      ],
+      "cert": [
+       {
+        "cn": "gateway",
+        "uris": [
+         "spiffe://idp.test/ai-pool/gateway"
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "A2A-OTHER-CA",
+   "title": "an agent certificate from another CA is 503 and the agent application received nothing",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "the card is 503 and the agent application received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "POST is 503 and the agent application received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "the gateway log has no JWT and no key material",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "other ca",
+     "value": {
+      "card": 503,
+      "card_raw": "upstream connection failed",
+      "post": 503,
+      "post_raw": "upstream connection failed"
+     }
+    }
+   ]
+  }
+ ],
+ "summary": {
+  "cases": 17,
+  "cases_failed": 0,
+  "checks": 87,
+  "checks_passed": 87,
+  "checks_failed": 0
+ }
+}
