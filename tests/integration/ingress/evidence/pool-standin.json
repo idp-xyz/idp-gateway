@@ -1,0 +1,733 @@
+{
+ "kind": "ingress pool: deploy/compose/compose.yml unchanged, tests/integration/ingress/pool.yml adds the stand-in, gateway-control compile then publish, callers through front",
+ "not_an_acceptance_pass": true,
+ "operator_and_approver": "Not recorded. This file records what was run and what was seen. It is not an acceptance pass and it is not a gate decision.",
+ "control": null,
+ "agentgateway": {
+  "version": "1.7.0",
+  "git_revision": "26f5aebe99a36a037fe54f8080a608aca5547e15",
+  "image": "cr.agentgateway.dev/agentgateway@sha256:60216aafb03d37f94e952ff3d51d2f630a65b10ecaebdc0a864882f92610c45b",
+  "local_binary_sha256": "c7ef326b7b5702451e94bab55ff484d600d5abdc5344a4cdf7c72fc0bcff9e24"
+ },
+ "repository": {
+  "commit": "d7fbfbb98cbaadc683349d5de4e5f88c945a0d27",
+  "uncommitted_files": 0
+ },
+ "gateway_configuration_sha256": "39a67f69dca90cedfb5dd99515468edb2f18028ecaccd7f7d799a260671f0679",
+ "environment": [
+  "TEST"
+ ],
+ "started_at_utc": "2026-11-23T07:52:03+00:00",
+ "finished_at_utc": "2026-11-23T07:52:21+00:00",
+ "wall_seconds": 18.12,
+ "upstream": {
+  "kind": "stand-in",
+  "host": "stand-in.ingress.example",
+  "port": 9443,
+  "authority": "stand-in.ingress.example"
+ },
+ "publish": {
+  "exit": 0,
+  "outcome": "ACTIVE",
+  "outcome_line": "{\n  \"outcome\": \"ACTIVE\",\n  \"reason\": \"\",\n  \"snapshot\": \"39a67f69dca90cedfb5dd99515468edb2f18028ecaccd7f7d799a260671f0679\",\n  \"previous\": \"a823298a2488760b7b98d8e603a010d13faea638aa93ac58dfff08633580517c\",\n  \"replaced\": true,\n  \"restarted\": false,\n  \"expected_digest\": \"e4242fc064ad83277ec4486355dbc55d504681f4280b44de6e932fdd3c9ed273\",\n  \"restart\": [],\n  \"observed\": {\n    \"digest\": \"e4242fc064ad83277ec4486355dbc55d504681f4280b44de6e932fdd3c9ed273\",\n    \"synchronized\": true,\n    \"last_error\": \"\",\n    \"storage_mode\": \"readOnly\",\n    \"version\": \"1.7.0\",\n    \"revision\": \"26f5aebe99a36a037fe54f8080a608aca5547e15\"\n  }\n}",
+  "seconds": 2.17
+ },
+ "proxy_variables_removed_from_this_process": [
+  "HTTPS_PROXY",
+  "HTTP_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy"
+ ],
+ "gateway_proxy_variables": {
+  "in_the_containers": {
+   "agentgateway": [],
+   "front": [],
+   "netns": [],
+   "standin": [],
+   "outsider": []
+  },
+  "present_in_the_containers": false
+ },
+ "cases": [
+  {
+   "id": "IN-01",
+   "title": "gateway-control publish of the compiled file reports the confirmed outcome",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "publish exits 0",
+     "result": "pass"
+    },
+    {
+     "check": "publish outcome is ACTIVE",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "exit",
+     "value": 0
+    },
+    {
+     "note": "outcome",
+     "value": "ACTIVE"
+    },
+    {
+     "note": "outcome line",
+     "value": "{\n  \"outcome\": \"ACTIVE\",\n  \"reason\": \"\",\n  \"snapshot\": \"39a67f69dca90cedfb5dd99515468edb2f18028ecaccd7f7d799a260671f0679\",\n  \"previous\": \"a823298a2488760b7b98d8e603a010d13faea638aa93ac58dfff08633580517c\",\n  \"replaced\": true,\n  \"restarted\": false,\n  \"expected_digest\": \"e4242fc064ad83277ec4486355dbc55d504681f4280b44de6e932fdd3c9ed273\",\n  \"restart\": [],\n  \"observed\": {\n    \"digest\": \"e4242fc064ad83277ec4486355dbc55d504681f4280b44de6e932fdd3c9ed273\",\n    \"synchronized\": true,\n    \"last_error\": \"\",\n    \"storage_mode\": \"readOnly\",\n    \"version\": \"1.7.0\",\n    \"revision\": \"26f5aebe99a36a037fe54f8080a608aca5547e15\"\n  }\n}"
+    },
+    {
+     "note": "stderr",
+     "value": ""
+    },
+    {
+     "note": "seconds",
+     "value": 2.17
+    }
+   ]
+  },
+  {
+   "id": "IN-02",
+   "title": "no token is 401 and the backend receives nothing",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "status 401",
+     "result": "pass"
+    },
+    {
+     "check": "the backend received nothing",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "status",
+     "value": 401
+    },
+    {
+     "note": "error",
+     "value": null
+    },
+    {
+     "note": "backend count",
+     "value": 0
+    }
+   ]
+  },
+  {
+   "id": "IN-03",
+   "title": "a valid token GET of the registered path reaches the stand-in",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "status 200",
+     "result": "pass"
+    },
+    {
+     "check": "body is the stand-in body",
+     "result": "pass"
+    },
+    {
+     "check": "the backend application received one request",
+     "result": "pass"
+    },
+    {
+     "check": "the backend saw the gateway client certificate",
+     "result": "pass"
+    },
+    {
+     "check": "Host is the spec authority",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "status",
+     "value": 200
+    },
+    {
+     "note": "body",
+     "value": "stand-in-ok\n"
+    },
+    {
+     "note": "backend count",
+     "value": 1
+    },
+    {
+     "note": "backend",
+     "value": {
+      "method": "GET",
+      "path": "/v1/shipments",
+      "headers": {
+       "accept": "application/json",
+       "host": "stand-in.ingress.example"
+      },
+      "client_subject": [
+       "commonName=gateway"
+      ],
+      "client_sans": [
+       {
+        "kind": "URI",
+        "value": "spiffe://idp.test/ingress-pool/gateway"
+       }
+      ],
+      "sent_headers": [
+       "location",
+       "set-cookie"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "IN-04",
+   "title": "the caller JWT is not forwarded; only the allowlisted headers are",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "status 200",
+     "result": "pass"
+    },
+    {
+     "check": "the backend received the request",
+     "result": "pass"
+    },
+    {
+     "check": "Authorization was not forwarded",
+     "result": "pass"
+    },
+    {
+     "check": "Cookie, X-Forwarded-For and X-Not-Registered were not forwarded",
+     "result": "pass"
+    },
+    {
+     "check": "no header outside host, accept, content-type and traceparent",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "status",
+     "value": 200
+    },
+    {
+     "note": "backend",
+     "value": {
+      "method": "GET",
+      "path": "/v1/shipments",
+      "headers": {
+       "accept": "application/json",
+       "content-type": "application/json",
+       "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-40217f8edb51e024-01",
+       "host": "stand-in.ingress.example"
+      },
+      "client_subject": [
+       "commonName=gateway"
+      ],
+      "client_sans": [
+       {
+        "kind": "URI",
+        "value": "spiffe://idp.test/ingress-pool/gateway"
+       }
+      ],
+      "sent_headers": [
+       "location",
+       "set-cookie"
+      ]
+     }
+    },
+    {
+     "note": "header names",
+     "value": [
+      "accept",
+      "content-type",
+      "host",
+      "traceparent"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "IN-05",
+   "title": "HEAD on the registered path",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "status 200",
+     "result": "pass"
+    },
+    {
+     "check": "the backend saw HEAD on the registered path",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "status",
+     "value": 200
+    },
+    {
+     "note": "caller body length",
+     "value": 0
+    },
+    {
+     "note": "backend",
+     "value": [
+      {
+       "method": "HEAD",
+       "path": "/v1/shipments",
+       "headers": {
+        "accept": "application/json",
+        "host": "stand-in.ingress.example"
+       },
+       "client_subject": [
+        "commonName=gateway"
+       ],
+       "client_sans": [
+        {
+         "kind": "URI",
+         "value": "spiffe://idp.test/ingress-pool/gateway"
+        }
+       ],
+       "sent_headers": [
+        "location",
+        "set-cookie"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "IN-06",
+   "title": "POST is not a registered method",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "the backend received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "the caller got 403, 404 or 405",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "status",
+     "value": 404
+    },
+    {
+     "note": "backend count",
+     "value": 0
+    }
+   ]
+  },
+  {
+   "id": "IN-07",
+   "title": "a deeper path and a path that only shares the prefix do not reach the backend",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "deeper path is 403 or 404",
+     "result": "pass"
+    },
+    {
+     "check": "deeper path backend received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "prefix string is 403 or 404",
+     "result": "pass"
+    },
+    {
+     "check": "prefix string backend received nothing",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "deeper path status",
+     "value": 403
+    },
+    {
+     "note": "deeper path backend count",
+     "value": 0
+    },
+    {
+     "note": "prefix string status",
+     "value": 404
+    },
+    {
+     "note": "prefix string backend count",
+     "value": 0
+    }
+   ]
+  },
+  {
+   "id": "IN-08",
+   "title": "wrong audience, wrong issuer, expired token, and a token signed by another key are 401",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "wrong audience is 401",
+     "result": "pass"
+    },
+    {
+     "check": "wrong audience backend received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "wrong issuer is 401",
+     "result": "pass"
+    },
+    {
+     "check": "wrong issuer backend received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "expired is 401",
+     "result": "pass"
+    },
+    {
+     "check": "expired backend received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "other key is 401",
+     "result": "pass"
+    },
+    {
+     "check": "other key backend received nothing",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "wrong audience status",
+     "value": 401
+    },
+    {
+     "note": "wrong audience backend count",
+     "value": 0
+    },
+    {
+     "note": "wrong issuer status",
+     "value": 401
+    },
+    {
+     "note": "wrong issuer backend count",
+     "value": 0
+    },
+    {
+     "note": "expired status",
+     "value": 401
+    },
+    {
+     "note": "expired backend count",
+     "value": 0
+    },
+    {
+     "note": "other key status",
+     "value": 401
+    },
+    {
+     "note": "other key backend count",
+     "value": 0
+    }
+   ]
+  },
+  {
+   "id": "IN-09",
+   "title": "another Host header",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "the backend received nothing",
+     "result": "pass"
+    },
+    {
+     "check": "the caller got 403 or 404",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "status",
+     "value": 404
+    },
+    {
+     "note": "backend count",
+     "value": 0
+    }
+   ]
+  },
+  {
+   "id": "IN-10",
+   "title": "Location and Set-Cookie from the backend do not reach the caller",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "the backend answered",
+     "result": "pass"
+    },
+    {
+     "check": "Location did not reach the caller",
+     "result": "pass"
+    },
+    {
+     "check": "Set-Cookie did not reach the caller",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "status",
+     "value": 200
+    },
+    {
+     "note": "caller header names",
+     "value": [
+      "server",
+      "date",
+      "content-type",
+      "content-length",
+      "connection"
+     ]
+    },
+    {
+     "note": "backend sent_headers",
+     "value": [
+      "location",
+      "set-cookie"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "IN-11",
+   "title": "two Host headers through front are refused by nginx",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "status 400",
+     "result": "pass"
+    },
+    {
+     "check": "the body is nginx's own error page",
+     "result": "pass"
+    },
+    {
+     "check": "the backend received nothing",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "status",
+     "value": 400
+    },
+    {
+     "note": "status line",
+     "value": "HTTP/1.1 400 Bad Request"
+    },
+    {
+     "note": "nginx error page",
+     "value": true
+    }
+   ]
+  },
+  {
+   "id": "IN-12",
+   "title": "stop then up -d comes back through place and confirm, and the registered GET still works",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "place exits 0",
+     "result": "pass"
+    },
+    {
+     "check": "confirm exits 0",
+     "result": "pass"
+    },
+    {
+     "check": "after restart: status 200",
+     "result": "pass"
+    },
+    {
+     "check": "after restart: body is the stand-in body",
+     "result": "pass"
+    },
+    {
+     "check": "after restart: the backend application received one request",
+     "result": "pass"
+    },
+    {
+     "check": "after restart: the backend saw the gateway client certificate",
+     "result": "pass"
+    },
+    {
+     "check": "after restart: Host is the spec authority",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "stop exit",
+     "value": 0
+    },
+    {
+     "note": "up exit",
+     "value": 0
+    },
+    {
+     "note": "up stderr",
+     "value": "tch-1 Started \n Container idp-gateway-ingress-test-agentgateway-1 Started \n Container idp-gateway-ingress-test-confirm-1 Starting \n Container idp-gateway-ingress-test-confirm-1 Started \n Container idp-gateway-ingress-test-confirm-1 Waiting \n Container idp-gateway-ingress-test-confirm-1 Exited \n Container idp-gateway-ingress-test-front-1 Starting \n Container idp-gateway-ingress-test-front-1 Started"
+    },
+    {
+     "note": "confirm exit",
+     "value": 0
+    },
+    {
+     "note": "place exit",
+     "value": 0
+    },
+    {
+     "note": "a GET returned 200 after restart",
+     "value": true
+    },
+    {
+     "note": "after restart: status",
+     "value": 200
+    },
+    {
+     "note": "after restart: body",
+     "value": "stand-in-ok\n"
+    },
+    {
+     "note": "after restart: backend count",
+     "value": 1
+    },
+    {
+     "note": "after restart: backend",
+     "value": {
+      "method": "GET",
+      "path": "/v1/shipments",
+      "headers": {
+       "accept": "application/json",
+       "host": "stand-in.ingress.example"
+      },
+      "client_subject": [
+       "commonName=gateway"
+      ],
+      "client_sans": [
+       {
+        "kind": "URI",
+        "value": "spiffe://idp.test/ingress-pool/gateway"
+       }
+      ],
+      "sent_headers": [
+       "location",
+       "set-cookie"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "IN-13",
+   "title": "from the gateway namespace an address the published file does not name is refused, and the backend is reachable",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "the stand-in name is pinned to the stand-in address",
+     "result": "pass"
+    },
+    {
+     "check": "the backend address can be connected to",
+     "result": "pass"
+    },
+    {
+     "check": "the outsider address is refused by the rule",
+     "result": "pass"
+    },
+    {
+     "check": "another port on the stand-in and the stats port are refused by the rule",
+     "result": "pass"
+    },
+    {
+     "check": "the read-back route host is pinned on loopback",
+     "result": "pass"
+    },
+    {
+     "check": "loopback 8081 and the admin address named by the read-back route can be connected to",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "pinned",
+     "value": {
+      "127.0.0.1:15000": [
+       "127.0.0.1"
+      ],
+      "stand-in.ingress.example:9443": [
+       "172.28.0.4"
+      ]
+     }
+    },
+    {
+     "note": "stand-in address",
+     "value": "172.28.0.4"
+    },
+    {
+     "note": "outsider address",
+     "value": "172.28.0.2"
+    },
+    {
+     "note": "connect",
+     "value": {
+      "172.28.0.4:9443": 0,
+      "172.28.0.2:8000": 113,
+      "172.28.0.4:8000": 113,
+      "127.0.0.1:8081": 0,
+      "127.0.0.1:15000": 0,
+      "127.0.0.1:15020": 113
+     }
+    }
+   ]
+  },
+  {
+   "id": "IN-14",
+   "title": "the gateway log and the backend records contain no JWT and no private key material",
+   "result": "pass",
+   "checks": [
+    {
+     "check": "no JWT and no private key material in the gateway log, front log, stand-in log, or backend records",
+     "result": "pass"
+    }
+   ],
+   "notes": [
+    {
+     "note": "found",
+     "value": {
+      "agentgateway log": [],
+      "front log": [],
+      "stand-in log": [],
+      "backend records": []
+     }
+    }
+   ]
+  }
+ ],
+ "summary": {
+  "cases": 14,
+  "cases_failed": 0,
+  "checks": 52,
+  "checks_passed": 52,
+  "checks_failed": 0
+ }
+}
