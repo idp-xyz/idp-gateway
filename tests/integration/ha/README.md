@@ -50,4 +50,4 @@ cd /home/tops/workspace/idp-gateway
 | no-lease-mutual-kick | 对照成立。承运商 ≥2，令牌分叉 |
 | wrong-identity | 对照成立。401，无 `Authorization`，承运商 0 |
 
-这不是验收通过。黑盒没有重跑。正式门禁仍是 `NOT_RUN`。ADR-0021 / ADR-0022 仍是 Proposed。
+这不是验收通过。正式门禁仍是 `NOT_RUN`。ADR-0021 / ADR-0022 仍是 Proposed。2026-11-24 另从干净的 `8982ce6` 重跑了黑盒，97/97（证据 `f9beb7b`）；黑盒不传租约参数，也不启动本套件。
