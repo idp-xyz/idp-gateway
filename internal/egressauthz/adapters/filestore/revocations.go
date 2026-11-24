@@ -390,6 +390,60 @@ func (r *Revocations) Banned(context.Context) ([]ports.BannedOperation, uint64, 
 	return operations, epoch, nil
 }
 
+// Adopt 用协调器的快照整份换掉内存和文件。它在与 Revoke 同一把写锁下写完再发布。
+// 代次不在这里递增：写下去的就是调用方给的那一个。本地代次不同时，调用方给的这一份留下。
+// 写文件失败时内存保持原样。Load、Revoke、Restore、Ban、Lift、View 的行为不因这个方法改变。
+func (r *Revocations) Adopt(epoch uint64, accounts []ports.RevokedAccount, bans []ports.BannedOperation) error {
+	revoked, err := revocationEntries(accounts)
+	if err != nil {
+		return err
+	}
+	banned, err := banEntries(bans)
+	if err != nil {
+		return err
+	}
+	r.writing.Lock()
+	defer r.writing.Unlock()
+	unlock, err := r.hold()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := r.write(epoch, revoked, banned); err != nil {
+		return err
+	}
+	r.publish(snapshot{epoch: epoch, revoked: revoked, banned: banned}, true)
+	return nil
+}
+
+func revocationEntries(accounts []ports.RevokedAccount) (map[string]revocation, error) {
+	revoked := make(map[string]revocation, len(accounts))
+	for _, account := range accounts {
+		if account.AccountID == "" {
+			return nil, errors.New("revocations: no account given")
+		}
+		if _, ok := revoked[account.AccountID]; ok {
+			return nil, fmt.Errorf("revocations: account %q is duplicated", account.AccountID)
+		}
+		revoked[account.AccountID] = revocation{at: account.At.UTC(), by: account.By, reason: account.Reason}
+	}
+	return revoked, nil
+}
+
+func banEntries(bans []ports.BannedOperation) (map[string]revocation, error) {
+	banned := make(map[string]revocation, len(bans))
+	for _, ban := range bans {
+		if ban.OperationID == "" {
+			return nil, errors.New("revocations: no operation given")
+		}
+		if _, ok := banned[ban.OperationID]; ok {
+			return nil, fmt.Errorf("revocations: operation %q is duplicated", ban.OperationID)
+		}
+		banned[ban.OperationID] = revocation{at: ban.At.UTC(), by: ban.By, reason: ban.Reason}
+	}
+	return banned, nil
+}
+
 // Revoked 实现 ports.RevocationLedger。
 func (r *Revocations) Revoked(context.Context) ([]ports.RevokedAccount, uint64, error) {
 	if err := r.refresh(); err != nil {

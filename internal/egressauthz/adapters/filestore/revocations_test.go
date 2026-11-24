@@ -662,6 +662,39 @@ func TestTwoLedgersDoNotDropEachOthersBans(t *testing.T) {
 	}
 }
 
+func TestAdoptReplacesTheLocalEpochWithTheCoordinatorSnapshot(t *testing.T) {
+	ctx := context.Background()
+	path := writeFile(t, `{"epoch": 4, "revoked_accounts": {"account-old":
+		{"at": "2026-11-01T00:00:00Z", "by": "x", "reason": "left"}}}`, 0o600)
+	ledger := loadRevocations(t, path)
+	at := time.Date(2026, 11, 24, 1, 2, 3, 0, time.UTC)
+	if err := ledger.Adopt(1, []ports.RevokedAccount{{
+		AccountID: "account-blue", At: at, By: "spiffe://idp.test/revoker", Reason: "key leaked",
+	}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	revoked, _, epoch, err := ledger.View(ctx, "account-blue", "tracking.get")
+	if err != nil || !revoked || epoch != 1 {
+		t.Fatalf("内存：revoked=%v epoch=%d err=%v", revoked, epoch, err)
+	}
+	if revoked, _, _, err := ledger.View(ctx, "account-old", "tracking.get"); err != nil || revoked {
+		t.Fatal("旧账户还在")
+	}
+	written, epoch := onDisk(t, path)
+	if names(written) != "account-blue" || epoch != 1 || written[0].Reason != "key leaked" {
+		t.Fatalf("文件：%s 代次 %d %+v", names(written), epoch, written)
+	}
+	if _, err := ledger.Revoke(ctx, "account-green", "spiffe://idp.test/revoker", "again"); err != nil {
+		t.Fatal(err)
+	}
+	if epoch, err := ledger.Epoch(ctx); err != nil || epoch != 2 {
+		t.Fatalf("Adopt 之后的撤销：%d %v", epoch, err)
+	}
+	if err := ledger.Adopt(1, []ports.RevokedAccount{{AccountID: "", At: at}}, nil); err == nil {
+		t.Fatal("空账户被接受了")
+	}
+}
+
 // 内存里还有没写下去的撤销时，下一次写要把磁盘上其他进程多出来的条目补上，同时留下这份内存。
 func TestAnUnwrittenRevokeIsKeptWhenTheOtherLedgerWrites(t *testing.T) {
 	ctx := context.Background()

@@ -1,7 +1,10 @@
 package domain
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -273,6 +276,45 @@ func TestQuotaTableConcurrent(t *testing.T) {
 	// 另一账户不受上面这 50 次的影响，也不和它们抢同一把桶。
 	if ok, _ := table.Allow(now, subject("account-green")); !ok {
 		t.Fatal("并发之后绿账户没有配额")
+	}
+}
+
+func TestChargesDoNotMutateAndHideTheKey(t *testing.T) {
+	table := mustTable(t, QuotaRule{
+		ID: "per-account", ProviderID: "mockcarrier",
+		KeyDimensions: []string{dimensionProvider, dimensionProviderAccount},
+		MaxRequests:   2, WindowSeconds: 60, Burst: 1,
+	})
+	sub := subject("account-blue")
+	charges := table.Charges(sub)
+	if len(charges) != 1 {
+		t.Fatal(len(charges))
+	}
+	got := charges[0]
+	if len(got.Key) != 64 || got.Key != strings.ToLower(got.Key) || strings.Contains(got.Key, "account-blue") || strings.Contains(got.Key, "\x00") {
+		t.Fatalf("key %q", got.Key)
+	}
+	if got.MaxRequests != 2 || got.WindowSeconds != 60 || got.Capacity != 1 {
+		t.Fatalf("%+v", got)
+	}
+	raw := "per-account\x00provider\x00mockcarrier\x00provider_account\x00account-blue\x00"
+	sum := sha256.Sum256([]byte(raw))
+	if hex.EncodeToString(sum[:]) != got.Key {
+		t.Fatalf("hash %s", got.Key)
+	}
+	now := time.Unix(1_700_000_000, 0)
+	if ok, _ := table.Allow(now, sub); !ok {
+		t.Fatal("Charges 扣掉了令牌")
+	}
+	if ok, _ := table.Allow(now, sub); ok {
+		t.Fatal("容量 1 的第二次仍放行")
+	}
+	if len(table.Charges(RateLimitSubject{ProviderID: "other", AccountID: "account-blue"})) != 0 {
+		t.Fatal("没命中的规则返回了扣费")
+	}
+	empty := mustTable(t)
+	if len(empty.Charges(sub)) != 0 {
+		t.Fatal("没有规则时不该有扣费")
 	}
 }
 

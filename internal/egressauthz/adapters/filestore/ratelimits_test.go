@@ -69,6 +69,21 @@ func TestRateLimitsLoadAndAllow(t *testing.T) {
 	}
 }
 
+func TestRateLimitChargesDoNotConsume(t *testing.T) {
+	store := loadRateLimits(t, validRateLimits, 0o600, nil)
+	charges := store.Charges(rateLimitSubject("account-blue"))
+	if len(charges) != 1 || charges[0].MaxRequests != 1 || charges[0].WindowSeconds != 60 || len(charges[0].Key) != 64 {
+		t.Fatalf("%+v", charges)
+	}
+	if strings.Contains(charges[0].Key, "account-blue") || strings.Contains(charges[0].Key, "\x00") {
+		t.Fatal(charges[0].Key)
+	}
+	allowed, _, err := store.Allow(context.Background(), rateLimitSubject("account-blue"))
+	if err != nil || !allowed {
+		t.Fatalf("Charges 扣掉了本地桶：%v %v", allowed, err)
+	}
+}
+
 func TestRateLimitsRejectsBadFiles(t *testing.T) {
 	for name, content := range map[string]string{
 		"不是 JSON":             `not json`,

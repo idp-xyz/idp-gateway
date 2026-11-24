@@ -16,6 +16,12 @@
 // 给了协调器之后它不可用就失败关闭，不退回去单独向承运商取票。这五个要和 --sf-openapi-apps 一起给。
 // 一个凭证句柄只能出现在其中一个文件里。
 //
+// 撤销与配额的跨副本协调（docs/adr/ADR-0023.md）：--authz-state-url、--authz-state-cert、
+// --authz-state-key、--authz-state-ca、--authz-state-name 五个一起给时，撤销表的读和写走协调器，
+// 启动时必须先取到一份快照，否则不启动。五个都不给时仍是本地文件和本地配额桶。这五个要和
+// --revocations、--revoker-identity 一起给。同时给了 --rate-limits 时，配额扣费也走协调器；
+// 没给 --rate-limits 则不发配额请求。协调器不可用时失败关闭，不用旧快照放行。
+//
 // 撤销（见 docs/adr/ADR-0012.md）：--revocations 给出保存撤销表的文件，--revoker-identity
 // 给出唯一能改它的工作负载身份，两个要一起给。都不给时撤销表在内存里、永远是空的，也没有
 // 改它的接口。
@@ -47,6 +53,7 @@ import (
 	"syscall"
 	"time"
 
+	"go.idp.xyz/idp-gateway/internal/egressauthz/adapters/authzstate"
 	"go.idp.xyz/idp-gateway/internal/egressauthz/adapters/filestore"
 	"go.idp.xyz/idp-gateway/internal/egressauthz/adapters/gatekeeper"
 	"go.idp.xyz/idp-gateway/internal/egressauthz/adapters/httpapi"
@@ -91,6 +98,11 @@ type options struct {
 	sfOpenAPILeaseKey      string
 	sfOpenAPILeaseCA       string
 	sfOpenAPILeaseName     string
+	authzStateURL          string
+	authzStateCert         string
+	authzStateKey          string
+	authzStateCA           string
+	authzStateName         string
 	gatewayIdentity        string
 	brokerIdentity         string
 	revocations            string
@@ -141,6 +153,12 @@ func parse(args []string, output io.Writer) (options, error) {
 	add(&o.sfOpenAPILeaseKey, "sf-openapi-lease-key", "上面那张证书的私钥（PEM）", false)
 	add(&o.sfOpenAPILeaseCA, "sf-openapi-lease-ca", "签发租约协调器证书的 CA（PEM）；系统自带的根证书不被信任", false)
 	add(&o.sfOpenAPILeaseName, "sf-openapi-lease-name", "验证租约协调器证书时要对上的名字", false)
+	add(&o.authzStateURL, "authz-state-url", "撤销与配额协调器的 https 地址。与下面四个 --authz-state-* 要么一起给、要么都不给；"+
+		"要和 --revocations、--revoker-identity 一起给。给了之后每一次判定都向它取新快照，取不到就失败关闭，不用旧快照放行", false)
+	add(&o.authzStateCert, "authz-state-cert", "出示给撤销协调器的工作负载证书（PEM）；文件替换后下一次连接用新的", false)
+	add(&o.authzStateKey, "authz-state-key", "上面那张证书的私钥（PEM）", false)
+	add(&o.authzStateCA, "authz-state-ca", "签发撤销协调器证书的 CA（PEM）；系统自带的根证书不被信任", false)
+	add(&o.authzStateName, "authz-state-name", "验证撤销协调器证书时要对上的名字", false)
 	add(&o.gatewayIdentity, "gateway-identity", "网关工作负载的身份（证书里的 URI）：可以要判定和凭证", true)
 	add(&o.brokerIdentity, "broker-identity", "本地 Broker 工作负载的身份：只能要判定；不设则没有这样的调用方", false)
 	add(&o.revocations, "revocations", "撤销文件（JSON：代次和被撤销的账户），权限须为 0600 或更严；启动时读，读不成就不启动；"+
@@ -193,6 +211,9 @@ func parse(args []string, output io.Writer) (options, error) {
 		}
 	}
 	if err := checkSFLease(o); err != nil {
+		return o, err
+	}
+	if err := checkAuthzState(o); err != nil {
 		return o, err
 	}
 	if o.brokerIdentity == o.gatewayIdentity {
@@ -263,6 +284,32 @@ func checkSFLease(o options) error {
 	address, err := url.Parse(o.sfOpenAPILeaseURL)
 	if err != nil || address.Scheme != "https" || address.Host == "" || address.User != nil || address.RawQuery != "" || address.Fragment != "" {
 		return errors.New("--sf-openapi-lease-url must be an https URL without user information, a query string, or a fragment")
+	}
+	return nil
+}
+
+// checkAuthzState 核对五个撤销协调参数：要么都给，要么都不给，而且要和撤销文件、撤销者身份一起给。
+// 地址必须是没有用户信息、查询串和片段的 https。错误文字里不回显这个地址。
+// 调用它时，--revocations 和 --revoker-identity 是否成对还没检查；这里只要求两个都非空。
+func checkAuthzState(o options) error {
+	given := 0
+	for _, v := range []string{o.authzStateURL, o.authzStateCert, o.authzStateKey, o.authzStateCA, o.authzStateName} {
+		if v != "" {
+			given++
+		}
+	}
+	if given == 0 {
+		return nil
+	}
+	if given != 5 {
+		return errors.New("--authz-state-url, --authz-state-cert, --authz-state-key, --authz-state-ca and --authz-state-name go together")
+	}
+	if o.revocations == "" || o.revokerIdentity == "" {
+		return errors.New("--authz-state-url needs --revocations and --revoker-identity")
+	}
+	address, err := url.Parse(o.authzStateURL)
+	if err != nil || address.Scheme != "https" || address.Host == "" || address.User != nil || address.RawQuery != "" || address.Fragment != "" {
+		return errors.New("--authz-state-url must be an https URL without user information, a query string, or a fragment")
 	}
 	return nil
 }
@@ -397,6 +444,17 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 		grantSource = "policy+gatekeeper"
 		options = append(options, application.WithGrants(grants))
 	}
+	var stateClient *authzstate.Client
+	if o.authzStateURL != "" {
+		stateTLS, err := workloadtls.ClientConfigWithLogger(o.authzStateCert, o.authzStateKey, o.authzStateCA, o.authzStateName, logger)
+		if err != nil {
+			return fmt.Errorf("authz state: %w", err)
+		}
+		stateClient, err = authzstate.New(o.authzStateURL, stateTLS, logger)
+		if err != nil {
+			return fmt.Errorf("authz state: %w", err)
+		}
+	}
 	rateLimits := "disabled"
 	rateLimitBuckets := 0
 	if o.rateLimits != "" {
@@ -405,10 +463,16 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 			return err
 		}
 		rateLimits, rateLimitBuckets = "enabled", limits.Len()
-		options = append(options, application.WithRateLimiter(limits))
+		var limiter ports.RateLimiter = limits
+		if stateClient != nil {
+			limiter = authzstate.NewLimiter(stateClient, limits, logger)
+		}
+		options = append(options, application.WithRateLimiter(limiter))
 	}
 
 	// 撤销表：给了文件就用文件里的那一张，它也是能改的那一张；没有给就在内存里，没有人能改。
+	// 给了协调器时，读和写都走协调器。启动先取一份快照写回文件；取不到不启动。
+	// 验收控制仍拿着这份文件。不传协调参数时，下面的分支与原来相同。
 	revocationStore, revokedAccounts, revocationEpoch := "memory", 0, uint64(0)
 	inMemory := &memory.Revocations{}
 	var revocations ports.Revocations = inMemory
@@ -418,13 +482,25 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 		if err != nil {
 			return err
 		}
+		if stateClient != nil {
+			if err := authzstate.Mirror(ctx, stateClient, ledger); err != nil {
+				return fmt.Errorf("authz state: %w", err)
+			}
+		}
 		accounts, epoch, err := ledger.Revoked(ctx)
 		if err != nil {
 			return err
 		}
 		revocations, inMemory = ledger, nil
 		revocationStore, revokedAccounts, revocationEpoch = "file", len(accounts), epoch
-		options = append(options, application.WithRevocationLedger(ledger))
+		var ledgerPort ports.RevocationLedger = ledger
+		if stateClient != nil {
+			wrapped := authzstate.NewLedger(stateClient, ledger, logger)
+			revocations = wrapped
+			ledgerPort = wrapped
+			revocationStore = "authz-state"
+		}
+		options = append(options, application.WithRevocationLedger(ledgerPort))
 	}
 	callers := httpapi.Callers{Gateway: o.gatewayIdentity, Broker: o.brokerIdentity, Revoker: o.revokerIdentity, Publisher: o.publisherIdentity}
 	service := application.New(policyFile.Current(), credentials, revocations, options...)
@@ -481,6 +557,8 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 		"credentials", bearerTokens, "developer_tokens", developerTokens, "oauth_clients", oauthClients,
 		"sf_openapi_apps", sfOpenAPIApps, "sf_openapi_plain_http_host", o.sfOpenAPIPlainHTTPHost,
 		"sf_openapi_lease", o.sfOpenAPILeaseURL != "",
+		"authz_state", o.authzStateURL != "",
+		"authz_state_quota", o.authzStateURL != "" && o.rateLimits != "",
 		"revocations", revocationStore, "revoked_accounts", revokedAccounts, "revocation_epoch", revocationEpoch,
 		"gateway_identity", o.gatewayIdentity, "broker_identity", o.brokerIdentity, "revoker_identity", o.revokerIdentity,
 		"publisher_identity", o.publisherIdentity,

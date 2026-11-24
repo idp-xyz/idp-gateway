@@ -58,6 +58,14 @@ func (r *RateLimits) Allow(ctx context.Context, subject domain.RateLimitSubject)
 	return allowed, retry, nil
 }
 
+// Charges 返回此刻规则对 subject 的扣费清单，不扣本地桶。文件变了就先重读，重读失败时沿用上一份。
+func (r *RateLimits) Charges(subject domain.RateLimitSubject) []domain.QuotaCharge {
+	if r == nil {
+		return nil
+	}
+	return r.current().Charges(subject)
+}
+
 // Len 返回最近一次读成的规则条数，供启动日志使用。
 func (r *RateLimits) Len() int {
 	r.mu.Lock()

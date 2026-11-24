@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -130,6 +132,7 @@ type compiledRule struct {
 	operationID   string
 	dimensions    []string
 	capacity      float64
+	capacityCount int
 	rate          float64
 	maxRequests   int
 	windowSeconds int
@@ -168,6 +171,7 @@ func NewQuotaTable(rules []QuotaRule) (*QuotaTable, error) {
 			operationID:   rule.OperationID,
 			dimensions:    dimensions,
 			capacity:      float64(capacity),
+			capacityCount: capacity,
 			rate:          float64(rule.MaxRequests) / float64(rule.WindowSeconds),
 			maxRequests:   rule.MaxRequests,
 			windowSeconds: rule.WindowSeconds,
@@ -178,6 +182,41 @@ func NewQuotaTable(rules []QuotaRule) (*QuotaTable, error) {
 		buckets: make(map[string]*tokenBucket),
 		idleFor: time.Duration(maxWindow) * time.Second * 2,
 	}, nil
+}
+
+// QuotaCharge 是一条规则对这次调用要扣的配额。Key 是内部键的 SHA-256，64 位小写十六进制。
+// 内部键用 NUL 分隔，不能放进 JSON；这里只留指纹。Capacity 在规则写了 Burst 时取 Burst，否则取 MaxRequests。
+type QuotaCharge struct {
+	Key           string
+	MaxRequests   int
+	WindowSeconds int
+	Capacity      int
+}
+
+// Charges 列出 subject 命中的规则，不创建桶，也不扣令牌。没有命中时返回空切片：
+// 调用方零次远程调用，直接放行。
+func (t *QuotaTable) Charges(subject RateLimitSubject) []QuotaCharge {
+	if t == nil || len(t.rules) == 0 {
+		return nil
+	}
+	out := make([]QuotaCharge, 0, len(t.rules))
+	for i := range t.rules {
+		rule := &t.rules[i]
+		if !rule.matches(subject) {
+			continue
+		}
+		sum := sha256.Sum256([]byte(rule.key(subject)))
+		out = append(out, QuotaCharge{
+			Key:           hex.EncodeToString(sum[:]),
+			MaxRequests:   rule.maxRequests,
+			WindowSeconds: rule.windowSeconds,
+			Capacity:      rule.capacityCount,
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // Allow 报告 now 这一刻 subject 是否还有配额。拒绝时 retryAfterSeconds 至少为 1。
