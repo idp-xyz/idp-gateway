@@ -107,6 +107,11 @@ type Grants interface {
 	MayUse(ctx context.Context, subject, tenantID, accountID string) (bool, error)
 }
 
+// PolicySource 返回此刻生效的登记表。每次判定或管理校验时读取一次，用于支持文件热重载。
+type PolicySource interface {
+	Current() domain.Policy
+}
+
 // Handle 是凭证句柄：凭证绑定加账户。它出现在只返回判定的接口里，本身不是凭证。
 func Handle(bindingRef, accountID string) string {
 	return bindingRef + "/" + accountID

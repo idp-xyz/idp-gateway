@@ -19,6 +19,11 @@
 //
 // --rate-limits 可选。给出时按文件里的配额对每个 Provider 账户限流，超额回答 429 和
 // Retry-After，原因码 RATE_LIMITED。不给则不限流。文件里没有秘密。
+//
+// 登记表文件被原子换掉之后，下一次判定和版本查询用新的一份；新文件读不成或文件不见时继续用上一份，
+// 绝不换成空表。--publisher-identity 可选，给出时这个工作负载身份可以 GET /v1/egress/policy-version
+// 只读查询当前登记表版本，不能要判定、凭证或改撤销表。它必须与 --gateway-identity、--broker-identity、
+// --revoker-identity 都不同。不给则不开放这个接口。
 package main
 
 import (
@@ -82,6 +87,7 @@ type options struct {
 	brokerIdentity         string
 	revocations            string
 	revokerIdentity        string
+	publisherIdentity      string
 	gatekeeperURL          string
 	gatekeeperToken        string
 	gatekeeperCert         string
@@ -126,6 +132,8 @@ func parse(args []string, output io.Writer) (options, error) {
 	add(&o.revocations, "revocations", "撤销文件（JSON：代次和被撤销的账户），权限须为 0600 或更严；启动时读，读不成就不启动；"+
 		"之后只由本进程写。要和 --revoker-identity 一起给", false)
 	add(&o.revokerIdentity, "revoker-identity", "能改撤销表的工作负载身份：只能撤销、恢复和读出撤销表。要和 --revocations 一起给", false)
+	add(&o.publisherIdentity, "publisher-identity", "能只读查询当前登记表版本的工作负载身份：只能 GET /v1/egress/policy-version，"+
+		"不能要判定、凭证或改撤销表。不设则不开放这个接口。必须与 --gateway-identity、--broker-identity、--revoker-identity 都不同", false)
 	add(&o.gatekeeperURL, "gatekeeper-url", "Gatekeeper PDP 的地址；设了它，登记表放行的请求还要 Gatekeeper 确认账户的使用授权", false)
 	add(&o.gatekeeperToken, "gatekeeper-token-file", "访问 Gatekeeper PDP 的 Bearer 令牌文件，权限须为 0600 或更严", false)
 	add(&o.gatekeeperCert, "gatekeeper-tls-cert", "本服务出示给 Gatekeeper PDP 的工作负载证书（PEM）。四个 --gatekeeper-tls-* / --gatekeeper-name 要么都给、要么都不给；"+
@@ -186,6 +194,11 @@ func parse(args []string, output io.Writer) (options, error) {
 	if o.revokerIdentity != "" && (o.revokerIdentity == o.gatewayIdentity || o.revokerIdentity == o.brokerIdentity) {
 		return o, errors.New("--revoker-identity must differ from --gateway-identity and --broker-identity: " +
 			"who asks for credentials may not be who lifts a revocation")
+	}
+	if o.publisherIdentity != "" && (o.publisherIdentity == o.gatewayIdentity || o.publisherIdentity == o.brokerIdentity ||
+		o.publisherIdentity == o.revokerIdentity) {
+		return o, errors.New("--publisher-identity must differ from --gateway-identity, --broker-identity and --revoker-identity: " +
+			"who reads the policy version may not ask for a decision, a credential, or a change to the revocation table")
 	}
 	if o.otlpTracesURL != "" {
 		if err := otlp.ValidateEndpoint(o.otlpTracesURL); err != nil {
@@ -252,10 +265,11 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 	}
 	logger := slog.New(slog.NewJSONHandler(output, nil))
 
-	policy, err := filestore.LoadPolicy(o.policy)
+	policyFile, err := filestore.LoadPolicyFile(o.policy, logger)
 	if err != nil {
 		return err
 	}
+	policy := policyFile.Current()
 	// 凭证来源：四种文件，给了哪种就装哪种。一个句柄只能在一个文件里：后装的来源启动时查先装的，
 	// 先装的在重读时也查后装的（它们互相问，各自不拿锁等对方，见 Holds）。
 	var credentials credentialSources
@@ -311,6 +325,7 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 	grantSource := "policy"
 	var pdpTLS *tls.Config
 	var options []application.Option
+	options = append(options, application.WithPolicySource(policyFile))
 	if o.gatekeeperURL != "" {
 		token, err := gatekeeper.LoadToken(o.gatekeeperToken)
 		if err != nil {
@@ -358,8 +373,8 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 		revocationStore, revokedAccounts, revocationEpoch = "file", len(accounts), epoch
 		options = append(options, application.WithRevocationLedger(ledger))
 	}
-	callers := httpapi.Callers{Gateway: o.gatewayIdentity, Broker: o.brokerIdentity, Revoker: o.revokerIdentity}
-	service := application.New(policy, credentials, revocations, options...)
+	callers := httpapi.Callers{Gateway: o.gatewayIdentity, Broker: o.brokerIdentity, Revoker: o.revokerIdentity, Publisher: o.publisherIdentity}
+	service := application.New(policyFile.Current(), credentials, revocations, options...)
 	api := httpapi.New(service, callers, logger)
 	traces, sink, metrics, err := openAuthzTelemetry(o, service)
 	if err != nil {
@@ -409,11 +424,12 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 		ErrorLog:          log.New(serverLog, "", 0),
 	}
 	logger.Info("gateway-authz listening", "addr", listener.Addr().String(), "build", buildFlavor,
-		"policy_version", policy.Version, "operations", len(policy.Operations),
+		"policy_version", policy.Version, "operations", policyFile.Len(),
 		"credentials", bearerTokens, "developer_tokens", developerTokens, "oauth_clients", oauthClients,
 		"sf_openapi_apps", sfOpenAPIApps, "sf_openapi_plain_http_host", o.sfOpenAPIPlainHTTPHost,
 		"revocations", revocationStore, "revoked_accounts", revokedAccounts, "revocation_epoch", revocationEpoch,
 		"gateway_identity", o.gatewayIdentity, "broker_identity", o.brokerIdentity, "revoker_identity", o.revokerIdentity,
+		"publisher_identity", o.publisherIdentity,
 		"grants", grantSource, "gatekeeper_mtls", pdpTLS != nil,
 		"rate_limits", rateLimits, "rate_limit_buckets", rateLimitBuckets)
 	if o.otlpTracesURL != "" || o.auditLog != "" || o.metricsListen != "" {

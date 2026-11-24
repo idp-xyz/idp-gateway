@@ -271,7 +271,7 @@ func TestExtAuthzOnlyTheGatewayMayAsk(t *testing.T) {
 // 没有配置网关身份时，任何身份都不等于它，包括空身份。
 func TestNoCallerMatchesAnUnsetIdentity(t *testing.T) {
 	var none Callers
-	for _, path := range []string{PathExtAuthz, PathDecision, PathHealth} {
+	for _, path := range []string{PathExtAuthz, PathDecision, PathHealth, PathPolicyVersion} {
 		for _, identity := range []string{"", gatewayID} {
 			if none.MayCall(path, identity) {
 				t.Errorf("%s 对身份 %q 放行", path, identity)

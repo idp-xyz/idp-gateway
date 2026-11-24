@@ -23,15 +23,16 @@ import (
 )
 
 const (
-	serverName = "authz.idp.test"
-	gatewayID  = "spiffe://idp.test/egress/agentgateway"
-	brokerID   = "spiffe://idp.test/egress/credential-broker"
-	operatorID = "spiffe://idp.test/poc/operator"
-	businessID = "spiffe://idp.test/apps/parcel-service"
-	revokerID  = "spiffe://idp.test/egress/revoker"
-	tracking   = "/providers/mockcarrier/v1/tracking"
-	blueToken  = "provider-token-blue"
-	greenToken = "provider-token-green"
+	serverName  = "authz.idp.test"
+	gatewayID   = "spiffe://idp.test/egress/agentgateway"
+	brokerID    = "spiffe://idp.test/egress/credential-broker"
+	operatorID  = "spiffe://idp.test/poc/operator"
+	businessID  = "spiffe://idp.test/apps/parcel-service"
+	revokerID   = "spiffe://idp.test/egress/revoker"
+	publisherID = "spiffe://idp.test/egress/publisher"
+	tracking    = "/providers/mockcarrier/v1/tracking"
+	blueToken   = "provider-token-blue"
+	greenToken  = "provider-token-green"
 
 	extAuthzPath    = "/v1/extauthz/check"
 	decisionPath    = "/v1/egress/authorizations/decision"
@@ -100,6 +101,7 @@ func newHarness(t *testing.T) *harness {
 			"operator":      ca.Issue("operator", []string{operatorID}),
 			"business":      ca.Issue("business", []string{businessID}),
 			"revoker":       ca.Issue("revoker", []string{revokerID}),
+			"publisher":     ca.Issue("publisher", []string{publisherID}),
 			"rogue-gateway": rogue.Issue("gateway", []string{gatewayID}),
 			"rogue-revoker": rogue.Issue("revoker", []string{revokerID}),
 		},
@@ -290,6 +292,10 @@ func TestServesOverMutualTLS(t *testing.T) {
 	}
 	if a := h.must(call{peer: "business", method: http.MethodPost, path: decisionPath, body: decisionBody}); a.status != http.StatusUnauthorized {
 		t.Errorf("业务应用问判定：%d", a.status)
+	}
+	// 没有 --publisher-identity 时，版本接口不存在。
+	if a := h.must(call{peer: "publisher", path: "/v1/egress/policy-version"}); a.status != http.StatusNotFound || a.header.Get("Authorization") != "" {
+		t.Errorf("未配置发布者时的版本接口：%d %s", a.status, a.body)
 	}
 
 	logs := h.logs.String()
@@ -793,5 +799,130 @@ func TestRefusesToStart(t *testing.T) {
 	// 没有 Broker 身份是允许的：那就没有只要判定的调用方。
 	if _, err := parse(without("--broker-identity"), io.Discard); err != nil {
 		t.Errorf("不设 --broker-identity 被拒绝：%v", err)
+	}
+}
+
+func TestPublisherIdentityMustDifferFromGatewayBrokerAndRevoker(t *testing.T) {
+	h := newHarness(t)
+	revocations := writePrivate(t, filepath.Join(t.TempDir(), "revocations.json"), nothingRevoked)
+	cases := map[string][]string{
+		"发布者就是网关":      append(h.args("127.0.0.1:0"), "--publisher-identity", gatewayID),
+		"发布者就是 Broker": append(h.args("127.0.0.1:0"), "--publisher-identity", brokerID),
+		"发布者就是撤销者": append(h.args("127.0.0.1:0"), "--revocations", revocations,
+			"--revoker-identity", revokerID, "--publisher-identity", revokerID),
+	}
+	for name, args := range cases {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := run(ctx, args, io.Discard, nil)
+		cancel()
+		if err == nil || !strings.Contains(err.Error(), "must differ") || strings.Contains(err.Error(), "provider-token") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if _, err := parse(append(h.args("127.0.0.1:0"), "--publisher-identity", publisherID), io.Discard); err != nil {
+		t.Fatalf("与网关、Broker、撤销者都不同的发布者被拒绝：%v", err)
+	}
+}
+
+func policyRevision(version string, labels bool) string {
+	operations := `{"route_id":"mockcarrier-tracking-get","provider_id":"mockcarrier","operation_id":"tracking.get",
+		"environment":"TEST","method":"GET","path_prefix":"/providers/mockcarrier/v1/tracking",
+		"credential_binding_ref":"gatekeeper:mockcarrier-test",
+		"allowed_tenants":["tenant-blue","tenant-green"],
+		"accounts_by_tenant":{"tenant-blue":["account-blue"],"tenant-green":["account-green"]},
+		"allowed_service_ids":["parcel-service"]}`
+	if labels {
+		operations += `,{"route_id":"mockcarrier-labels-post","provider_id":"mockcarrier","operation_id":"labels.print",
+		"environment":"TEST","method":"POST","path_prefix":"/providers/mockcarrier/v1/labels",
+		"credential_binding_ref":"gatekeeper:mockcarrier-test",
+		"allowed_tenants":["tenant-blue"],
+		"accounts_by_tenant":{"tenant-blue":["account-blue"]},
+		"allowed_service_ids":["parcel-service"]}`
+	}
+	return `{"version":"` + version + `","default_decision":"DENY","registered_operations":[` + operations + `]}`
+}
+
+func labelsHeaders() [][2]string {
+	headers := trusted("tenant-blue")
+	for i := range headers {
+		switch strings.ToLower(headers[i][0]) {
+		case "x-idp-operation-id":
+			headers[i][1] = "labels.print"
+		case "x-idp-method":
+			headers[i][1] = "POST"
+		case "x-idp-path":
+			headers[i][1] = "/providers/mockcarrier/v1/labels/1"
+		case "x-idp-route-id":
+			headers[i][1] = "mockcarrier-labels-post"
+		}
+	}
+	return headers
+}
+
+func TestPolicyReloadsAndThePublisherReadsOnlyTheVersion(t *testing.T) {
+	h := newHarness(t)
+	h.extra = append(h.extra, "--publisher-identity", publisherID)
+	h.start()
+
+	version := func() string {
+		t.Helper()
+		a := h.must(call{peer: "publisher", path: "/v1/egress/policy-version"})
+		if a.status != http.StatusOK || a.header.Get("Authorization") != "" || a.carriesCredential() {
+			t.Fatalf("版本：%d %s", a.status, a.body)
+		}
+		got, _ := a.json(t)["policy_version"].(string)
+		return got
+	}
+	if got := version(); got != "policy-e2e" {
+		t.Fatalf("启动版本是 %s", got)
+	}
+	if posted := h.must(call{peer: "publisher", method: http.MethodPost, path: "/v1/egress/policy-version"}); posted.status != http.StatusMethodNotAllowed ||
+		posted.header.Get("Allow") != http.MethodGet || posted.header.Get("Authorization") != "" {
+		t.Fatalf("发布者 POST：%d Allow=%q %s", posted.status, posted.header.Get("Allow"), posted.body)
+	}
+	before := h.must(call{peer: "gateway", path: extAuthzPath, headers: labelsHeaders()})
+	if before.status != http.StatusForbidden || before.json(t)["reason_code"] != "NO_MATCHING_ALLOWLIST_OPERATION" || before.carriesCredential() {
+		t.Fatalf("新操作在换登记表之前：%d %s", before.status, before.body)
+	}
+
+	writePrivate(h.t, h.policy, policyRevision("policy-e2e-2", true))
+	if got := version(); got != "policy-e2e-2" {
+		t.Fatalf("换上新登记表之后版本是 %s", got)
+	}
+	allowed := h.must(call{peer: "gateway", method: http.MethodPost, path: extAuthzPath, headers: labelsHeaders()})
+	if allowed.status != http.StatusOK || allowed.header.Get("Authorization") != "Bearer "+blueToken ||
+		allowed.json(t)["policy_version"] != "policy-e2e-2" {
+		t.Fatalf("新操作：%d %s %s", allowed.status, allowed.header.Get("Authorization"), allowed.body)
+	}
+
+	const marker = "policy-body-must-not-be-logged"
+	writePrivate(h.t, h.policy, marker+" { not json")
+	if got := version(); got != "policy-e2e-2" {
+		t.Fatalf("坏登记表之后版本是 %s", got)
+	}
+	if got := version(); got != "policy-e2e-2" {
+		t.Fatalf("坏登记表再问一次：%s", got)
+	}
+	still := h.must(call{peer: "gateway", path: extAuthzPath, headers: labelsHeaders()})
+	if still.status != http.StatusOK || still.header.Get("Authorization") != "Bearer "+blueToken ||
+		still.json(t)["policy_version"] != "policy-e2e-2" {
+		t.Fatalf("坏登记表之后新操作：%d %s", still.status, still.body)
+	}
+	if health := h.must(call{peer: "gateway", path: "/healthz"}); health.status != http.StatusOK {
+		t.Fatalf("healthz: %d", health.status)
+	}
+	if trackingOK := h.blue(); trackingOK.status != http.StatusOK || trackingOK.json(t)["policy_version"] != "policy-e2e-2" {
+		t.Fatalf("原来的操作：%d %s", trackingOK.status, trackingOK.body)
+	}
+	logs := h.logs.String()
+	if strings.Contains(logs, marker) || strings.Count(logs, "did not load") != 1 {
+		t.Fatalf("坏文件日志：%s", logs)
+	}
+	if a := h.must(call{peer: "publisher", path: extAuthzPath, headers: trusted("tenant-blue")}); a.status != http.StatusUnauthorized ||
+		a.carriesCredential() || a.header.Get("Authorization") != "" {
+		t.Fatalf("发布者要凭证：%d %s", a.status, a.body)
+	}
+	if a := h.must(call{peer: "gateway", path: "/v1/egress/policy-version"}); a.status != http.StatusUnauthorized || a.header.Get("Authorization") != "" {
+		t.Fatalf("网关读版本：%d %s", a.status, a.body)
 	}
 }

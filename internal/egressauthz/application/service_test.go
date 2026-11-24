@@ -621,3 +621,95 @@ func TestAccountDefaulting(t *testing.T) {
 		t.Fatalf("两个获授账户、没有指明时应拒绝：%+v", out)
 	}
 }
+
+// countingPolicy 每被读一次就记一笔，返回的始终是同一份。
+type countingPolicy struct {
+	policy domain.Policy
+	calls  int
+}
+
+func (c *countingPolicy) Current() domain.Policy {
+	c.calls++
+	return c.policy
+}
+
+// 热重载：来源换掉之后，判定、版本、撤销和封禁都立刻用新的那一份，而且一次调用只读一次。
+func TestPolicySourceHotReload(t *testing.T) {
+	ctx := context.Background()
+	source := &countingPolicy{policy: twoTenantPolicy()}
+	credentials := &fakeCredentials{held: map[string]string{
+		ports.Handle(binding, "account-blue"): "Bearer blue-token",
+		ports.Handle(binding, "account-red"):  "Bearer red-token",
+	}}
+	ledger := &fakeLedger{fakeRevocations: fakeRevocations{revoked: map[string]bool{}, banned: map[string]bool{}, epoch: 3}}
+	// 构造时塞一份过期登记表。配置了来源之后不该再读它。
+	stale := domain.Policy{Version: "stale", Operations: []domain.Operation{{
+		ProviderID: "mockcarrier", OperationID: "stale.op", Environment: "TEST", Method: "GET",
+		PathPrefix: "/stale", CredentialBindingRef: binding,
+		AllowedTenants:    []string{"tenant-blue"},
+		AllowedServiceIDs: []string{"parcel-service"},
+		AccountsByTenant:  map[string][]string{"tenant-blue": {"account-stale"}},
+	}}}
+	service := New(stale, credentials, ledger, WithPolicySource(source), WithRevocationLedger(ledger))
+
+	if service.PolicyVersion() != "policy-7" || source.calls != 1 {
+		t.Fatalf("版本 %s，读了 %d 次", service.PolicyVersion(), source.calls)
+	}
+	out, err := service.Decide(ctx, blueInput())
+	if err != nil || !out.Allowed || out.PolicyVersion != "policy-7" || out.Account != "account-blue" || source.calls != 2 {
+		t.Fatalf("重载前：%+v %v，读了 %d 次", out, err, source.calls)
+	}
+
+	source.policy = domain.Policy{Version: "policy-8", Operations: []domain.Operation{{
+		ProviderID: "mockcarrier", OperationID: "labels.print", Environment: "TEST", Method: "POST",
+		PathPrefix: "/providers/mockcarrier/v1/labels", CredentialBindingRef: binding,
+		AllowedTenants:    []string{"tenant-blue"},
+		AllowedServiceIDs: []string{"parcel-service"},
+		AccountsByTenant:  map[string][]string{"tenant-blue": {"account-red"}},
+	}}}
+
+	if service.PolicyVersion() != "policy-8" {
+		t.Fatalf("版本没有跟上：%s", service.PolicyVersion())
+	}
+	removed, err := service.Decide(ctx, blueInput())
+	if err != nil || removed.Allowed || removed.Reason != string(domain.ReasonNoMatchingOperation) || removed.PolicyVersion != "policy-8" {
+		t.Fatalf("被拿掉的路由：%+v %v", removed, err)
+	}
+	added, err := service.Decide(ctx, labelsInput())
+	if err != nil || !added.Allowed || added.Account != "account-red" || added.PolicyVersion != "policy-8" || added.BindingRef != binding {
+		t.Fatalf("新路由：%+v %v", added, err)
+	}
+
+	before := source.calls
+	if change, err := service.RevokeAccount(ctx, "account-red", "spiffe://idp.test/revoker", "rotated"); err != nil || !change.Revoked || source.calls != before+1 {
+		t.Fatalf("新账户：%+v %v，读了 %d 次", change, err, source.calls-before)
+	}
+	before = source.calls
+	if _, err := service.RevokeAccount(ctx, "account-blue", "spiffe://idp.test/revoker", "old"); !errors.Is(err, ErrUnknownAccount) || source.calls != before+1 {
+		t.Fatalf("旧账户仍被当成在登记表里：%v，读了 %d 次", err, source.calls-before)
+	}
+	before = source.calls
+	if _, err := service.RevokeAccount(ctx, "account-stale", "spiffe://idp.test/revoker", "stale"); !errors.Is(err, ErrUnknownAccount) || source.calls != before+1 {
+		t.Fatalf("构造时的账户仍被当成在登记表里：%v", err)
+	}
+	before = source.calls
+	if change, err := service.RestoreAccount(ctx, "account-red"); err != nil || change.Revoked || source.calls != before+1 {
+		t.Fatalf("恢复新账户：%+v %v", change, err)
+	}
+	before = source.calls
+	if change, err := service.BanOperation(ctx, "labels.print", "spiffe://idp.test/revoker", "abuse"); err != nil || !change.Banned || source.calls != before+1 {
+		t.Fatalf("新操作：%+v %v", change, err)
+	}
+	before = source.calls
+	if _, err := service.BanOperation(ctx, "tracking.get", "spiffe://idp.test/revoker", "old"); !errors.Is(err, ErrUnknownOperation) || source.calls != before+1 {
+		t.Fatalf("旧操作仍被当成在登记表里：%v", err)
+	}
+	before = source.calls
+	if change, err := service.LiftOperationBan(ctx, "labels.print"); err != nil || change.Banned || source.calls != before+1 {
+		t.Fatalf("解除新操作：%+v %v", change, err)
+	}
+	before = source.calls
+	if _, err := service.LiftOperationBan(ctx, "tracking.get"); !errors.Is(err, ErrUnknownOperation) || source.calls != before+1 {
+		t.Fatalf("解除旧操作：%v", err)
+	}
+}

@@ -1,7 +1,8 @@
 // Package httpapi 把出站判定接到 HTTP 上：agentgateway 的 HTTP ExtAuthZ 交换，只返回判定、
 // 不返回凭证的 JSON 接口，以及改撤销表和封禁操作的接口。线上契约是 contracts/gatekeeper/openapi.yaml
 // 里的 /v1/extauthz/check、/v1/egress/authorizations/decision、/v1/egress/revocations
-// 与 /v1/egress/operation-bans。
+// 与 /v1/egress/operation-bans。配置了发布者身份时，GET /v1/egress/policy-version 只返回当前
+// 登记表版本：不放行、不取凭证、不改撤销表。
 //
 // 调用方是谁只看 TLS 握手中已验证的客户端证书，不看任何请求头。
 package httpapi
@@ -30,6 +31,7 @@ const (
 	PathDecision      = "/v1/egress/authorizations/decision"
 	PathRevocations   = "/v1/egress/revocations"
 	PathOperationBans = "/v1/egress/operation-bans"
+	PathPolicyVersion = "/v1/egress/policy-version"
 )
 
 // 网关写入的可信上下文。每一项都必须恰好出现零次或一次：出现第二份，说明有网关以外的
@@ -81,6 +83,9 @@ type Callers struct {
 	Broker string
 	// Revoker 可以改撤销表，别的都不能做。为空表示没有这样的调用方，改撤销表的接口也就不存在。
 	Revoker string
+	// Publisher 只能读当前登记表版本，不能要判定、不能要凭证、不能改撤销或封禁。
+	// 为空表示没有这样的调用方，版本接口也就不存在。
+	Publisher string
 }
 
 // MayCall 报告持有该身份的工作负载能否调用该路径。
@@ -95,6 +100,8 @@ func (c Callers) MayCall(path, identity string) bool {
 		return identity == c.Gateway || identity == c.Broker
 	case PathRevocations, PathOperationBans:
 		return identity == c.Revoker
+	case PathPolicyVersion:
+		return identity == c.Publisher
 	}
 	return false
 }
@@ -135,6 +142,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.revocations(w, r)
+	case PathPolicyVersion:
+		// 没有配置发布者时，版本接口不存在，对谁都一样。
+		if h.callers.Publisher == "" {
+			writeJSON(w, http.StatusNotFound, errorBody{Error: "not_found"})
+			return
+		}
+		h.policyVersion(w, r)
 	default:
 		writeJSON(w, http.StatusNotFound, errorBody{Error: "not_found"})
 	}

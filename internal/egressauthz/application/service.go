@@ -79,13 +79,14 @@ func (o Outcome) CredentialHandle() string {
 
 // Service 执行出站判定。
 type Service struct {
-	policy      domain.Policy
-	credentials ports.CredentialSource
-	revocations ports.Revocations
-	ledger      ports.RevocationLedger
-	grants      ports.Grants
-	limiter     ports.RateLimiter
-	newID       func() string
+	policy       domain.Policy
+	policySource ports.PolicySource
+	credentials  ports.CredentialSource
+	revocations  ports.Revocations
+	ledger       ports.RevocationLedger
+	grants       ports.Grants
+	limiter      ports.RateLimiter
+	newID        func() string
 }
 
 // Option 调整 Service 的构造。
@@ -109,7 +110,14 @@ func WithRateLimiter(limiter ports.RateLimiter) Option {
 	return func(s *Service) { s.limiter = limiter }
 }
 
-// New 构造 Service。policy 在进程生命周期内不变；换登记表要换进程。
+// WithPolicySource 让判定和管理校验读取 source 此刻的登记表，而不是一直用构造时的那一份。
+// 登记表文件因此可以热重载。source 为 nil 时与不传相同。
+func WithPolicySource(source ports.PolicySource) Option {
+	return func(s *Service) { s.policySource = source }
+}
+
+// New 构造 Service。没有传入 WithPolicySource 时，policy 在进程生命周期内不变，换登记表要换进程。
+// 传入 WithPolicySource 时，每次判定和管理校验改读来源此刻的登记表，登记表可以热重载。
 func New(policy domain.Policy, credentials ports.CredentialSource, revocations ports.Revocations, options ...Option) *Service {
 	s := &Service{policy: policy, credentials: credentials, revocations: revocations, newID: randomDecisionID}
 	for _, option := range options {
@@ -118,8 +126,16 @@ func New(policy domain.Policy, credentials ports.CredentialSource, revocations p
 	return s
 }
 
+// currentPolicy 返回这一次调用要用的那一份登记表。配置了来源时读来源的当前一份，否则用构造时的那一份。
+func (s *Service) currentPolicy() domain.Policy {
+	if s.policySource != nil {
+		return s.policySource.Current()
+	}
+	return s.policy
+}
+
 // PolicyVersion 返回当前登记表的版本。
-func (s *Service) PolicyVersion() string { return s.policy.Version }
+func (s *Service) PolicyVersion() string { return s.currentPolicy().Version }
 
 // RevocationEpoch 返回当前撤销代次，用在没有做出判定的响应里；读不到时为 0。
 func (s *Service) RevocationEpoch(ctx context.Context) uint64 {
@@ -133,14 +149,15 @@ func (s *Service) RevocationEpoch(ctx context.Context) uint64 {
 // Decide 只做判定，不取凭证。返回的错误包装了 ErrIndeterminate，此时 Outcome 里的
 // 原因码说明是哪一步没能完成。
 func (s *Service) Decide(ctx context.Context, in Input) (Outcome, error) {
-	out := Outcome{DecisionID: s.newID(), PolicyVersion: s.policy.Version, Account: in.RequestedAccount}
+	policy := s.currentPolicy()
+	out := Outcome{DecisionID: s.newID(), PolicyVersion: policy.Version, Account: in.RequestedAccount}
 
 	var principal *domain.Principal
 	if in.Subject != "" && in.Tenant != "" && in.TokenEnvironment != "" {
 		principal = &domain.Principal{ServiceID: in.Subject, TenantID: in.Tenant, Environment: in.TokenEnvironment}
 	}
 	if out.Account == "" && principal != nil {
-		if account, ok := s.policy.SoleAccount(principal.TenantID, in.ProviderID, in.OperationID, in.Environment); ok {
+		if account, ok := policy.SoleAccount(principal.TenantID, in.ProviderID, in.OperationID, in.Environment); ok {
 			out.Account = account
 		}
 	}
@@ -154,7 +171,7 @@ func (s *Service) Decide(ctx context.Context, in Input) (Outcome, error) {
 	}
 	out.RevocationEpoch = epoch
 
-	decision := s.policy.Evaluate(principal, domain.Request{
+	decision := policy.Evaluate(principal, domain.Request{
 		ProviderID: in.ProviderID, OperationID: in.OperationID, Environment: in.Environment,
 		Method: in.Method, Path: in.Path, AccountID: out.Account,
 	})
@@ -236,10 +253,11 @@ func (s *Service) Authorize(ctx context.Context, in Input) (Outcome, ports.Secre
 // ErrUnknownAccount，而不是一次什么都没拦住的成功。返回的错误包装了
 // ports.ErrRevocationNotWritten 时，撤销已经生效，只是没有保存下来。
 func (s *Service) RevokeAccount(ctx context.Context, accountID, by, reason string) (ports.RevocationChange, error) {
+	policy := s.currentPolicy()
 	if s.ledger == nil {
 		return ports.RevocationChange{}, ErrNoRevocationLedger
 	}
-	if !s.policy.NamesAccount(accountID) {
+	if !policy.NamesAccount(accountID) {
 		revoked, epoch, err := s.ledger.State(ctx, accountID)
 		if err != nil {
 			return ports.RevocationChange{}, err
@@ -254,6 +272,7 @@ func (s *Service) RevokeAccount(ctx context.Context, accountID, by, reason strin
 // RestoreAccount 取消对一个账户的撤销。账户没有被撤销时什么都不改；账户既不在登记表里也
 // 不在撤销表里时返回 ErrUnknownAccount。恢复没有保存下来就不生效。
 func (s *Service) RestoreAccount(ctx context.Context, accountID string) (ports.RevocationChange, error) {
+	policy := s.currentPolicy()
 	if s.ledger == nil {
 		return ports.RevocationChange{}, ErrNoRevocationLedger
 	}
@@ -261,7 +280,7 @@ func (s *Service) RestoreAccount(ctx context.Context, accountID string) (ports.R
 	if err != nil {
 		return ports.RevocationChange{}, err
 	}
-	if !revoked && !s.policy.NamesAccount(accountID) {
+	if !revoked && !policy.NamesAccount(accountID) {
 		return ports.RevocationChange{Epoch: epoch}, ErrUnknownAccount
 	}
 	return s.ledger.Restore(ctx, accountID)
@@ -282,10 +301,11 @@ func (s *Service) RevokedAccounts(ctx context.Context) ([]ports.RevokedAccount, 
 // ErrUnknownOperation，而不是一次什么都没拦住的成功。返回的错误包装了
 // ports.ErrRevocationNotWritten 时，封禁已经生效，只是没有保存下来。
 func (s *Service) BanOperation(ctx context.Context, operationID, by, reason string) (ports.BanChange, error) {
+	policy := s.currentPolicy()
 	if s.ledger == nil {
 		return ports.BanChange{}, ErrNoRevocationLedger
 	}
-	if !s.policy.NamesOperation(operationID) {
+	if !policy.NamesOperation(operationID) {
 		_, banned, epoch, err := s.ledger.View(ctx, "", operationID)
 		if err != nil {
 			return ports.BanChange{}, err
@@ -300,6 +320,7 @@ func (s *Service) BanOperation(ctx context.Context, operationID, by, reason stri
 // LiftOperationBan 解除对一个操作的封禁。操作没有被封禁时什么都不改；操作既不在登记表里也
 // 不在封禁表里时返回 ErrUnknownOperation。解除没有保存下来就不生效。
 func (s *Service) LiftOperationBan(ctx context.Context, operationID string) (ports.BanChange, error) {
+	policy := s.currentPolicy()
 	if s.ledger == nil {
 		return ports.BanChange{}, ErrNoRevocationLedger
 	}
@@ -307,7 +328,7 @@ func (s *Service) LiftOperationBan(ctx context.Context, operationID string) (por
 	if err != nil {
 		return ports.BanChange{}, err
 	}
-	if !banned && !s.policy.NamesOperation(operationID) {
+	if !banned && !policy.NamesOperation(operationID) {
 		return ports.BanChange{Epoch: epoch}, ErrUnknownOperation
 	}
 	return s.ledger.Lift(ctx, operationID)
