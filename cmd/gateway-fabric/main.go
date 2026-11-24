@@ -17,6 +17,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -277,7 +278,8 @@ func run(ctx context.Context, args []string, stderr io.Writer, ready func(net.Ad
 	if err != nil {
 		return err
 	}
-	publisherTLS, err := workloadtls.ClientConfig(o.publisherCert, o.publisherKey, o.publisherCA, o.readBackName)
+	logger := slog.New(slog.NewJSONHandler(stderr, nil))
+	publisherTLS, err := workloadtls.ClientConfigWithLogger(o.publisherCert, o.publisherKey, o.publisherCA, o.readBackName, logger)
 	if err != nil {
 		return err
 	}
@@ -285,7 +287,7 @@ func run(ctx context.Context, args []string, stderr io.Writer, ready func(net.Ad
 	if authzCA == "" {
 		authzCA = o.publisherCA
 	}
-	authzTLS, err := workloadtls.ClientConfig(o.publisherCert, o.publisherKey, authzCA, o.authzName)
+	authzTLS, err := workloadtls.ClientConfigWithLogger(o.publisherCert, o.publisherKey, authzCA, o.authzName, logger)
 	if err != nil {
 		return err
 	}
@@ -347,7 +349,7 @@ func run(ctx context.Context, args []string, stderr io.Writer, ready func(net.Ad
 	if err != nil {
 		return err
 	}
-	serverTLS, err := workloadtls.ServerConfig(o.tlsCert, o.tlsKey, o.clientCA)
+	serverTLS, err := workloadtls.ServerConfigWithLogger(o.tlsCert, o.tlsKey, o.clientCA, logger)
 	if err != nil {
 		return err
 	}

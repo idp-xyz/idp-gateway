@@ -10,6 +10,9 @@
 // 取不到（连不上、超时、状态不是 200、承运商拒绝、答错），这次请求拿不到凭证：不用过期的令牌，也不用上一枚
 // 顶上。承运商写明取了新令牌旧的就失效，所以一个 appKey 只许出现在一个句柄之下，两个缓存条目会互相作废。
 //
+// Lease 不为空时，本地缓存失效后先问租约协调器：已经有还能用的令牌就直接用，只有拿到 FETCH 才向承运商取一次，
+// 并且要等协调器接受提交才放进本地缓存。协调器连不上、拒绝或答错时，这次请求失败关闭，绝不退回去单独取票。
+//
 // 取令牌的请求是 GET，应用密钥在查询串里，而 net/http 的错误（*url.Error）带着完整的地址。所以本包返回的错误
 // 和写的日志里没有请求的地址和查询串、应用密钥、访问令牌、AES 密钥，也没有承运商应答的任何内容（包括
 // apiErrorMsg），也没有错误的原文：只有一个类别。传输层失败时日志再加一个 cause，是固定的一个词。
@@ -91,6 +94,11 @@ type Config struct {
 	Logger *slog.Logger
 	// Now 是时钟；零值用 time.Now。测试用它，不靠真的等。
 	Now func() time.Time
+	// Lease 不为 nil 时，本地缓存失效后先问它。问不到就失败关闭，不向承运商取票。
+	// 为 nil 时行为与没有这个字段时相同。
+	Lease LeaseCoordinator
+	// HolderID 是本进程在协调器上的名字。Lease 不为 nil 且这里为空时，启动时生成 16 字节的随机十六进制。
+	HolderID string
 }
 
 // Client 实现 ports.CredentialSource。
@@ -113,6 +121,10 @@ type Client struct {
 	// cmu 管缓存。它只在改缓存的几行里拿着，不会拿着它去发请求或读文件。
 	cmu   sync.Mutex
 	slots map[cacheKey]*slot
+
+	// lease 为 nil 时，取令牌的路径与加上协调器之前相同。
+	lease    LeaseCoordinator
+	holderID string
 }
 
 // slot 是一个缓存键下的状态：手里有的访问令牌，和正在进行的那一次获取。
@@ -143,6 +155,19 @@ func Load(cfg Config) (*Client, error) {
 	}
 	if c.now == nil {
 		c.now = time.Now
+	}
+	if cfg.Lease != nil {
+		c.lease = cfg.Lease
+		c.holderID = cfg.HolderID
+		if c.holderID == "" {
+			id, err := newHolderID()
+			if err != nil {
+				return nil, err
+			}
+			c.holderID = id
+		} else if !validHolderID(c.holderID) {
+			return nil, errors.New("sf openapi lease holder id must be 1 to 128 visible ASCII characters")
+		}
 	}
 	c.http = &http.Client{
 		Transport: &http.Transport{
@@ -206,7 +231,8 @@ func (c *Client) AuthorizationHeader(ctx context.Context, bindingRef, accountID 
 	if f == nil {
 		f = &flight{done: make(chan struct{})}
 		s.flight = f
-		go c.fetch(e, s, f)
+		prevLifetime := s.lifetime
+		go c.fetch(e, s, f, prevLifetime)
 	}
 	c.cmu.Unlock()
 
@@ -234,10 +260,29 @@ func (c *Client) usable(s *slot) bool {
 
 // fetch 向令牌端点取一次令牌，把结果交给等着的各路请求。它不受发起它的那个请求的 ctx 管：
 // 那个请求走了，别的等着的请求仍然要结果。它受超时管。
-func (c *Client) fetch(e *entry, s *slot, f *flight) {
+// 配了协调器时，只有协调器回答 FETCH 才调用 c.request；其余失败都是 lease_unavailable。
+func (c *Client) fetch(e *entry, s *slot, f *flight, prevLifetime time.Duration) {
 	started := c.now()
 	begun := time.Now()
-	token, expiresIn, result, cause, err := c.request(e)
+	var token ports.Secret
+	var lifetime time.Duration
+	var expires time.Time
+	var expiresIn int64
+	var result, cause string
+	var err error
+	if c.lease == nil {
+		token, expiresIn, result, cause, err = c.request(e)
+		if err == nil {
+			lifetime = time.Duration(min(expiresIn, maxExpiresIn)) * time.Second
+			// 寿命从请求发出的时刻算起：令牌端点在收到请求之后才签发，所以这样算只会偏早，不会偏晚。
+			expires = started.Add(lifetime)
+		}
+	} else {
+		token, lifetime, expires, result, cause, err = c.fetchCoordinated(e, started, prevLifetime)
+		if err == nil {
+			expiresIn = int64(lifetime / time.Second)
+		}
+	}
 	elapsed := time.Since(begun)
 
 	attrs := []any{"handle", e.handle, "result", result, "elapsed_ms", elapsed.Milliseconds()}
@@ -254,11 +299,10 @@ func (c *Client) fetch(e *entry, s *slot, f *flight) {
 	c.cmu.Lock()
 	s.flight = nil
 	if err == nil {
-		lifetime := time.Duration(min(expiresIn, maxExpiresIn)) * time.Second
-		// 寿命从请求发出的时刻算起：令牌端点在收到请求之后才签发，所以这样算只会偏早，不会偏晚。
-		s.token, s.lifetime, s.expires = token, lifetime, started.Add(lifetime)
+		s.token, s.lifetime, s.expires = token, lifetime, expires
 	} else {
 		// 取不到时手里没有可用的令牌：就算上一枚还没到期，也不拿它顶上。
+		// 协调器提交失败时同样清空，不留下没人协调的那一枚。
 		s.token, s.lifetime, s.expires = ports.Secret{}, 0, time.Time{}
 	}
 	f.token, f.err = token, err

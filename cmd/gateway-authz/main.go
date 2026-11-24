@@ -11,6 +11,9 @@
 // --sf-openapi-apps 是顺丰国际开放平台的应用（appKey、应用密钥、AES 密钥），向承运商取访问令牌，
 // 放行时交出 Sf-OpenApi appKey;令牌;AES密钥，由另一个签名适配器拆开使用，--sf-openapi-timeout 是
 // 取一次的超时，--sf-openapi-plain-http-host 只为承运商没有 TLS 的沙箱放开一个主机名的明文 http。
+// --sf-openapi-lease-url、--sf-openapi-lease-cert、--sf-openapi-lease-key、--sf-openapi-lease-ca、
+// --sf-openapi-lease-name 五个一起给时，取令牌先问租约协调器；五个都不给时与原来相同。
+// 给了协调器之后它不可用就失败关闭，不退回去单独向承运商取票。这五个要和 --sf-openapi-apps 一起给。
 // 一个凭证句柄只能出现在其中一个文件里。
 //
 // 撤销（见 docs/adr/ADR-0012.md）：--revocations 给出保存撤销表的文件，--revoker-identity
@@ -83,6 +86,11 @@ type options struct {
 	sfOpenAPIApps          string
 	sfOpenAPITimeout       time.Duration
 	sfOpenAPIPlainHTTPHost string
+	sfOpenAPILeaseURL      string
+	sfOpenAPILeaseCert     string
+	sfOpenAPILeaseKey      string
+	sfOpenAPILeaseCA       string
+	sfOpenAPILeaseName     string
 	gatewayIdentity        string
 	brokerIdentity         string
 	revocations            string
@@ -127,6 +135,12 @@ func parse(args []string, output io.Writer) (options, error) {
 	flags.DurationVar(&o.sfOpenAPITimeout, "sf-openapi-timeout", sfopenapi.DefaultTimeout, "向承运商令牌端点取一次令牌的超时，必须大于 0；要留在网关等 PDP 的时限之内")
 	add(&o.sfOpenAPIPlainHTTPHost, "sf-openapi-plain-http-host", "唯一允许明文 http 令牌端点的主机名（只写主机名，不带协议、端口和路径），"+
 		"给承运商没有 TLS 的沙箱用；默认没有这个例外；要和 --sf-openapi-apps 一起给", false)
+	add(&o.sfOpenAPILeaseURL, "sf-openapi-lease-url", "顺丰访问令牌租约协调器的 https 地址。与下面四个 --sf-openapi-lease-* 要么一起给、要么都不给；"+
+		"要和 --sf-openapi-apps 一起给。给了之后协调器不可用就失败关闭，不退回去单独向承运商取票", false)
+	add(&o.sfOpenAPILeaseCert, "sf-openapi-lease-cert", "出示给租约协调器的工作负载证书（PEM）；文件替换后下一次连接用新的", false)
+	add(&o.sfOpenAPILeaseKey, "sf-openapi-lease-key", "上面那张证书的私钥（PEM）", false)
+	add(&o.sfOpenAPILeaseCA, "sf-openapi-lease-ca", "签发租约协调器证书的 CA（PEM）；系统自带的根证书不被信任", false)
+	add(&o.sfOpenAPILeaseName, "sf-openapi-lease-name", "验证租约协调器证书时要对上的名字", false)
 	add(&o.gatewayIdentity, "gateway-identity", "网关工作负载的身份（证书里的 URI）：可以要判定和凭证", true)
 	add(&o.brokerIdentity, "broker-identity", "本地 Broker 工作负载的身份：只能要判定；不设则没有这样的调用方", false)
 	add(&o.revocations, "revocations", "撤销文件（JSON：代次和被撤销的账户），权限须为 0600 或更严；启动时读，读不成就不启动；"+
@@ -178,6 +192,9 @@ func parse(args []string, output io.Writer) (options, error) {
 			return o, errors.New("--sf-openapi-plain-http-host must be a bare host name: visible ASCII, none of / : @ ? #")
 		}
 	}
+	if err := checkSFLease(o); err != nil {
+		return o, err
+	}
 	if o.brokerIdentity == o.gatewayIdentity {
 		return o, errors.New("--broker-identity must differ from --gateway-identity: the broker may not ask for credentials")
 	}
@@ -223,6 +240,31 @@ func bareHostName(host string) bool {
 		}
 	}
 	return true
+}
+
+// checkSFLease 核对五个租约参数：要么都给，要么都不给，而且要和 --sf-openapi-apps 一起给。
+// 地址必须是没有用户信息、查询串和片段的 https。错误文字里不回显这个地址。
+func checkSFLease(o options) error {
+	given := 0
+	for _, v := range []string{o.sfOpenAPILeaseURL, o.sfOpenAPILeaseCert, o.sfOpenAPILeaseKey, o.sfOpenAPILeaseCA, o.sfOpenAPILeaseName} {
+		if v != "" {
+			given++
+		}
+	}
+	if given == 0 {
+		return nil
+	}
+	if given != 5 {
+		return errors.New("--sf-openapi-lease-url, --sf-openapi-lease-cert, --sf-openapi-lease-key, --sf-openapi-lease-ca and --sf-openapi-lease-name go together")
+	}
+	if o.sfOpenAPIApps == "" {
+		return errors.New("--sf-openapi-lease-url needs --sf-openapi-apps")
+	}
+	address, err := url.Parse(o.sfOpenAPILeaseURL)
+	if err != nil || address.Scheme != "https" || address.Host == "" || address.User != nil || address.RawQuery != "" || address.Fragment != "" {
+		return errors.New("--sf-openapi-lease-url must be an https URL without user information, a query string, or a fragment")
+	}
+	return nil
 }
 
 // checkGatekeeperTLS 核对到 PDP 的那一跳：客户端证书的四个参数一起给或一起不给；PDP 不在本机回环地址上时
@@ -309,14 +351,25 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 		credentials, oauthClients = append(credentials, oauth), oauth.Len()
 	}
 	if o.sfOpenAPIApps != "" {
+		var lease sfopenapi.LeaseCoordinator
+		if o.sfOpenAPILeaseURL != "" {
+			leaseTLS, err := workloadtls.ClientConfigWithLogger(o.sfOpenAPILeaseCert, o.sfOpenAPILeaseKey, o.sfOpenAPILeaseCA, o.sfOpenAPILeaseName, logger)
+			if err != nil {
+				return fmt.Errorf("sf openapi lease: %w", err)
+			}
+			lease, err = sfopenapi.NewHTTPLeaseClient(o.sfOpenAPILeaseURL, leaseTLS, logger)
+			if err != nil {
+				return fmt.Errorf("sf openapi lease: %w", err)
+			}
+		}
 		sfApps, err = sfopenapi.Load(sfopenapi.Config{Path: o.sfOpenAPIApps, Timeout: o.sfOpenAPITimeout,
-			PlainHTTPHost: o.sfOpenAPIPlainHTTPHost, Reserved: heldElsewhere("sfopenapi"), Logger: logger})
+			PlainHTTPHost: o.sfOpenAPIPlainHTTPHost, Reserved: heldElsewhere("sfopenapi"), Logger: logger, Lease: lease})
 		if err != nil {
 			return err
 		}
 		credentials, sfOpenAPIApps = append(credentials, sfApps), sfApps.Len()
 	}
-	tlsConfig, err := workloadtls.ServerConfig(o.tlsCert, o.tlsKey, o.clientCA)
+	tlsConfig, err := workloadtls.ServerConfigWithLogger(o.tlsCert, o.tlsKey, o.clientCA, logger)
 	if err != nil {
 		return err
 	}
@@ -332,7 +385,7 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 			return err
 		}
 		if o.gatekeeperCert != "" {
-			pdpTLS, err = workloadtls.ClientConfig(o.gatekeeperCert, o.gatekeeperKey, o.gatekeeperCA, o.gatekeeperName)
+			pdpTLS, err = workloadtls.ClientConfigWithLogger(o.gatekeeperCert, o.gatekeeperKey, o.gatekeeperCA, o.gatekeeperName, logger)
 			if err != nil {
 				return fmt.Errorf("gatekeeper: %w", err)
 			}
@@ -427,6 +480,7 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 		"policy_version", policy.Version, "operations", policyFile.Len(),
 		"credentials", bearerTokens, "developer_tokens", developerTokens, "oauth_clients", oauthClients,
 		"sf_openapi_apps", sfOpenAPIApps, "sf_openapi_plain_http_host", o.sfOpenAPIPlainHTTPHost,
+		"sf_openapi_lease", o.sfOpenAPILeaseURL != "",
 		"revocations", revocationStore, "revoked_accounts", revokedAccounts, "revocation_epoch", revocationEpoch,
 		"gateway_identity", o.gatewayIdentity, "broker_identity", o.brokerIdentity, "revoker_identity", o.revokerIdentity,
 		"publisher_identity", o.publisherIdentity,

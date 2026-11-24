@@ -404,6 +404,11 @@ func TestSFOpenAPIFlagsRefuseToStart(t *testing.T) {
 		"明文主机带空格":                   {with("--sf-openapi-apps", freshGood, "--sf-openapi-plain-http-host", "a b"), "bare host name"},
 		"明文主机带非 ASCII":              {with("--sf-openapi-apps", freshGood, "--sf-openapi-plain-http-host", "é.test"), "bare host name"},
 		"明文主机是 IPv6 字面量":            {with("--sf-openapi-apps", freshGood, "--sf-openapi-plain-http-host", "[::1]"), "bare host name"},
+		"租约参数只给了地址":                 {with("--sf-openapi-apps", freshGood, "--sf-openapi-lease-url", "https://coord.example.test"), "go together"},
+		"租约参数少了名字":                  {with("--sf-openapi-apps", freshGood, "--sf-openapi-lease-url", "https://coord.example.test", "--sf-openapi-lease-cert", "c", "--sf-openapi-lease-key", "k", "--sf-openapi-lease-ca", "ca"), "go together"},
+		"租约参数没有应用文件":                {with("--sf-openapi-lease-url", "https://coord.example.test", "--sf-openapi-lease-cert", "c", "--sf-openapi-lease-key", "k", "--sf-openapi-lease-ca", "ca", "--sf-openapi-lease-name", "coord.example.test"), "needs --sf-openapi-apps"},
+		"租约地址是 http":                {with("--sf-openapi-apps", freshGood, "--sf-openapi-lease-url", "http://coord.example.test", "--sf-openapi-lease-cert", "c", "--sf-openapi-lease-key", "k", "--sf-openapi-lease-ca", "ca", "--sf-openapi-lease-name", "coord.example.test"), "https URL"},
+		"租约地址带用户信息":                 {with("--sf-openapi-apps", freshGood, "--sf-openapi-lease-url", "https://u:p@coord.example.test", "--sf-openapi-lease-cert", "c", "--sf-openapi-lease-key", "k", "--sf-openapi-lease-ca", "ca", "--sf-openapi-lease-name", "coord.example.test"), "https URL"},
 	}
 	for name, tc := range cases {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -434,6 +439,12 @@ func TestSFOpenAPIFlagsRefuseToStart(t *testing.T) {
 	// 没有别的凭证文件、只有这一个：参数检查过得去。
 	if _, err := parse(append(without("--credentials"), "--sf-openapi-apps", freshGood), io.Discard); err != nil {
 		t.Errorf("只给 --sf-openapi-apps：%v", err)
+	}
+	leaseArgs := []string{"--sf-openapi-lease-url", "https://coord.example.test/lease", "--sf-openapi-lease-cert", "c.pem",
+		"--sf-openapi-lease-key", "k.pem", "--sf-openapi-lease-ca", "ca.pem", "--sf-openapi-lease-name", "coord.example.test"}
+	if o, err := parse(append(with("--sf-openapi-apps", freshGood), leaseArgs...), io.Discard); err != nil ||
+		o.sfOpenAPILeaseURL != "https://coord.example.test/lease" || o.sfOpenAPILeaseName != "coord.example.test" {
+		t.Errorf("五个租约参数：%v", err)
 	}
 }
 

@@ -167,7 +167,7 @@ func run(ctx context.Context, args []string, output io.Writer, ready func(net.Ad
 	if err != nil {
 		return err
 	}
-	tlsConfig, err := workloadtls.ServerConfig(o.tlsCert, o.tlsKey, o.clientCA)
+	tlsConfig, err := workloadtls.ServerConfigWithLogger(o.tlsCert, o.tlsKey, o.clientCA, logger)
 	if err != nil {
 		return err
 	}
