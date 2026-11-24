@@ -333,7 +333,7 @@ docker compose -f compose.yml -f gateway-authz.yml up -d
 - **加固照 `place` 和 `confirm`**：镜像按摘要引用，只是个壳；跑的是本机上的 `gateway-authz`，挂进去（静态链接：`CGO_ENABLED=0 go build -trimpath -o gateway-authz ./cmd/gateway-authz`）；`read_only`、`cap_drop: ALL`、`no-new-privileges`、不是 root、`restart: "no"`。读的文件都是只读挂进去的。
 - **变量**写在 [`gateway-authz.env.example`](gateway-authz.env.example)，抄进同一个 `.env`；它们没有放进 `.env.example`，因为只有这个叠加文件读它们。缺了哪个，`docker compose` 会说是哪一个：`GATEWAY_AUTHZ`（二进制）、`GATEWAY_AUTHZ_USER`、`GATEWAY_AUTHZ_POLICY`（登记表）、`GATEWAY_AUTHZ_CREDENTIALS_DIR`（放 `developer-tokens.json` 的**目录**，在仓库之外；挂目录是因为文件被改名换掉之后 `gateway-authz` 才重读，单挂文件会一直看到旧的）、`GATEWAY_AUTHZ_TLS_CERT` 和 `_TLS_KEY`（它的服务端证书）、`GATEWAY_AUTHZ_GATEWAY_CA`、`GATEWAY_AUTHZ_GATEWAY_IDENTITY`（网关证书的身份）、`GATEWAY_AUTHZ_PDP_URL`、`_PDP_NAME`、`_PDP_TOKEN_FILE`、`_PDP_CERT`、`_PDP_KEY`、`_PDP_CA`。
 - **到 PDP**：地址不是回环，所以 `--gatekeeper-tls-cert`、`-key`、`-ca` 和 `--gatekeeper-name` 四个都要给，缺一个它不启动（2.3 的规则）。
-- **还没有的**：撤销（`--revocations`）没有接；看守和开机的两个单元跑的是只有 `compose.yml` 的命令，要带上叠加文件得改那两个单元；`.env` 里除 `docker compose` 外还有看守读，上面几项照它的写法。这个叠加文件和万邦的配置一起，在 [`tests/integration/wanbexpress/pool.py`](../../tests/integration/wanbexpress/README.md) 里跑过，没有装到别的机器上。
+- **还没有的**：撤销（`--revocations`）没有接（`coordinators.yml` 接上了，见"两个协调器"）；看守和开机的两个单元跑的是只有 `compose.yml` 的命令，要带上叠加文件得改那两个单元；`.env` 里除 `docker compose` 外还有看守读，上面几项照它的写法。这个叠加文件和万邦的配置一起，在 [`tests/integration/wanbexpress/pool.py`](../../tests/integration/wanbexpress/README.md) 里跑过，没有装到别的机器上。
 
 ## provider-signer（叠加文件）
 
@@ -353,6 +353,23 @@ docker compose -f compose.yml -f gateway-authz.yml -f provider-signer.yml up -d
 - **变量**写在 [`provider-signer.env.example`](provider-signer.env.example)，抄进同一个 `.env`。必填的缺了，`docker compose` 会说是哪一个：`SIGNER`（二进制）、`SIGNER_USER`、`SIGNER_TLS_CERT`、`SIGNER_TLS_KEY`、`SIGNER_CLIENT_CA`（签发网关证书的 CA）、`SIGNER_GATEWAY_IDENTITY`、`SIGNER_CARRIER_URL`、`SIGNER_EGRESS_CONFIG`（上面那份小文件）。`SIGNER_PLAIN_HTTP_HOST` 和 `GATEWAY_AUTHZ_SF_PLAIN_HTTP_HOST` 可以空着。
 - **明文。** `--carrier-plain-http-host` 空着，适配器只允许回环地址字面量上的明文 `http`。沙箱和替身的地址不是回环，要把主机名写在这个变量里，`gateway-authz` 的那个变量写同一个主机名。
 - **还没有的**：`gateway-authz` 自己去令牌端点的那条连接没有出口规则；systemd 单元；看守（`gateway-control keep`）带上这个叠加文件；生产证书；别的机器。这个叠加文件和顺丰国际的配置一起，在 `tests/integration/sfintl/pool.py` 里跑过。
+
+## 两个协调器（叠加文件）
+
+阶段 2 的两个协调进程，可选。`coordinators.yml` 和前面三个文件一起用，不改它们；不带它，池和原来一样。[ADR-0021](../../docs/adr/ADR-0021.md)、[ADR-0022](../../docs/adr/ADR-0022.md)、[ADR-0023](../../docs/adr/ADR-0023.md) 都还是 Proposed。
+
+```bash
+docker compose -f compose.yml -f gateway-authz.yml -f provider-signer.yml -f coordinators.yml up -d
+```
+
+- **加了什么。** 两个服务：`sf-token-coordinator`（顺丰国际访问令牌的租约，ADR-0022：几个 `gateway-authz` 只有一个去向承运商取，别的拿它取到的，不互相作废）和 `authz-state`（撤销、封禁表和配额桶，ADR-0023：每次判定都向它要一份新快照，撤销、恢复和扣配额都在它那里做）。各自在项目默认网络上，有自己的网络命名空间；`gateway-authz` 按名字找它们：`https://sf-token-coordinator:9445`、`https://authz-state:9446`。都是双向 TLS。`gateway-authz` 出示它给 PDP 的那张客户端证书（`GATEWAY_AUTHZ_PDP_CERT`），这张证书上的 URI 要等于 `COORDINATORS_AUTHZ_IDENTITY`，协调器只认这一个身份；`gateway-authz` 只信 `COORDINATORS_CA` 签的协调器证书。
+- **加固照 `gateway-authz`。** 同一个壳镜像，按摘要引用；跑的是本机上的静态二进制（`CGO_ENABLED=0 go build -trimpath -o sf-token-coordinator ./cmd/sf-token-coordinator`，`./cmd/authz-state` 同样），`read_only`、`cap_drop: ALL`、`no-new-privileges`、不是 root、`restart: "no"`。证书只读挂进去。每个协调器只写一个本机目录：`SF_TOKEN_COORDINATOR_STATE_DIR` 里是 `leases.json`（里面是访问令牌），`AUTHZ_STATE_STATE_DIR` 里是 `state.json`（撤销和封禁；配额桶不在里面）。目录要事先建好，归那个协调器的账号，0700；文件由程序建，0600。
+- **先后。** 带了 `--authz-state-url` 的 `gateway-authz` 监听之前先取一份快照，取不到就以 1 退出，`restart: "no"`，之后没人再起它。所以它等两个协调器都健康了才启动（`depends_on: service_healthy`）。健康检查是在协调器自己的容器里用壳镜像的 busybox `nc -z` 连一下自己的端口，只说明进程在听；每查一次，协调器日志里多一行 `TLS handshake error ... EOF`。起来的时候每秒查一次，健康之后一小时一次：它是给启动的先后用的，不是监控。`docker start`、`docker restart` 和看守都不看 `depends_on`：`authz-state` 停着的时候重启 `gateway-authz`，它起不来（[`tests/integration/coordinators`](../../tests/integration/coordinators/README.md) 的 CO-05）。没有为此给产品加重试参数。
+- **`gateway-authz` 的命令又整份写了一遍**（`provider-signer.yml` 里那一份），末尾加：`--revocations`、`--revoker-identity`、`--rate-limits`、五个 `--sf-openapi-lease-*`、五个 `--authz-state-*`。compose 合并时 `command` 整份换掉，不会往后加。`--rate-limits` 是必填的：列表里没法让一个参数可有可无。不要配额就给一份 `{"version": "none", "buckets": []}`，这时也不发配额请求。
+- **撤销文件在每个容器自己的 tmpfs 里。** 有 `authz-state` 时，`gateway-authz` 不按这份文件判定：启动时和自己做了改动之后，把协调器的快照写进去；文件不在就不启动。它放在容器自己的 tmpfs（`/authz/mirror`）里，`--scale gateway-authz=N` 的几个副本就不会共用一份，每次启动它都是空的。所以入口先用镜像里的 shell，在文件不在时写一份空表（0600），再 exec `gateway-authz`。这份空表在 `gateway-authz` 监听之前就被协调器的快照换掉；换不了，它以 1 退出。`mode=1777` 要写明：不写时 docker 29.8.1 第一次启动给 1777，同一个容器以后每次启动给 root 的 0755，shell 写不了文件，副本起不来（测出来的）。不要去掉 `--authz-state-*` 却留着这个入口：那样每次启动写下的空表就成了判定用的表。
+- **变量**写在 [`coordinators.env.example`](coordinators.env.example)，抄进同一个 `.env`，全部必填。
+- **两个副本和出口规则。** `--scale gateway-authz=2` 时，名字 `gateway-authz` 解析到两个地址，`pin-egress.sh` 两个都钉；测试里网关把 extAuthz 轮流发给两个副本。一个副本重启之后可能换了地址，规则只认第一次解析到的，要 `docker compose run --rm --no-deps egress forget`。`forget` 之后网关还会把一部分 extAuthz 发到它记着的旧地址，那些请求是 503（失败关闭），`docker compose restart agentgateway` 之后才好（测试里 `forget` 之后 6 个请求有 3 个这样）。看守不做这两步。
+- **还没有的**：`gateway-authz` 和两个协调器出去的连接都没有出口规则；协调器多实例（各一个；停了 `gateway-authz` 失败关闭，503，不退回各取各的令牌、各用各的表）；重启后还在的配额桶（在内存里，`authz-state` 一重启全满）；证书热重载经这些单文件挂载用不上（宿主机上改名换掉的文件，容器里看不到）；生产证书；systemd 单元和看守带上这个文件；别的机器。这个叠加文件和顺丰国际的配置一起，在 [`tests/integration/coordinators`](../../tests/integration/coordinators/README.md) 里跑过两个副本，对着替身。这不是验收通过。
 
 ## sync-jwks（叠加文件）
 

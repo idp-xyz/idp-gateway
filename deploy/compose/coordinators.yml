@@ -1,0 +1,165 @@
+# The two coordinators of Phase 2, and gateway-authz asking them. An overlay: use it with compose.yml, gateway-authz.yml and
+# provider-signer.yml, which it does not change.
+#
+#   docker compose -f compose.yml -f gateway-authz.yml -f provider-signer.yml -f coordinators.yml up -d
+#
+# (its variables are in coordinators.env.example; put them in the same .env). Without this file the pool is what the other
+# three make of it: each gateway-authz keeps its own SF International token, its revocation table is in memory and empty
+# (no --revocations), and there is no quota. ADR-0021, ADR-0022 and ADR-0023 are Proposed; this file is opt-in.
+#
+# sf-token-coordinator (docs/adr/ADR-0022.md) holds the carrier's access-token lease: a gateway-authz replica asks it first, and
+# only the replica it answers FETCH to asks the carrier, so replicas do not void each other's token. It keeps access tokens, not
+# app_secret or encoding_aes_key. authz-state (docs/adr/ADR-0023.md) holds the revocation and ban table and the quota buckets:
+# every decision reads a fresh snapshot from it, revoke and restore change it there, quota is charged there. Each is a service of
+# its own, in the project's default network, with its own network namespace; gateway-authz finds them by name,
+# https://sf-token-coordinator:9445 and https://authz-state:9446. Both hops are mutual TLS. gateway-authz presents the client
+# certificate it already presents to the PDP (/authz/pdp-client.crt, GATEWAY_AUTHZ_PDP_CERT): that is its workload certificate,
+# and its URI subjectAltName must be COORDINATORS_AUTHZ_IDENTITY, the only identity each coordinator serves. Every replica
+# presents the same certificate. gateway-authz trusts COORDINATORS_CA, and only it, for the coordinators' certificates.
+#
+# Hardened as gateway-authz is (gateway-authz.yml): the image is a shell only, by digest; what runs is the host's binary, mounted
+# in (static: CGO_ENABLED=0 go build -trimpath -o sf-token-coordinator ./cmd/sf-token-coordinator, and the same for
+# ./cmd/authz-state); read-only root file system, no capability, no-new-privileges, not root, restart "no". Certificates are
+# mounted read-only, as files: a certificate replaced on the host by a rename is not seen inside, so the reload of ADR-0021 does
+# not reach these mounts. Each coordinator writes in one host directory of its own, mounted read-write: the lease file, the state
+# file. The program creates the file 0600 when it is missing and refuses one that group or others can read. The lease file
+# holds access tokens.
+#
+# Order. gateway-authz given --authz-state-url takes a snapshot before it listens and exits 1 when it cannot; with restart "no"
+# nothing starts it again. So it waits for both coordinators to be healthy (depends_on). The check is a TCP open of the
+# coordinator's own port from inside its container (nc -z of the shell image's busybox): the process is listening, nothing more.
+# Every check leaves one "TLS handshake error ... EOF" line in that coordinator's log. It is tried every second while the
+# coordinator starts (start_interval) and once an hour after that (interval): it is there for the order at start, not to watch.
+# docker start and docker restart do not read depends_on, and neither does the keeper.
+#
+# gateway-authz's command is repeated here in full, as provider-signer.yml has it, then the arguments this file adds. Compose
+# replaces a command list; it does not append. Added: --revocations and --revoker-identity (the --authz-state-* arguments need
+# both); --rate-limits; the five --sf-openapi-lease-* and the five --authz-state-*. --rate-limits is required here, because a list
+# cannot leave an argument out: a file whose buckets is [] is no quota, and then no quota request is sent.
+#
+# The revocation file. With authz-state, gateway-authz does not decide from it: it writes the coordinator's snapshot into it at
+# start and after each change it makes, and it refuses to start when the file is not there. It is in a tmpfs of its own
+# container (mode 1777, written out below; the files in it are 0600), so replicas (--scale gateway-authz=N) never share one,
+# and every start begins with no file. The entrypoint is therefore the image's shell: it writes an empty table there when the file is
+# missing, then execs gateway-authz, which is PID 1 from then on. That empty table is replaced by the coordinator's snapshot
+# before gateway-authz listens, or gateway-authz exits 1. Do not keep this entrypoint without the --authz-state-* arguments: an
+# empty table written at every start would then be what gateway-authz decides from.
+#
+# Not in this file: an egress rule for gateway-authz or for the coordinators (gateway-authz's namespace still has none); more than
+# one instance of a coordinator (each is a single container; when one is down, gateway-authz fails closed with 503 and does not
+# fall back to its own token or its own table); quota buckets that outlive authz-state (they are in memory, a restart refills
+# every bucket); production certificates; systemd units; gateway-control keep with this file.
+services:
+  sf-token-coordinator:
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    image: ${FRONT_IMAGE:-public.ecr.aws/nginx/nginx-unprivileged:stable-alpine@sha256:c3fc8fa482be50ef709c6438eb1bc98d50dbfe5a9b48be90711b8814f4dfd701}
+    entrypoint: ["/usr/local/bin/sf-token-coordinator"]
+    user: "${SF_TOKEN_COORDINATOR_USER:?see coordinators.env.example}"
+    command:
+      - --listen=0.0.0.0:9445
+      - --tls-cert=/coordinator/server.crt
+      - --tls-key=/coordinator/server.key
+      - --client-ca=/coordinator/client-ca.crt
+      - --authz-identity=${COORDINATORS_AUTHZ_IDENTITY:?see coordinators.env.example}
+      - --lease-file=/coordinator/state/leases.json
+    volumes:
+      - "${SF_TOKEN_COORDINATOR:?see coordinators.env.example}:/usr/local/bin/sf-token-coordinator:ro"
+      - "${SF_TOKEN_COORDINATOR_TLS_CERT:?see coordinators.env.example}:/coordinator/server.crt:ro"
+      - "${SF_TOKEN_COORDINATOR_TLS_KEY:?see coordinators.env.example}:/coordinator/server.key:ro"
+      - "${COORDINATORS_CLIENT_CA:?see coordinators.env.example}:/coordinator/client-ca.crt:ro"
+      - "${SF_TOKEN_COORDINATOR_STATE_DIR:?see coordinators.env.example}:/coordinator/state"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "-w", "1", "127.0.0.1", "9445"]
+      start_period: 60s
+      start_interval: 1s
+      interval: 1h
+      timeout: 3s
+      retries: 3
+    stop_grace_period: 5s
+
+  authz-state:
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    image: ${FRONT_IMAGE:-public.ecr.aws/nginx/nginx-unprivileged:stable-alpine@sha256:c3fc8fa482be50ef709c6438eb1bc98d50dbfe5a9b48be90711b8814f4dfd701}
+    entrypoint: ["/usr/local/bin/authz-state"]
+    user: "${AUTHZ_STATE_USER:?see coordinators.env.example}"
+    command:
+      - --listen=0.0.0.0:9446
+      - --tls-cert=/coordinator/server.crt
+      - --tls-key=/coordinator/server.key
+      - --client-ca=/coordinator/client-ca.crt
+      - --authz-identity=${COORDINATORS_AUTHZ_IDENTITY:?see coordinators.env.example}
+      - --state-file=/coordinator/state/state.json
+    volumes:
+      - "${AUTHZ_STATE:?see coordinators.env.example}:/usr/local/bin/authz-state:ro"
+      - "${AUTHZ_STATE_TLS_CERT:?see coordinators.env.example}:/coordinator/server.crt:ro"
+      - "${AUTHZ_STATE_TLS_KEY:?see coordinators.env.example}:/coordinator/server.key:ro"
+      - "${COORDINATORS_CLIENT_CA:?see coordinators.env.example}:/coordinator/client-ca.crt:ro"
+      - "${AUTHZ_STATE_STATE_DIR:?see coordinators.env.example}:/coordinator/state"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "-w", "1", "127.0.0.1", "9446"]
+      start_period: 60s
+      start_interval: 1s
+      interval: 1h
+      timeout: 3s
+      retries: 3
+    stop_grace_period: 5s
+
+  # The whole command of provider-signer.yml's gateway-authz, then what this file adds. Compose replaces the list.
+  gateway-authz:
+    # Writes the empty table only when the file is missing (a fresh tmpfs), then becomes gateway-authz. $$ is a $ for the shell.
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        umask 077
+        [ -e /authz/mirror/revocations.json ] || printf '%s\n' '{"epoch": 0, "revoked_accounts": {}}' > /authz/mirror/revocations.json
+        exec /usr/local/bin/gateway-authz "$$@"
+      - gateway-authz
+    command:
+      - --listen=0.0.0.0:9443
+      - --tls-cert=/authz/server.crt
+      - --tls-key=/authz/server.key
+      - --client-ca=/authz/gateway-ca.crt
+      - --gateway-identity=${GATEWAY_AUTHZ_GATEWAY_IDENTITY:?see gateway-authz.env.example}
+      - --policy=/authz/policy.json
+      - --developer-tokens=/authz/credentials/developer-tokens.json
+      - --gatekeeper-url=${GATEWAY_AUTHZ_PDP_URL:?see gateway-authz.env.example}
+      - --gatekeeper-name=${GATEWAY_AUTHZ_PDP_NAME:?see gateway-authz.env.example}
+      - --gatekeeper-token-file=/authz/pdp-token
+      - --gatekeeper-tls-cert=/authz/pdp-client.crt
+      - --gatekeeper-tls-key=/authz/pdp-client.key
+      - --gatekeeper-tls-ca=/authz/pdp-ca.crt
+      - --sf-openapi-apps=/authz/credentials/sfintl.apps.json
+      - --sf-openapi-plain-http-host=${GATEWAY_AUTHZ_SF_PLAIN_HTTP_HOST-}
+      - --revocations=/authz/mirror/revocations.json
+      - --revoker-identity=${GATEWAY_AUTHZ_REVOKER_IDENTITY:?see coordinators.env.example}
+      - --rate-limits=/authz/rate-limits.json
+      - --sf-openapi-lease-url=https://sf-token-coordinator:9445
+      - --sf-openapi-lease-cert=/authz/pdp-client.crt
+      - --sf-openapi-lease-key=/authz/pdp-client.key
+      - --sf-openapi-lease-ca=/authz/coordinators-ca.crt
+      - --sf-openapi-lease-name=${SF_TOKEN_COORDINATOR_NAME:?see coordinators.env.example}
+      - --authz-state-url=https://authz-state:9446
+      - --authz-state-cert=/authz/pdp-client.crt
+      - --authz-state-key=/authz/pdp-client.key
+      - --authz-state-ca=/authz/coordinators-ca.crt
+      - --authz-state-name=${AUTHZ_STATE_NAME:?see coordinators.env.example}
+    volumes:
+      - "${GATEWAY_AUTHZ_RATE_LIMITS:?see coordinators.env.example}:/authz/rate-limits.json:ro"
+      - "${COORDINATORS_CA:?see coordinators.env.example}:/authz/coordinators-ca.crt:ro"
+    # The mode is written out: without it, docker 29.8.1 gives the tmpfs 1777 on the first start and 0755, owned by root,
+    # on every later start of the same container (docker restart, docker start, an up that starts it again), and the
+    # shell above can no longer write the file.
+    tmpfs:
+      - /authz/mirror:mode=1777
+    depends_on:
+      sf-token-coordinator:
+        condition: service_healthy
+      authz-state:
+        condition: service_healthy

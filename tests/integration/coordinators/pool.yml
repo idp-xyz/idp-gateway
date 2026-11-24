@@ -1,0 +1,11 @@
+# Laid over deploy/compose/compose.yml, gateway-authz.yml, provider-signer.yml, coordinators.yml (not in the control) and
+# tests/integration/sfintl/pool.yml by pool.py. Those files are not changed; this adds one thing.
+#
+# gateway-authz: two replicas, every up (a --scale on the command line would be undone by the next plain `up -d`). They are
+# the same service with the same command, certificates and identity. compose names them gateway-authz-1 and gateway-authz-2;
+# the project network's resolver answers the service name gateway-authz with both addresses. Each has its own tmpfs at
+# /authz/mirror (coordinators.yml), so their revocation files are two files, not one.
+services:
+  gateway-authz:
+    deploy:
+      replicas: 2
