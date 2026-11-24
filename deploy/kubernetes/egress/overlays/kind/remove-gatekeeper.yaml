@@ -1,0 +1,35 @@
+# Kind has no Gatekeeper PDP. Base keeps the flags for production-shaped manifests; this overlay removes them.
+# gateway-authz then decides from the register only (ADR-0025 §6).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway-authz
+  namespace: idp-egress
+spec:
+  template:
+    spec:
+      containers:
+        - name: gateway-authz
+          args:
+            - --listen=0.0.0.0:9443
+            - --tls-cert=/authz/tls/tls.crt
+            - --tls-key=/authz/tls/tls.key
+            - --client-ca=/authz/tls/ca.crt
+            - --gateway-identity=spiffe://idp.test/egress/agentgateway
+            - --policy=/authz/policy/policy.json
+            - --developer-tokens=/authz/credentials/developer-tokens.json
+            - --sf-openapi-apps=/authz/credentials/sfintl.apps.json
+            - --sf-openapi-plain-http-host=sfintl-standin
+            - --revocations=/authz/mirror/revocations.json
+            - --revoker-identity=spiffe://idp.test/egress/revoker
+            - --rate-limits=/authz/rate-limits/rate-limits.json
+            - --sf-openapi-lease-url=https://sf-token-coordinator:9445
+            - --sf-openapi-lease-cert=/authz/client/tls.crt
+            - --sf-openapi-lease-key=/authz/client/tls.key
+            - --sf-openapi-lease-ca=/authz/client/ca.crt
+            - --sf-openapi-lease-name=sf-token-coordinator.idp.test
+            - --authz-state-url=https://authz-state:9446
+            - --authz-state-cert=/authz/client/tls.crt
+            - --authz-state-key=/authz/client/tls.key
+            - --authz-state-ca=/authz/client/ca.crt
+            - --authz-state-name=authz-state.idp.test

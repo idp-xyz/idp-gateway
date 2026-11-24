@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: provider-signer
+  namespace: idp-egress
+  labels:
+    app: provider-signer
+spec:
+  type: ClusterIP
+  selector:
+    app: provider-signer
+  ports:
+    - name: signer
+      port: 9444
+      targetPort: signer

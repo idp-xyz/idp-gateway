@@ -35,6 +35,7 @@ deploy/compose/.env
 
 tests/integration/wanbexpress/.run/
 tests/integration/sfintl/.run/
+tests/integration/k8spools/.run/
 
 # 控制台页面的依赖和构建结果。源码在 console/，构建由 npm run build 产生。
 console/node_modules/

@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sf-token-coordinator
+  namespace: idp-egress
+  labels:
+    app: sf-token-coordinator
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: sf-token-coordinator
+  template:
+    metadata:
+      labels:
+        app: sf-token-coordinator
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: sf-token-coordinator
+          image: idp-gateway-sf-token-coordinator:placeholder
+          imagePullPolicy: IfNotPresent
+          args:
+            - --listen=0.0.0.0:9445
+            - --tls-cert=/coordinator/tls/tls.crt
+            - --tls-key=/coordinator/tls/tls.key
+            - --client-ca=/coordinator/tls/ca.crt
+            - --authz-identity=spiffe://idp.test/egress/gateway-authz
+            - --lease-file=/coordinator/state/leases.json
+          ports:
+            - name: lease
+              containerPort: 9445
+          volumeMounts:
+            - name: tls
+              mountPath: /coordinator/tls
+              readOnly: true
+            - name: state
+              mountPath: /coordinator/state
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            tcpSocket:
+              port: 9445
+            periodSeconds: 2
+            failureThreshold: 6
+      volumes:
+        - name: tls
+          secret:
+            secretName: sf-token-coordinator-tls
+        - name: state
+          persistentVolumeClaim:
+            claimName: sf-token-coordinator-state
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sf-token-coordinator
+  namespace: idp-egress
+  labels:
+    app: sf-token-coordinator
+spec:
+  type: ClusterIP
+  selector:
+    app: sf-token-coordinator
+  ports:
+    - name: lease
+      port: 9445
+      targetPort: lease

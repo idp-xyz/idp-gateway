@@ -1,0 +1,121 @@
+# front + agentgateway in one Pod (ADR-0010). Snapshot ConfigMap name is patched per publish.
+# Images are placeholders; suite / CI replace by digest. Secrets and JWKS ConfigMap are created per run.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: idp-egress
+  labels:
+    app: gateway
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  minReadySeconds: 3
+  selector:
+    matchLabels:
+      app: gateway
+  template:
+    metadata:
+      labels:
+        app: gateway
+    spec:
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: front
+          # Same digest as deploy/compose FRONT_IMAGE / black-box front.
+          image: public.ecr.aws/nginx/nginx-unprivileged:stable-alpine@sha256:c3fc8fa482be50ef709c6438eb1bc98d50dbfe5a9b48be90711b8814f4dfd701
+          imagePullPolicy: IfNotPresent
+          command: ["nginx", "-c", "/etc/front/nginx.conf", "-g", "daemon off;"]
+          ports:
+            - name: front
+              containerPort: 8080
+          volumeMounts:
+            - name: front-conf
+              mountPath: /etc/front
+              readOnly: true
+            - name: front-tmp
+              mountPath: /tmp
+            - name: front-run
+              mountPath: /var/cache/nginx
+            - name: front-run
+              mountPath: /var/run
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 8"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            periodSeconds: 2
+            failureThreshold: 3
+        - name: agentgateway
+          # Locked upstream digest (linux/amd64 manifest). Suite may retarget via kustomize images.
+          image: cr.agentgateway.dev/agentgateway@sha256:460dda874be2dfa95fa5713c1f46f26079dce78df576008df704e54a59d5780d
+          imagePullPolicy: IfNotPresent
+          workingDir: /work
+          args: ["-f", "config/config.yaml"]
+          env:
+            - name: SESSION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-session
+                  key: session_key
+          ports:
+            - name: readback
+              containerPort: 8443
+            - name: ready
+              containerPort: 15021
+          volumeMounts:
+            - name: snapshot
+              mountPath: /work/config
+              readOnly: true
+            - name: gateway-tls
+              mountPath: /work/tls
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet:
+              path: /healthz/ready
+              port: 15021
+            periodSeconds: 2
+            failureThreshold: 6
+      volumes:
+        - name: front-conf
+          configMap:
+            name: gateway-front-conf
+        - name: front-tmp
+          emptyDir: {}
+        - name: front-run
+          emptyDir: {}
+        - name: snapshot
+          configMap:
+            # Suite replaces PLACEHOLDER with the content digest prefix of the published snapshot.
+            name: agentgateway-snapshot-PLACEHOLDER
+        - name: gateway-tls
+          # Secret: gateway.crt/key, gateway-readback.crt/key, ca.crt. ConfigMap: jwks.json (ADR-0025 §7).
+          projected:
+            sources:
+              - secret:
+                  name: gateway-tls
+              - configMap:
+                  name: gateway-jwks

@@ -1,0 +1,172 @@
+# Two replicas behind ClusterIP. Base keeps --gatekeeper-* (configurable); kind overlay strips them.
+# InitContainers: (1) empty revocations table when missing (same as coordinators.yml);
+# (2) copy credential files into emptyDir as 0600 — kubelet Secret mounts become group-readable
+# under fsGroup, which gateway-authz rejects (want 0600 or stricter).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway-authz
+  namespace: idp-egress
+  labels:
+    app: gateway-authz
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: gateway-authz
+  template:
+    metadata:
+      labels:
+        app: gateway-authz
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        # Keep initContainer-staged 0600 credential files; only fix root-owned Secret mounts.
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: seed-revocations
+          image: public.ecr.aws/nginx/nginx-unprivileged:stable-alpine@sha256:c3fc8fa482be50ef709c6438eb1bc98d50dbfe5a9b48be90711b8814f4dfd701
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              umask 077
+              [ -e /authz/mirror/revocations.json ] || printf '%s\n' '{"epoch": 0, "revoked_accounts": {}}' > /authz/mirror/revocations.json
+          volumeMounts:
+            - name: mirror
+              mountPath: /authz/mirror
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+        - name: stage-credentials
+          image: public.ecr.aws/nginx/nginx-unprivileged:stable-alpine@sha256:c3fc8fa482be50ef709c6438eb1bc98d50dbfe5a9b48be90711b8814f4dfd701
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              umask 077
+              cp /in/developer-tokens.json /out/developer-tokens.json
+              cp /in/sfintl.apps.json /out/sfintl.apps.json
+              chmod 600 /out/developer-tokens.json /out/sfintl.apps.json
+          volumeMounts:
+            - name: credentials-secret
+              mountPath: /in
+              readOnly: true
+            - name: credentials
+              mountPath: /out
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      containers:
+        - name: gateway-authz
+          image: idp-gateway-authz:placeholder
+          imagePullPolicy: IfNotPresent
+          args:
+            - --listen=0.0.0.0:9443
+            - --tls-cert=/authz/tls/tls.crt
+            - --tls-key=/authz/tls/tls.key
+            - --client-ca=/authz/tls/ca.crt
+            - --gateway-identity=spiffe://idp.test/egress/agentgateway
+            - --policy=/authz/policy/policy.json
+            - --developer-tokens=/authz/credentials/developer-tokens.json
+            - --sf-openapi-apps=/authz/credentials/sfintl.apps.json
+            - --sf-openapi-plain-http-host=sfintl-standin
+            - --revocations=/authz/mirror/revocations.json
+            - --revoker-identity=spiffe://idp.test/egress/revoker
+            - --rate-limits=/authz/rate-limits/rate-limits.json
+            - --sf-openapi-lease-url=https://sf-token-coordinator:9445
+            - --sf-openapi-lease-cert=/authz/client/tls.crt
+            - --sf-openapi-lease-key=/authz/client/tls.key
+            - --sf-openapi-lease-ca=/authz/client/ca.crt
+            - --sf-openapi-lease-name=sf-token-coordinator.idp.test
+            - --authz-state-url=https://authz-state:9446
+            - --authz-state-cert=/authz/client/tls.crt
+            - --authz-state-key=/authz/client/tls.key
+            - --authz-state-ca=/authz/client/ca.crt
+            - --authz-state-name=authz-state.idp.test
+            # Base keeps Gatekeeper PDP flags (endpoint configurable). Kind overlay removes this block.
+            - --gatekeeper-url=https://gatekeeper.example.invalid:8443
+            - --gatekeeper-name=gatekeeper.idp.test
+            - --gatekeeper-token-file=/authz/pdp/token
+            - --gatekeeper-tls-cert=/authz/client/tls.crt
+            - --gatekeeper-tls-key=/authz/client/tls.key
+            - --gatekeeper-tls-ca=/authz/client/ca.crt
+          ports:
+            - name: authz
+              containerPort: 9443
+          volumeMounts:
+            - name: mirror
+              mountPath: /authz/mirror
+            - name: server-tls
+              mountPath: /authz/tls
+              readOnly: true
+            - name: client-tls
+              mountPath: /authz/client
+              readOnly: true
+            - name: policy
+              mountPath: /authz/policy
+              readOnly: true
+            - name: credentials
+              mountPath: /authz/credentials
+              readOnly: true
+            - name: rate-limits
+              mountPath: /authz/rate-limits
+              readOnly: true
+            - name: pdp-token
+              mountPath: /authz/pdp
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            tcpSocket:
+              port: 9443
+            periodSeconds: 2
+            failureThreshold: 6
+          startupProbe:
+            tcpSocket:
+              port: 9443
+            periodSeconds: 2
+            failureThreshold: 60
+      volumes:
+        - name: mirror
+          emptyDir: {}
+        - name: credentials
+          emptyDir: {}
+        - name: credentials-secret
+          secret:
+            secretName: gateway-authz-credentials
+        - name: server-tls
+          secret:
+            secretName: gateway-authz-tls
+        - name: client-tls
+          secret:
+            secretName: gateway-authz-client-tls
+        - name: policy
+          configMap:
+            name: gateway-authz-policy
+        - name: rate-limits
+          configMap:
+            name: gateway-authz-rate-limits
+        - name: pdp-token
+          secret:
+            secretName: gateway-authz-pdp-token
+            defaultMode: 0600

@@ -1,0 +1,15 @@
+# Kind test overlay: no Gatekeeper in the cluster; strip --gatekeeper-* from gateway-authz.
+# Suite builds images, loads them into kind, creates Secrets/ConfigMaps, then kubectl apply -k .
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  - path: remove-gatekeeper.yaml
+  - path: pod-security-warn-only.yaml
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: gateway-authz
+    path: drop-pdp-token.json

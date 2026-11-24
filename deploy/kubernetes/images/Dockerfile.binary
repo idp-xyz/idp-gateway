@@ -1,0 +1,7 @@
+# Minimal image for one statically linked Go binary of this repository.
+# Build context must contain the binary at ./binary (CGO_ENABLED=0 go build -trimpath).
+# Tag by content digest of that binary. No shell, non-root numeric USER.
+FROM scratch
+COPY binary /app
+USER 65532:65532
+ENTRYPOINT ["/app"]

@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: provider-signer
+  namespace: idp-egress
+  labels:
+    app: provider-signer
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: provider-signer
+  template:
+    metadata:
+      labels:
+        app: provider-signer
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: provider-signer
+          image: idp-gateway-provider-signer:placeholder
+          imagePullPolicy: IfNotPresent
+          args:
+            - --listen=0.0.0.0:9444
+            - --tls-cert=/signer/tls/tls.crt
+            - --tls-key=/signer/tls/tls.key
+            - --client-ca=/signer/tls/ca.crt
+            - --gateway-identity=spiffe://idp.test/egress/agentgateway
+            - --carrier-url=http://sfintl-standin:8080/openapi/api/dispatch
+            - --carrier-plain-http-host=sfintl-standin
+          ports:
+            - name: signer
+              containerPort: 9444
+          volumeMounts:
+            - name: tls
+              mountPath: /signer/tls
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            tcpSocket:
+              port: 9444
+            periodSeconds: 2
+            failureThreshold: 6
+      volumes:
+        - name: tls
+          secret:
+            secretName: provider-signer-tls

@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: authz-state
+  namespace: idp-egress
+  labels:
+    app: authz-state
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: authz-state
+  template:
+    metadata:
+      labels:
+        app: authz-state
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: authz-state
+          image: idp-gateway-authz-state:placeholder
+          imagePullPolicy: IfNotPresent
+          args:
+            - --listen=0.0.0.0:9446
+            - --tls-cert=/coordinator/tls/tls.crt
+            - --tls-key=/coordinator/tls/tls.key
+            - --client-ca=/coordinator/tls/ca.crt
+            - --authz-identity=spiffe://idp.test/egress/gateway-authz
+            - --state-file=/coordinator/state/state.json
+          ports:
+            - name: state
+              containerPort: 9446
+          volumeMounts:
+            - name: tls
+              mountPath: /coordinator/tls
+              readOnly: true
+            - name: state
+              mountPath: /coordinator/state
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            tcpSocket:
+              port: 9446
+            periodSeconds: 2
+            failureThreshold: 6
+      volumes:
+        - name: tls
+          secret:
+            secretName: authz-state-tls
+        - name: state
+          persistentVolumeClaim:
+            claimName: authz-state-state
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: authz-state
+  namespace: idp-egress
+  labels:
+    app: authz-state
+spec:
+  type: ClusterIP
+  selector:
+    app: authz-state
+  ports:
+    - name: state
+      port: 9446
+      targetPort: state

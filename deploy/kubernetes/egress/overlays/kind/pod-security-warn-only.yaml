@@ -1,0 +1,14 @@
+# Kind measures whether restricted enforce admits our Pods. If enforce rejects, suite may apply this.
+# Default overlay keeps warn/audit restricted and drops enforce so the suite can still run when
+# a volume or capability nuance trips the label (measured and recorded in the suite README).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: idp-egress
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest

@@ -374,6 +374,8 @@ docker compose -f compose.yml -f gateway-authz.yml -f provider-signer.yml up -d
 - **明文。** `--carrier-plain-http-host` 空着，适配器只允许回环地址字面量上的明文 `http`。沙箱和替身的地址不是回环，要把主机名写在这个变量里，`gateway-authz` 的那个变量写同一个主机名。
 - **还没有的**：`gateway-authz` 自己去令牌端点的那条连接没有出口规则；systemd 单元；看守（`gateway-control keep`）带上这个叠加文件；生产证书；别的机器。这个叠加文件和顺丰国际的配置一起，在 `tests/integration/sfintl/pool.py` 里跑过。
 
+Kubernetes 上的出站池清单在 [`deploy/kubernetes/`](../kubernetes/README.md)（[ADR-0025](../../docs/adr/ADR-0025.md)，Proposed）；机制套件是 [`tests/integration/k8spools/`](../../tests/integration/k8spools/README.md)。那不是验收通过。
+
 ## 两个协调器（叠加文件）
 
 阶段 2 的两个协调进程，可选。`coordinators.yml` 和前面三个文件一起用，不改它们；不带它，池和原来一样。[ADR-0021](../../docs/adr/ADR-0021.md)、[ADR-0022](../../docs/adr/ADR-0022.md)、[ADR-0023](../../docs/adr/ADR-0023.md) 都还是 Proposed。

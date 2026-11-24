@@ -1,0 +1,243 @@
+# Default deny; allow DNS; allow only the hops listed in ADR-0025 decision 5.
+# Kind's CNI must be measured: if deny-all does not block, keep these and mark KP8-03 not shown.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: idp-egress
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: idp-egress
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    # Any in-cluster DNS (CoreDNS / kube-dns). Port 53 only.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-egress
+  namespace: idp-egress
+spec:
+  podSelector:
+    matchLabels:
+      app: gateway
+  policyTypes: ["Egress", "Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: k8spools-client
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app: k8spools-client
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 8443
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: gateway-authz
+      ports:
+        - protocol: TCP
+          port: 9443
+    - to:
+        - podSelector:
+            matchLabels:
+              app: provider-signer
+      ports:
+        - protocol: TCP
+          port: 9444
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-authz-net
+  namespace: idp-egress
+spec:
+  podSelector:
+    matchLabels:
+      app: gateway-authz
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: gateway
+        - podSelector:
+            matchLabels:
+              app: k8spools-client
+      ports:
+        - protocol: TCP
+          port: 9443
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: sf-token-coordinator
+      ports:
+        - protocol: TCP
+          port: 9445
+    - to:
+        - podSelector:
+            matchLabels:
+              app: authz-state
+      ports:
+        - protocol: TCP
+          port: 9446
+    - to:
+        - podSelector:
+            matchLabels:
+              app: sfintl-standin
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: provider-signer-net
+  namespace: idp-egress
+spec:
+  podSelector:
+    matchLabels:
+      app: provider-signer
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: gateway
+      ports:
+        - protocol: TCP
+          port: 9444
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: sfintl-standin
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: coordinators-net
+  namespace: idp-egress
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: ["sf-token-coordinator", "authz-state"]
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: gateway-authz
+        - podSelector:
+            matchLabels:
+              app: k8spools-client
+      ports:
+        - protocol: TCP
+          port: 9445
+        - protocol: TCP
+          port: 9446
+  egress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sfintl-standin-net
+  namespace: idp-egress
+spec:
+  podSelector:
+    matchLabels:
+      app: sfintl-standin
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: gateway-authz
+        - podSelector:
+            matchLabels:
+              app: provider-signer
+        - podSelector:
+            matchLabels:
+              app: k8spools-client
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress: []
+---
+# Suite client: revoke against authz, read stand-in admin, hit front (when in-cluster).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: k8spools-client-net
+  namespace: idp-egress
+spec:
+  podSelector:
+    matchLabels:
+      app: k8spools-client
+  policyTypes: ["Ingress", "Egress"]
+  ingress: []
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: gateway-authz
+      ports:
+        - protocol: TCP
+          port: 9443
+    - to:
+        - podSelector:
+            matchLabels:
+              app: gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 8443
+    - to:
+        - podSelector:
+            matchLabels:
+              app: sfintl-standin
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - podSelector:
+            matchLabels:
+              app: sf-token-coordinator
+      ports:
+        - protocol: TCP
+          port: 9445
+    - to:
+        - podSelector:
+            matchLabels:
+              app: authz-state
+      ports:
+        - protocol: TCP
+          port: 9446

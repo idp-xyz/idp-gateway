@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: idp-egress
+  labels:
+    # Pod Security: restricted. Kind overlay measures whether the API admits our Pods;
+    # if enforcement rejects them, the overlay clears enforce and keeps audit/warn.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+    idp.xyz/pool: egress
