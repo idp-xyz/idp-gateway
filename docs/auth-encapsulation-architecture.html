@@ -1,0 +1,1979 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light">
+  <title>IDP Gateway 外部认证封装与跨系统控制面分工架构规范</title>
+  <style>
+    :root {
+      --bg-page: #f7f8fa;
+      --bg-surface: #ffffff;
+      --bg-subtle: #f1f5f9;
+      --bg-code: #0f172a;
+      --ink-primary: #0f172a;
+      --ink-body: #334155;
+      --ink-muted: #64748b;
+      --border-hairline: #e2e8f0;
+      --border-strong: #cbd5e1;
+
+      /* Architectural Domain Palette */
+      --fabric: #4338ca;
+      --fabric-bg: #eef2ff;
+      --fabric-border: #c7d2fe;
+
+      --gk: #0f766e;
+      --gk-bg: #f0fdfa;
+      --gk-border: #99f6e4;
+
+      --gw: #1d4ed8;
+      --gw-bg: #eff6ff;
+      --gw-border: #bfdbfe;
+
+      --ops: #b45309;
+      --ops-bg: #fffbeb;
+      --ops-border: #fde68a;
+
+      --danger: #b91c1c;
+      --danger-bg: #fef2f2;
+      --danger-border: #fecaca;
+
+      --ok: #15803d;
+      --ok-bg: #f0fdf4;
+      --ok-border: #bbf7d0;
+
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 14px;
+      --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+      --shadow-md: 0 4px 16px rgba(15, 23, 42, 0.06);
+
+      --font-sans: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-serif: "Noto Serif SC", "Songti SC", Georgia, "Times New Roman", serif;
+      --font-mono: "JetBrains Mono", "Cascadia Code", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      font-size: 16px;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    body {
+      margin: 0;
+      font-family: var(--font-sans);
+      color: var(--ink-body);
+      background: var(--bg-page);
+      line-height: 1.72;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .skip-link {
+      position: absolute;
+      top: -100px;
+      left: 16px;
+      z-index: 1000;
+      padding: 8px 14px;
+      background: var(--ink-primary);
+      color: #ffffff;
+      border-radius: var(--radius-sm);
+      text-decoration: none;
+      font-size: 0.875rem;
+      font-weight: 600;
+    }
+    .skip-link:focus {
+      top: 12px;
+    }
+
+    /* Top Masthead */
+    .masthead {
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 58%, #1e3a5f 100%);
+      color: #f8fafc;
+      border-bottom: 3px solid var(--gw);
+      padding: 2.75rem 1.5rem 2.25rem;
+    }
+
+    .masthead-inner {
+      max-width: 1220px;
+      margin: 0 auto;
+    }
+
+    .doc-kicker {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.6rem;
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #93c5fd;
+      margin-bottom: 0.9rem;
+    }
+
+    .doc-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.2rem 0.6rem;
+      border-radius: 999px;
+      font-size: 0.74rem;
+      font-weight: 600;
+      background: rgba(148, 163, 184, 0.18);
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      color: #e2e8f0;
+    }
+
+    .doc-badge--warn {
+      background: rgba(245, 158, 11, 0.18);
+      border-color: rgba(251, 191, 36, 0.45);
+      color: #fde68a;
+    }
+
+    .masthead h1 {
+      margin: 0 0 0.6rem;
+      font-size: clamp(1.65rem, 3vw, 2.35rem);
+      font-weight: 700;
+      line-height: 1.25;
+      letter-spacing: -0.015em;
+      color: #ffffff;
+    }
+
+    .masthead-subtitle {
+      margin: 0 0 1.5rem;
+      font-size: 1rem;
+      color: #cbd5e1;
+      max-width: 860px;
+      line-height: 1.6;
+    }
+
+    .meta-strip {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 0.75rem;
+      padding-top: 1.15rem;
+      border-top: 1px solid rgba(148, 163, 184, 0.24);
+    }
+
+    .meta-item {
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+    }
+
+    .meta-label {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #94a3b8;
+      font-family: var(--font-mono);
+    }
+
+    .meta-value {
+      font-size: 0.875rem;
+      color: #f1f5f9;
+      font-weight: 500;
+    }
+
+    .meta-value code {
+      color: #bfdbfe;
+      background: rgba(15, 23, 42, 0.5);
+      padding: 0.08rem 0.35rem;
+      border-radius: 4px;
+      font-size: 0.82rem;
+    }
+
+    /* Main Shell with Sticky Sidebar TOC */
+    .layout {
+      max-width: 1220px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 4rem;
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+      gap: 2rem;
+      align-items: start;
+    }
+
+    .toc {
+      position: sticky;
+      top: 1.25rem;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-md);
+      padding: 1.1rem 1rem;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .toc-title {
+      font-size: 0.76rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--ink-muted);
+      margin: 0 0 0.75rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid var(--border-hairline);
+    }
+
+    .toc ol {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+
+    .toc a {
+      display: flex;
+      align-items: baseline;
+      gap: 0.45rem;
+      padding: 0.42rem 0.55rem;
+      border-radius: var(--radius-sm);
+      color: var(--ink-body);
+      text-decoration: none;
+      font-size: 0.84rem;
+      line-height: 1.4;
+      border-left: 2px solid transparent;
+      transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    }
+
+    .toc a:hover,
+    .toc a:focus-visible {
+      background: var(--bg-subtle);
+      color: var(--ink-primary);
+      outline: none;
+    }
+
+    .toc a.is-active {
+      background: var(--gw-bg);
+      color: var(--gw);
+      border-left-color: var(--gw);
+      font-weight: 600;
+    }
+
+    .toc-num {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--ink-muted);
+      flex-shrink: 0;
+    }
+
+    .toc-legend {
+      margin-top: 1rem;
+      padding-top: 0.85rem;
+      border-top: 1px solid var(--border-hairline);
+      display: grid;
+      gap: 0.35rem;
+    }
+
+    .legend-row {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      font-size: 0.76rem;
+      color: var(--ink-muted);
+    }
+
+    .swatch {
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+      flex-shrink: 0;
+    }
+
+    /* Main Content Sections */
+    main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 1.75rem;
+    }
+
+    .section-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-lg);
+      padding: 1.85rem 2rem;
+      box-shadow: var(--shadow-sm);
+      scroll-margin-top: 1.25rem;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: baseline;
+      gap: 0.7rem;
+      margin-bottom: 1.1rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--border-hairline);
+    }
+
+    .section-num {
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--gw);
+      background: var(--gw-bg);
+      border: 1px solid var(--gw-border);
+      padding: 0.15rem 0.5rem;
+      border-radius: var(--radius-sm);
+      flex-shrink: 0;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 1.32rem;
+      font-weight: 700;
+      color: var(--ink-primary);
+      line-height: 1.35;
+    }
+
+    h3 {
+      margin: 1.5rem 0 0.65rem;
+      font-size: 1.04rem;
+      font-weight: 700;
+      color: var(--ink-primary);
+    }
+
+    p {
+      margin: 0 0 0.9rem;
+    }
+
+    p:last-child {
+      margin-bottom: 0;
+    }
+
+    code {
+      font-family: var(--font-mono);
+      font-size: 0.84em;
+      background: var(--bg-subtle);
+      color: #0f172a;
+      padding: 0.12rem 0.38rem;
+      border-radius: 4px;
+      border: 1px solid #e2e8f0;
+      word-break: break-word;
+    }
+
+    pre {
+      margin: 0;
+      padding: 1rem 1.15rem;
+      background: var(--bg-code);
+      color: #e2e8f0;
+      border-radius: var(--radius-md);
+      overflow-x: auto;
+      font-family: var(--font-mono);
+      font-size: 0.81rem;
+      line-height: 1.62;
+      border: 1px solid #1e293b;
+    }
+
+    pre code {
+      background: transparent;
+      color: inherit;
+      border: 0;
+      padding: 0;
+      font-size: inherit;
+      word-break: normal;
+    }
+
+    /* Callouts & Axiom Grids */
+    .abstract-box {
+      background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+      border-left: 4px solid var(--gw);
+      border-radius: 0 var(--radius-md) var(--radius-md) 0;
+      padding: 1.15rem 1.3rem;
+      margin-bottom: 1.35rem;
+    }
+
+    .abstract-box strong {
+      color: var(--ink-primary);
+    }
+
+    .axiom-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 0.95rem;
+      margin: 1.25rem 0;
+    }
+
+    .axiom-card {
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-md);
+      padding: 1rem 1.05rem;
+      background: #ffffff;
+      border-top: 3px solid var(--gw);
+    }
+
+    .axiom-card--fabric { border-top-color: var(--fabric); }
+    .axiom-card--gk { border-top-color: var(--gk); }
+    .axiom-card--gw { border-top-color: var(--gw); }
+    .axiom-card--ops { border-top-color: var(--ops); }
+    .axiom-card--danger { border-top-color: var(--danger); }
+
+    .axiom-tag {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--ink-muted);
+      margin-bottom: 0.35rem;
+    }
+
+    .axiom-title {
+      font-size: 0.96rem;
+      font-weight: 700;
+      color: var(--ink-primary);
+      margin: 0 0 0.4rem;
+    }
+
+    .axiom-body {
+      font-size: 0.87rem;
+      color: var(--ink-body);
+      margin: 0;
+      line-height: 1.6;
+    }
+
+    /* Figures & SVGs */
+    figure.diagram {
+      margin: 1.4rem 0;
+      background: #fbfcfe;
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+    }
+
+    .diagram-canvas {
+      padding: 1rem;
+      overflow-x: auto;
+      background: #ffffff;
+    }
+
+    .diagram-canvas svg {
+      display: block;
+      width: 100%;
+      height: auto;
+      min-width: 680px;
+    }
+
+    figure.diagram figcaption {
+      padding: 0.75rem 1.1rem;
+      background: var(--bg-subtle);
+      border-top: 1px solid var(--border-hairline);
+      font-size: 0.83rem;
+      color: var(--ink-body);
+      line-height: 1.55;
+    }
+
+    figure.diagram figcaption strong {
+      color: var(--ink-primary);
+    }
+
+    /* Tables */
+    .table-wrap {
+      overflow-x: auto;
+      margin: 1.1rem 0;
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-md);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.86rem;
+      text-align: left;
+      background: #ffffff;
+    }
+
+    thead th {
+      background: #f8fafc;
+      color: var(--ink-primary);
+      font-weight: 700;
+      padding: 0.72rem 0.85rem;
+      border-bottom: 2px solid var(--border-strong);
+      white-space: nowrap;
+    }
+
+    tbody td {
+      padding: 0.68rem 0.85rem;
+      border-bottom: 1px solid var(--border-hairline);
+      vertical-align: top;
+      line-height: 1.55;
+    }
+
+    tbody tr:last-child td {
+      border-bottom: 0;
+    }
+
+    tbody tr:hover {
+      background: #f8fafc;
+    }
+
+    /* Pill tags */
+    .pill {
+      display: inline-block;
+      padding: 0.14rem 0.52rem;
+      border-radius: 999px;
+      font-size: 0.74rem;
+      font-weight: 600;
+      line-height: 1.4;
+      white-space: nowrap;
+    }
+
+    .pill--fabric { background: var(--fabric-bg); color: var(--fabric); border: 1px solid var(--fabric-border); }
+    .pill--gk { background: var(--gk-bg); color: var(--gk); border: 1px solid var(--gk-border); }
+    .pill--gw { background: var(--gw-bg); color: var(--gw); border: 1px solid var(--gw-border); }
+    .pill--ops { background: var(--ops-bg); color: var(--ops); border: 1px solid var(--ops-border); }
+    .pill--danger { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger-border); }
+    .pill--ok { background: var(--ok-bg); color: var(--ok); border: 1px solid var(--ok-border); }
+    .pill--muted { background: var(--bg-subtle); color: var(--ink-muted); border: 1px solid var(--border-strong); }
+
+    /* Mathematical / Formal Formula Block */
+    .formula-block {
+      margin: 1.15rem 0;
+      padding: 1.1rem 1.25rem;
+      background: #f8fafc;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      font-family: var(--font-mono);
+      font-size: 0.86rem;
+      color: var(--ink-primary);
+      overflow-x: auto;
+    }
+
+    .formula-label {
+      font-family: var(--font-sans);
+      font-size: 0.76rem;
+      font-weight: 700;
+      color: var(--ink-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.5rem;
+    }
+
+    .formula-expr {
+      line-height: 1.85;
+      white-space: pre-wrap;
+    }
+
+    .formula-op {
+      color: var(--gw);
+      font-weight: 700;
+    }
+
+    /* Interactive Tabs */
+    .tabs {
+      margin: 1.25rem 0;
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      background: #ffffff;
+    }
+
+    .tablist {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.25rem;
+      padding: 0.55rem 0.65rem;
+      background: var(--bg-subtle);
+      border-bottom: 1px solid var(--border-hairline);
+    }
+
+    .tab-btn {
+      appearance: none;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--ink-body);
+      font-family: var(--font-sans);
+      font-size: 0.83rem;
+      font-weight: 600;
+      padding: 0.45rem 0.85rem;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    }
+
+    .tab-btn:hover {
+      background: #ffffff;
+      color: var(--ink-primary);
+    }
+
+    .tab-btn:focus-visible {
+      outline: 2px solid var(--gw);
+      outline-offset: 2px;
+    }
+
+    .tab-btn[aria-selected="true"] {
+      background: #ffffff;
+      color: var(--gw);
+      border-color: var(--gw-border);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .tab-panel {
+      padding: 1.2rem 1.25rem;
+    }
+
+    .tab-panel[hidden] {
+      display: none;
+    }
+
+    .spec-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 0.85rem;
+      margin-top: 0.85rem;
+    }
+
+    .spec-cell {
+      padding: 0.8rem 0.9rem;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-hairline);
+      background: #fcfdff;
+    }
+
+    .spec-cell-head {
+      font-size: 0.76rem;
+      font-weight: 700;
+      margin-bottom: 0.35rem;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .spec-cell ul {
+      margin: 0;
+      padding-left: 1.1rem;
+      font-size: 0.83rem;
+      line-height: 1.55;
+    }
+
+    .spec-cell li {
+      margin-bottom: 0.25rem;
+    }
+
+    /* Callout Notice */
+    .callout {
+      padding: 0.95rem 1.15rem;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-hairline);
+      margin: 1.1rem 0;
+      font-size: 0.88rem;
+      line-height: 1.62;
+    }
+
+    .callout--danger {
+      background: var(--danger-bg);
+      border-color: var(--danger-border);
+      color: #7f1d1d;
+    }
+
+    .callout--ops {
+      background: var(--ops-bg);
+      border-color: var(--ops-border);
+      color: #78350f;
+    }
+
+    .callout--gk {
+      background: var(--gk-bg);
+      border-color: var(--gk-border);
+      color: #134e4a;
+    }
+
+    .callout-title {
+      font-weight: 700;
+      margin-bottom: 0.3rem;
+      display: block;
+    }
+
+    /* Stacked full-width contract cards so JSON never requires horizontal scrolling */
+    .split-2 {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      margin: 1rem 0;
+    }
+
+    .code-card {
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      background: #ffffff;
+    }
+
+    .code-card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      padding: 0.55rem 0.9rem;
+      background: var(--bg-subtle);
+      border-bottom: 1px solid var(--border-hairline);
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--ink-primary);
+    }
+
+    .code-card pre {
+      border: 0;
+      border-radius: 0;
+    }
+
+    /* Footer */
+    footer {
+      max-width: 1220px;
+      margin: 0 auto;
+      padding: 1.5rem 1.5rem 3rem;
+      border-top: 1px solid var(--border-hairline);
+      color: var(--ink-muted);
+      font-size: 0.82rem;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 0.75rem;
+    }
+
+    /* Responsive adjustments */
+    @media (max-width: 960px) {
+      .layout {
+        grid-template-columns: 1fr;
+        padding: 1.25rem 1rem 3rem;
+      }
+      .toc {
+        position: static;
+      }
+      .toc ol {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+        gap: 0.25rem;
+      }
+      .section-card {
+        padding: 1.35rem 1.15rem;
+      }
+    }
+
+    /* Print Stylesheet */
+    @media print {
+      body {
+        background: #ffffff;
+        color: #000000;
+        font-size: 11pt;
+      }
+      .masthead {
+        background: #ffffff !important;
+        color: #000000 !important;
+        border-bottom: 2px solid #000000;
+        padding: 1rem 0;
+      }
+      .masthead h1, .masthead-subtitle, .meta-value, .meta-label, .doc-kicker {
+        color: #000000 !important;
+      }
+      .layout {
+        grid-template-columns: 1fr;
+        padding: 0.5rem 0;
+      }
+      .toc {
+        display: none;
+      }
+      .section-card {
+        box-shadow: none;
+        border: 1px solid #cbd5e1;
+        break-inside: avoid;
+      }
+      .tab-panel[hidden] {
+        display: block !important;
+        border-top: 1px dashed #cbd5e1;
+      }
+      .tablist {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">跳至正文内容</a>
+
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="doc-kicker">
+        <span>IDP Architecture Reference</span>
+        <span class="doc-badge">ADR-0001 — ADR-0019</span>
+        <span class="doc-badge">agentgateway 1.7.0</span>
+        <span class="doc-badge doc-badge--warn">Status: Reference Architecture · Formal Gates NOT_RUN</span>
+      </div>
+      <h1>IDP Gateway 外部认证封装与跨系统控制面分工架构规范</h1>
+      <p class="masthead-subtitle">
+        面向多租户第三方 API 与 AI 出站治理的系统工程方案：阐明为何“认证引擎封装在 IDP Gateway、声明式配置 UI 落在 API Fabric、密钥与账户授权归属 Gatekeeper / KMS”，以及 80/20 协议分层封装、编译期反夹带护栏与零信任运行时机制。
+      </p>
+      <div class="meta-strip">
+        <div class="meta-item">
+          <span class="meta-label">核心数据面</span>
+          <span class="meta-value">锁定 <code>agentgateway 1.7.0</code>（单一数据面技术）</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">控制面与安全组件</span>
+          <span class="meta-value"><code>gateway-control</code> · <code>gateway-authz</code> · <code>provider-signer</code></span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">契约基线</span>
+          <span class="meta-value"><code>contracts/fabric/</code> · <code>contracts/gateway/</code></span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">文档日期与口径</span>
+          <span class="meta-value">2026-11-24 · 仅引用仓内实测事实，不编造未批准 SLO</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="toc" aria-label="文档目录">
+      <p class="toc-title">目录导航</p>
+      <ol>
+        <li><a href="#sec-1"><span class="toc-num">01</span><span>摘要与核心架构命题</span></a></li>
+        <li><a href="#sec-2"><span class="toc-num">02</span><span>三系统职责边界与 RACI</span></a></li>
+        <li><a href="#sec-3"><span class="toc-num">03</span><span>80/20 认证协议分层模型</span></a></li>
+        <li><a href="#sec-4"><span class="toc-num">04</span><span>零信任判定与双路径注入</span></a></li>
+        <li><a href="#sec-5"><span class="toc-num">05</span><span>编译器反夹带与安全底线</span></a></li>
+        <li><a href="#sec-6"><span class="toc-num">06</span><span>跨系统契约与配置映射</span></a></li>
+        <li><a href="#sec-7"><span class="toc-num">07</span><span>分阶段演进与验证基线</span></a></li>
+      </ol>
+      <div class="toc-legend" aria-label="颜色域图例">
+        <div class="legend-row"><span class="swatch" style="background: var(--fabric);"></span><span>API Fabric（治理 / 发布 UI）</span></div>
+        <div class="legend-row"><span class="swatch" style="background: var(--gk);"></span><span>Gatekeeper + KMS（身份 / 密钥）</span></div>
+        <div class="legend-row"><span class="swatch" style="background: var(--gw);"></span><span>IDP Gateway（编译 / 运行面）</span></div>
+        <div class="legend-row"><span class="swatch" style="background: var(--ops);"></span><span>Ops Console（观测 / 应急）</span></div>
+        <div class="legend-row"><span class="swatch" style="background: var(--danger);"></span><span>明确禁止 / 默认拒绝边界</span></div>
+      </div>
+    </nav>
+
+    <main id="main-content">
+      <!-- SECTION 1 -->
+      <section class="section-card" id="sec-1">
+        <div class="section-header">
+          <span class="section-num">§ 01</span>
+          <h2>摘要与核心架构命题</h2>
+        </div>
+
+        <div class="abstract-box">
+          <strong>核心结论：</strong>对常用外部认证方式进行封装并开放 UI 化配置<strong>高度推荐</strong>，但必须拒绝“把所有逻辑塞进单一系统”或“在 UI 中提供万能拼接脚本”的做法。科学边界是<strong>三方协同</strong>：<strong>认证执行引擎与编译护栏</strong>封装在 <code>idp-gateway</code>，<strong>路由与认证方案选择 UI 及审批发布</strong>落在 <strong>API Fabric</strong>，<strong>密钥只写录入与多租户账户授权</strong>归属 <strong>Gatekeeper（+ KMS）</strong>；<code>idp-gateway</code> 自带控制台仅保留只读审计与紧急撤销/封禁。
+        </div>
+
+        <p>
+          在取消独立 BIP 产品（<code>ADR-0005</code>）并确立统一 L7 出站网关（<code>ADR-0004</code>）后，CargoPai、Parcel、Brant、Prism 与 TELOS 等业务产品接入第三方承运商及 AI 上游时面临一对固有工程张力：若完全不封装认证，每接入一家新供应商都要修改网关代码与手工编写 YAML；若为了追求“全配置化”而在 UI 上开放任意 Header 模板或脚本表达式，则会直接破坏头白名单、方案前缀校验与密钥隔离防线。
+        </p>
+
+        <div class="axiom-grid">
+          <article class="axiom-card axiom-card--fabric">
+            <div class="axiom-tag">Axiom 1 · 控制面解耦</div>
+            <h3 class="axiom-title">声明配置在 Fabric，生效执行在 Gateway</h3>
+            <p class="axiom-body">Fabric 管理 API 资产、认证方案声明与发布审批（<code>ADR-0006</code>）；永不直接写代理原生 YAML，也不进入业务请求路径。</p>
+          </article>
+          <article class="axiom-card axiom-card--gk">
+            <div class="axiom-tag">Axiom 2 · 凭密分离</div>
+            <h3 class="axiom-title">配置只传引用，密钥只写不回显</h3>
+            <p class="axiom-body">路由与契约中仅携带 <code>credential_binding_ref</code> 句柄（<code>ADR-0003</code>），密钥明文永不进配置快照、环境变量或前端页面。</p>
+          </article>
+          <article class="axiom-card axiom-card--gw">
+            <div class="axiom-tag">Axiom 3 · 80/20 分层</div>
+            <h3 class="axiom-title">标准协议 UI 声明，非标算法代码封装</h3>
+            <p class="axiom-body">API Key / Bearer / Basic / OAuth2 / mTLS 做成标准模板（覆盖约 80%）；万邦随机数、顺丰密文信封沉淀为受测命名适配器（约 20%）。</p>
+          </article>
+        </div>
+
+        <figure class="diagram">
+          <div class="diagram-canvas">
+            <svg viewBox="0 0 1000 548" role="img" aria-labelledby="fig1-title fig1-desc" xmlns="http://www.w3.org/2000/svg">
+              <title id="fig1-title">图 1：API Fabric、Gatekeeper/KMS 与 IDP Gateway 三系统职责边界全景架构图</title>
+              <desc id="fig1-desc">展示四个域的职责分离：上方为 API Fabric 治理控制面与 Gatekeeper/KMS 身份密钥权威，下方左侧为 IDP Gateway 控制编译与零信任运行数据面，下方右侧为外部 Provider 与回环运维控制台。</desc>
+              <defs>
+                <marker id="arr-indigo" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#4338ca"/>
+                </marker>
+                <marker id="arr-teal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#0f766e"/>
+                </marker>
+                <marker id="arr-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#1d4ed8"/>
+                </marker>
+                <marker id="arr-amber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#b45309"/>
+                </marker>
+                <marker id="arr-slate" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#475569"/>
+                </marker>
+              </defs>
+
+              <!-- Background plane divider label placed in open central corridor -->
+              <line x1="20" y1="224" x2="980" y2="224" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="6 5"/>
+              <rect x="242" y="212" width="192" height="24" rx="12" fill="#f1f5f9" stroke="#cbd5e1"/>
+              <text x="338" y="228" text-anchor="middle" font-size="11" font-weight="700" fill="#475569">控制面 / 身份面  ↕  运行数据面</text>
+
+              <!-- 1. API FABRIC BOX -->
+              <rect x="20" y="18" width="446" height="168" rx="12" fill="#eef2ff" stroke="#4338ca" stroke-width="1.8"/>
+              <rect x="20" y="18" width="446" height="34" rx="12" fill="#4338ca"/>
+              <rect x="20" y="38" width="446" height="14" fill="#4338ca"/>
+              <text x="36" y="40" font-size="13" font-weight="700" fill="#ffffff">API Fabric（治理与用户配置控制面）</text>
+              <text x="452" y="39" text-anchor="end" font-size="10.5" fill="#c7d2fe" font-family="monospace">ADR-0006</text>
+
+              <rect x="36" y="68" width="128" height="66" rx="8" fill="#ffffff" stroke="#a5b4fc" stroke-width="1.2"/>
+              <text x="100" y="92" text-anchor="middle" font-size="12" font-weight="700" fill="#312e81">认证配置 UI</text>
+              <text x="100" y="110" text-anchor="middle" font-size="10.5" fill="#475569">选 auth_scheme</text>
+              <text x="100" y="124" text-anchor="middle" font-size="10.5" fill="#475569">填非敏感参数</text>
+
+              <rect x="179" y="68" width="128" height="66" rx="8" fill="#ffffff" stroke="#a5b4fc" stroke-width="1.2"/>
+              <text x="243" y="92" text-anchor="middle" font-size="12" font-weight="700" fill="#312e81">资产与审批流</text>
+              <text x="243" y="110" text-anchor="middle" font-size="10.5" fill="#475569">APIAsset / Release</text>
+              <text x="243" y="124" text-anchor="middle" font-size="10.5" fill="#475569">approval_ref</text>
+
+              <rect x="322" y="68" width="128" height="66" rx="8" fill="#ffffff" stroke="#a5b4fc" stroke-width="1.2"/>
+              <text x="386" y="92" text-anchor="middle" font-size="12" font-weight="700" fill="#312e81">发布意图信封</text>
+              <text x="386" y="110" text-anchor="middle" font-size="10.5" fill="#475569">idempotency_key</text>
+              <text x="386" y="124" text-anchor="middle" font-size="10.5" fill="#475569">RouteIntent + Ref</text>
+
+              <rect x="36" y="147" width="414" height="26" rx="6" fill="#e0e7ff"/>
+              <text x="243" y="164" text-anchor="middle" font-size="11" font-weight="600" fill="#3730a3">边界禁令：永不存储密钥明文 · 永不直接生成代理 YAML · 不入请求路径</text>
+
+              <!-- 2. GATEKEEPER + KMS BOX -->
+              <rect x="534" y="18" width="446" height="168" rx="12" fill="#f0fdfa" stroke="#0f766e" stroke-width="1.8"/>
+              <rect x="534" y="18" width="446" height="34" rx="12" fill="#0f766e"/>
+              <rect x="534" y="38" width="446" height="14" fill="#0f766e"/>
+              <text x="550" y="40" font-size="13" font-weight="700" fill="#ffffff">Gatekeeper + KMS / Secret Manager（身份与凭证权威）</text>
+              <text x="966" y="39" text-anchor="end" font-size="10.5" fill="#99f6e4" font-family="monospace">ADR-0003</text>
+
+              <rect x="550" y="68" width="128" height="66" rx="8" fill="#ffffff" stroke="#5eead4" stroke-width="1.2"/>
+              <text x="614" y="92" text-anchor="middle" font-size="12" font-weight="700" fill="#115e59">身份与 JWKS</text>
+              <text x="614" y="110" text-anchor="middle" font-size="10.5" fill="#475569">签发 M2M JWT</text>
+              <text x="614" y="124" text-anchor="middle" font-size="10.5" fill="#475569">受众/密钥轮换</text>
+
+              <rect x="693" y="68" width="128" height="66" rx="8" fill="#ffffff" stroke="#5eead4" stroke-width="1.2"/>
+              <text x="757" y="92" text-anchor="middle" font-size="12" font-weight="700" fill="#115e59">账户授权 PDP</text>
+              <text x="757" y="110" text-anchor="middle" font-size="10.5" fill="#475569">ProviderAccount</text>
+              <text x="757" y="124" text-anchor="middle" font-size="10.5" fill="#475569">ExternalAccessGrant</text>
+
+              <rect x="836" y="68" width="128" height="66" rx="8" fill="#ffffff" stroke="#5eead4" stroke-width="1.2"/>
+              <text x="900" y="92" text-anchor="middle" font-size="12" font-weight="700" fill="#115e59">密钥托管 (只写)</text>
+              <text x="900" y="110" text-anchor="middle" font-size="10.5" fill="#475569">KMS / Secret Ref</text>
+              <text x="900" y="124" text-anchor="middle" font-size="10.5" fill="#475569">过渡期 0600 文件</text>
+
+              <rect x="550" y="147" width="414" height="26" rx="6" fill="#ccfbf1"/>
+              <text x="757" y="164" text-anchor="middle" font-size="11" font-weight="600" fill="#115e59">只写录入不回显 · 对外仅暴露 gatekeeper:&lt;handle&gt; 引用句柄</text>
+
+              <!-- Fabric <-> Gatekeeper ref arrow -->
+              <line x1="534" y1="101" x2="472" y2="101" stroke="#0f766e" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#arr-teal)"/>
+              <rect x="470" y="74" width="60" height="20" rx="4" fill="#ffffff" stroke="#99f6e4"/>
+              <text x="500" y="88" text-anchor="middle" font-size="10" font-weight="700" fill="#0f766e">选句柄 Ref</text>
+
+              <!-- 3. IDP GATEWAY BOX -->
+              <rect x="20" y="264" width="710" height="266" rx="12" fill="#eff6ff" stroke="#1d4ed8" stroke-width="1.8"/>
+              <rect x="20" y="264" width="710" height="34" rx="12" fill="#1d4ed8"/>
+              <rect x="20" y="284" width="710" height="14" fill="#1d4ed8"/>
+              <text x="36" y="286" font-size="13" font-weight="700" fill="#ffffff">IDP Gateway（编译护栏与零信任运行数据面 · 零第三方 Go 依赖）</text>
+              <text x="716" y="285" text-anchor="end" font-size="10.5" fill="#bfdbfe" font-family="monospace">ADR-0001 / 0008 / 0010–0017</text>
+
+              <!-- gateway-control -->
+              <rect x="34" y="314" width="162" height="200" rx="9" fill="#ffffff" stroke="#60a5fa" stroke-width="1.5"/>
+              <rect x="34" y="314" width="162" height="28" rx="9" fill="#dbeafe"/>
+              <rect x="34" y="332" width="162" height="10" fill="#dbeafe"/>
+              <text x="115" y="333" text-anchor="middle" font-size="12" font-weight="700" fill="#1e3a8a">gateway-control</text>
+              <text x="46" y="362" font-size="11" fill="#1e293b">• compile 预检与编译</text>
+              <text x="46" y="384" font-size="11" fill="#1e293b">• 1.7.0 原生校验</text>
+              <text x="46" y="406" font-size="11" fill="#1e293b">• publish 不可变快照</text>
+              <text x="46" y="428" font-size="11" fill="#1e293b">• reconcile 摘要对账</text>
+              <text x="46" y="450" font-size="11" fill="#1e293b">• sync-jwks 公钥同步</text>
+              <rect x="44" y="472" width="142" height="28" rx="5" fill="#fef2f2" stroke="#fecaca"/>
+              <text x="115" y="490" text-anchor="middle" font-size="10" font-weight="700" fill="#991b1b">拒绝内联密钥与 ${ENV}</text>
+
+              <!-- front Nginx -->
+              <rect x="216" y="334" width="88" height="72" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.3"/>
+              <text x="260" y="358" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0f172a">Front Nginx</text>
+              <text x="260" y="376" text-anchor="middle" font-size="10" fill="#475569">协议清洗</text>
+              <text x="260" y="391" text-anchor="middle" font-size="10" fill="#475569">拒双 Host</text>
+
+              <!-- agentgateway 1.7.0 -->
+              <rect x="326" y="334" width="160" height="72" rx="8" fill="#ffffff" stroke="#1d4ed8" stroke-width="1.8"/>
+              <text x="406" y="356" text-anchor="middle" font-size="12" font-weight="700" fill="#1e3a8a">agentgateway 1.7.0</text>
+              <text x="406" y="374" text-anchor="middle" font-size="10.5" fill="#334155">JWT 验签 · PEP 执行</text>
+              <text x="406" y="390" text-anchor="middle" font-size="10.5" fill="#334155">头白名单 · 前缀硬校验</text>
+
+              <!-- provider-signer -->
+              <rect x="562" y="334" width="154" height="72" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.5" stroke-dasharray="5 3"/>
+              <text x="639" y="356" text-anchor="middle" font-size="12" font-weight="700" fill="#1d4ed8">provider-signer</text>
+              <text x="639" y="374" text-anchor="middle" font-size="10.5" fill="#334155">可选 · 改写正文协议</text>
+              <text x="639" y="390" text-anchor="middle" font-size="10.5" fill="#334155">AES/SHA-256 · 熔断</text>
+
+              <!-- gateway-authz -->
+              <rect x="326" y="438" width="256" height="76" rx="8" fill="#ffffff" stroke="#0f766e" stroke-width="1.6"/>
+              <text x="454" y="460" text-anchor="middle" font-size="12" font-weight="700" fill="#115e59">gateway-authz（认证封装核心引擎）</text>
+              <text x="454" y="479" text-anchor="middle" font-size="10.5" fill="#334155">ExtAuthZ 判定 · OAuth2 缓存 · 万邦随机数</text>
+              <text x="454" y="497" text-anchor="middle" font-size="10.5" fill="#334155">撤销表 · 操作封禁 · 按账户限流 · 0600 审计</text>
+
+              <!-- 4. EXTERNAL PROVIDER BOX -->
+              <rect x="772" y="264" width="208" height="122" rx="12" fill="#f8fafc" stroke="#475569" stroke-width="1.6"/>
+              <rect x="772" y="264" width="208" height="32" rx="12" fill="#334155"/>
+              <rect x="772" y="282" width="208" height="14" fill="#334155"/>
+              <text x="876" y="285" text-anchor="middle" font-size="12.5" font-weight="700" fill="#ffffff">外部 Provider / AI 上游</text>
+              <text x="876" y="318" text-anchor="middle" font-size="11" fill="#1e293b">承运商 · 第三方 SaaS · LLM</text>
+              <text x="876" y="338" text-anchor="middle" font-size="10.5" fill="#475569">仅收合法上游凭证 (无 JWT)</text>
+              <rect x="786" y="351" width="180" height="24" rx="5" fill="#e2e8f0"/>
+              <text x="876" y="367" text-anchor="middle" font-size="10" font-weight="700" fill="#334155">pin-egress.sh 出口 IP 钉死</text>
+
+              <!-- 5. OPS CONSOLE BOX -->
+              <rect x="772" y="410" width="208" height="120" rx="12" fill="#fffbeb" stroke="#b45309" stroke-width="1.6"/>
+              <rect x="772" y="410" width="208" height="32" rx="12" fill="#b45309"/>
+              <rect x="772" y="428" width="208" height="14" fill="#b45309"/>
+              <text x="876" y="431" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">Gateway Ops Console</text>
+              <text x="876" y="462" text-anchor="middle" font-size="10.5" fill="#78350f">仅回环 (127.0.0.1) · ADR-0019</text>
+              <text x="876" y="480" text-anchor="middle" font-size="10.5" fill="#78350f">审计只读 · 紧急撤销 · 操作封禁</text>
+              <rect x="786" y="494" width="180" height="24" rx="5" fill="#fef3c7"/>
+              <text x="876" y="510" text-anchor="middle" font-size="10" font-weight="700" fill="#92400e">不做路由发布 · 不管密钥明文</text>
+
+              <!-- CONNECTORS -->
+              <!-- Fabric -> gateway-control -->
+              <path d="M 115 186 L 115 310" fill="none" stroke="#4338ca" stroke-width="2" marker-end="url(#arr-indigo)"/>
+              <rect x="30" y="214" width="170" height="20" rx="5" fill="#eef2ff" stroke="#c7d2fe"/>
+              <text x="115" y="228" text-anchor="middle" font-size="10" font-weight="700" fill="#3730a3">RoutePublicationIntent (mTLS)</text>
+
+              <!-- gateway-control -> agentgateway -->
+              <path d="M 196 326 L 208 326 L 208 310 L 368 310 L 368 330" fill="none" stroke="#1d4ed8" stroke-width="1.6" marker-end="url(#arr-blue)"/>
+              <rect x="224" y="301" width="124" height="17" rx="4" fill="#dbeafe"/>
+              <text x="286" y="313" text-anchor="middle" font-size="9.5" font-weight="700" fill="#1e3a8a">不可变快照 / 回读对账</text>
+
+              <!-- Gatekeeper -> gateway-authz (clean vertical corridor at x=540) -->
+              <path d="M 757 186 L 757 224 L 540 224 L 540 434" fill="none" stroke="#0f766e" stroke-width="1.8" marker-end="url(#arr-teal)"/>
+              <rect x="580" y="214" width="144" height="20" rx="5" fill="#f0fdfa" stroke="#99f6e4"/>
+              <text x="652" y="228" text-anchor="middle" font-size="10" font-weight="700" fill="#0f766e">mTLS 授权判定 / KMS</text>
+
+              <!-- Front Nginx -> agentgateway -->
+              <line x1="304" y1="370" x2="322" y2="370" stroke="#334155" stroke-width="1.8" marker-end="url(#arr-slate)"/>
+
+              <!-- agentgateway <-> gateway-authz -->
+              <line x1="406" y1="406" x2="406" y2="434" stroke="#0f766e" stroke-width="1.8" marker-end="url(#arr-teal)" marker-start="url(#arr-teal)"/>
+              <rect x="322" y="411" width="78" height="18" rx="4" fill="#f0fdfa" stroke="#99f6e4"/>
+              <text x="361" y="424" text-anchor="middle" font-size="9.5" font-weight="700" fill="#0f766e">mTLS ExtAuthZ</text>
+
+              <!-- agentgateway -> provider-signer (with clean bridge jump over x=540) -->
+              <path d="M 486 370 L 533 370 A 7 7 0 0 1 547 370 L 558 370" fill="none" stroke="#1d4ed8" stroke-width="1.8" marker-end="url(#arr-blue)"/>
+              <rect x="492" y="346" width="38" height="16" rx="4" fill="#ffffff" stroke="#bfdbfe"/>
+              <text x="511" y="357" text-anchor="middle" font-size="9" font-weight="700" fill="#1d4ed8">mTLS</text>
+
+              <!-- agentgateway direct path (80%) to Provider -->
+              <path d="M 454 334 L 454 312 L 533 312 A 7 7 0 0 1 547 312 L 768 312" fill="none" stroke="#1d4ed8" stroke-width="1.8" marker-end="url(#arr-blue)"/>
+              <rect x="562" y="302" width="154" height="18" rx="4" fill="#dbeafe" stroke="#93c5fd"/>
+              <text x="639" y="315" text-anchor="middle" font-size="9.5" font-weight="700" fill="#1e3a8a">80% 标准 Header 凭证直出</text>
+
+              <!-- provider-signer -> Provider (20%) -->
+              <line x1="716" y1="370" x2="768" y2="370" stroke="#2563eb" stroke-width="1.8" stroke-dasharray="4 3" marker-end="url(#arr-blue)"/>
+              <rect x="733" y="350" width="32" height="16" rx="4" fill="#ffffff" stroke="#bfdbfe"/>
+              <text x="749" y="361" text-anchor="middle" font-size="9" font-weight="700" fill="#1d4ed8">20%</text>
+
+              <!-- Ops Console <-> gateway-authz -->
+              <path d="M 772 476 L 586 476" fill="none" stroke="#b45309" stroke-width="1.8" marker-end="url(#arr-amber)" marker-start="url(#arr-amber)"/>
+              <rect x="608" y="466" width="142" height="20" rx="5" fill="#fffbeb" stroke="#fde68a"/>
+              <text x="679" y="480" text-anchor="middle" font-size="9.5" font-weight="700" fill="#92400e">mTLS 撤销/封禁 · 读审计</text>
+            </svg>
+          </div>
+          <figcaption>
+            <strong>图 1 · 三系统职责边界全景图：</strong>Fabric 与 Gatekeeper 位于控制与身份面，只通过强契约引用（<code>RoutePublicationIntent</code> 与 <code>credential_binding_ref</code>）影响网关；<code>idp-gateway</code> 内部由单一数据面 <code>agentgateway 1.7.0</code> 承载全量流量，不再叠加 Kong 或 Traefik。
+          </figcaption>
+        </figure>
+      </section>
+
+      <!-- SECTION 2 -->
+      <section class="section-card" id="sec-2">
+        <div class="section-header">
+          <span class="section-num">§ 02</span>
+          <h2>三系统职责边界与权威矩阵</h2>
+        </div>
+
+        <p>
+          大型 API 平台演进过程中最常见的架构退化是“双主事实（Split-Brain Authority）”——例如既在网关控制台配路由又在 Fabric 配路由，或在路由配置里直接存密钥明文。表 1 依据 <code>ADR-0003</code>、<code>ADR-0006</code>、<code>ADR-0011</code>、<code>ADR-0016</code> 与 <code>ADR-0019</code> 固化各系统在认证与发布全生命周期中的唯一权威归属。
+        </p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>生命周期能力</th>
+                <th>权威归属</th>
+                <th>交互方式 / 产物</th>
+                <th>明确禁令</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>认证方案选择与路由表单 UI</strong></td>
+                <td><span class="pill pill--fabric">API Fabric</span></td>
+                <td>用户在发布界面选 <code>auth_scheme</code>、填 Token URL / Scope / 超时并选 <code>credential_binding_ref</code></td>
+                <td>禁止表单录入密钥明文或编写任意脚本表达式</td>
+              </tr>
+              <tr>
+                <td><strong>发布审批与版本槽位</strong></td>
+                <td><span class="pill pill--fabric">API Fabric</span></td>
+                <td>产出 <code>RoutePublicationIntent</code>（含 <code>idempotency_key</code>、<code>release_ref</code>、<code>approval_ref</code>）</td>
+                <td>禁止直接写网关数据库或把文档发布视作 <code>ACTIVE</code></td>
+              </tr>
+              <tr>
+                <td><strong>密钥录入、加密托管与轮换</strong></td>
+                <td><span class="pill pill--gk">Gatekeeper + KMS</span><br><span class="pill pill--muted">过渡期：gateway-authz 0600</span></td>
+                <td>只写不回显界面；产出句柄 <code>gatekeeper:&lt;id&gt;</code> 与 <code>key_version</code></td>
+                <td>禁止前端回显明文；禁止密钥进入路由快照或环境变量</td>
+              </tr>
+              <tr>
+                <td><strong>调用方认证与账户授权判定</strong></td>
+                <td><span class="pill pill--gk">Gatekeeper</span></td>
+                <td>签发 M2M JWT（专属 <code>aud</code>）并维护 <code>ProviderAccount</code> / <code>ExternalAccessGrant</code></td>
+                <td>禁止将 JWT 认证通过直接等同于第三方账户授权</td>
+              </tr>
+              <tr>
+                <td><strong>安全编译、预检与快照对账</strong></td>
+                <td><span class="pill pill--gw">gateway-control</span></td>
+                <td><code>compile</code> 输出受 1.7.0 校验的不可变快照；<code>reconcile</code> 核对 <code>desired_digest</code> 与 <code>observed_digest</code></td>
+                <td>禁止绕过编译器手工注入动态路由或放宽安全头名单</td>
+              </tr>
+              <tr>
+                <td><strong>运行时凭证兑现与上游注入</strong></td>
+                <td><span class="pill pill--gw">gateway-authz</span> + <span class="pill pill--gw">agentgateway</span></td>
+                <td>mTLS ExtAuthZ 按请求兑现 Bearer / OAuth2 / 开发者令牌，网关强制校验方案前缀</td>
+                <td>禁止跨账户复用 Token 缓存；禁止透传内部 IDP JWT</td>
+              </tr>
+              <tr>
+                <td><strong>正文加密与非标签名改写</strong></td>
+                <td><span class="pill pill--gw">provider-signer</span></td>
+                <td>受限标准库适配器（固定操作表 + mTLS + 独立出口钉死 + 被动熔断）</td>
+                <td>禁止在网关核心加载任意脚本插件；禁止信任请求内目标地址</td>
+              </tr>
+              <tr>
+                <td><strong>运行观测、紧急撤销与封禁</strong></td>
+                <td><span class="pill pill--ops">gateway-console</span></td>
+                <td>仅监听回环 IP；只读 0600 JSONL 审计；复用 <code>revokerclient</code> mTLS 执行撤销/封禁</td>
+                <td>禁止成为第二个路由发布入口或第二个用户口令表</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout callout--gk">
+          <span class="callout-title">工程注解：为何不再引入 Kong 或 Traefik？</span>
+          按 <code>ADR-0001</code> 与 <code>ADR-0002</code>，Ingress、Egress 与 AI 池已统一在锁定的 <code>agentgateway 1.7.0</code> 上并按安全域物理分池。多租户动态凭证注入、顺丰密文签名与即时撤销均位于 <code>gateway-authz</code> / <code>provider-signer</code>，Kong 与 Traefik 均无法替代；边缘仅需极简 50 行 <code>front.nginx.conf</code> 拦阻重复 <code>Host</code> 头（待上游含 PR #4401 的 OSS 正式版发布后再评估收敛）。叠加第二套代理只会引入双控制面与漂移风险。
+        </div>
+      </section>
+
+      <!-- SECTION 3 -->
+      <section class="section-card" id="sec-3">
+        <div class="section-header">
+          <span class="section-num">§ 03</span>
+          <h2>80/20 认证协议分层封装模型</h2>
+        </div>
+
+        <p>
+          认证封装的成败取决于<strong>抽象粒度</strong>。过度具体会导致代码爆炸，过度泛化（如在 UI 里开放自定义 Header 模板语言）则会摧毁安全审计边界。本规范按“协议标准化程度”与“正文改写复杂度”两个正交维度，将外部认证划分为<strong>两个受控层级</strong>与<strong>一个明确禁区</strong>。
+        </p>
+
+        <figure class="diagram">
+          <div class="diagram-canvas">
+            <svg viewBox="0 0 960 400" role="img" aria-labelledby="fig2-title fig2-desc" xmlns="http://www.w3.org/2000/svg">
+              <title id="fig2-title">图 2：80/20 认证协议分层封装象限模型</title>
+              <desc id="fig2-desc">二维工程决策图：横轴为协议标准化与复用度，纵轴为正文改写与密码学复杂度。右下为第一层标准声明式模板，左上为第二层受限命名适配器，左下红色禁区为禁止开放的通用 UI 脚本拼接模板。</desc>
+              <defs>
+                <pattern id="danger-hatch" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                  <line x1="0" y1="0" x2="0" y2="10" stroke="#fecaca" stroke-width="3"/>
+                </pattern>
+                <marker id="axis-arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#475569"/>
+                </marker>
+              </defs>
+
+              <!-- Plot area background -->
+              <rect x="86" y="28" width="844" height="316" rx="8" fill="#f8fafc" stroke="#e2e8f0"/>
+
+              <!-- Zone 1: Tier 2 Named Adapters (Top-Left / Mid) -->
+              <rect x="96" y="38" width="400" height="162" rx="10" fill="#eef2ff" stroke="#818cf8" stroke-width="1.5"/>
+              <text x="112" y="61" font-size="12.5" font-weight="700" fill="#312e81">Tier 2 · 命名受限代码适配器（约 20% 非标/加密协议）</text>
+              <text x="112" y="79" font-size="10.5" fill="#4338ca">Go 标准库代码封装算法与单测 · Fabric UI 仅选类型与结构化字段</text>
+
+              <!-- Zone 2: Promotion Zone (Top-Right) -->
+              <rect x="512" y="38" width="408" height="110" rx="10" fill="#f0f9ff" stroke="#7dd3fc" stroke-width="1.4" stroke-dasharray="5 4"/>
+              <text x="528" y="61" font-size="12" font-weight="700" fill="#0369a1">按需晋升区（第二家复用时抽象）</text>
+              <text x="528" y="79" font-size="10.5" fill="#0c4a6e">仅当 ≥ 2 家独立供应商共用同类标准签名协议时，再开放为标准模板</text>
+              <rect x="530" y="96" width="166" height="36" rx="18" fill="#ffffff" stroke="#38bdf8"/>
+              <text x="613" y="118" text-anchor="middle" font-size="11" font-weight="600" fill="#0369a1">AWS SigV4（候选）</text>
+              <rect x="712" y="96" width="190" height="36" rx="18" fill="#ffffff" stroke="#38bdf8"/>
+              <text x="807" y="118" text-anchor="middle" font-size="11" font-weight="600" fill="#0369a1">标准 HMAC-SHA256（候选）</text>
+
+              <!-- Zone 3: Tier 1 Standard Declarative Templates (Bottom-Right) -->
+              <rect x="512" y="162" width="408" height="172" rx="10" fill="#f0fdfa" stroke="#0f766e" stroke-width="1.6"/>
+              <text x="528" y="185" font-size="12.5" font-weight="700" fill="#115e59">Tier 1 · 标准声明式 UI 模板（约 80% 常规场景）</text>
+              <text x="528" y="203" font-size="10.5" fill="#0f766e">Fabric 下拉选择 + 结构化校验 · 零 Go 代码即可完成新供应商接入</text>
+
+              <!-- Tier 1 Protocol Pills -->
+              <rect x="530" y="220" width="176" height="44" rx="8" fill="#ffffff" stroke="#14b8a6" stroke-width="1.3"/>
+              <text x="618" y="239" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0f172a">API Key / Bearer</text>
+              <text x="618" y="255" text-anchor="middle" font-size="10" fill="#475569">白名单头 / Query + 前缀</text>
+
+              <rect x="722" y="220" width="182" height="44" rx="8" fill="#ffffff" stroke="#14b8a6" stroke-width="1.3"/>
+              <text x="813" y="239" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0f172a">OAuth2 Client Creds</text>
+              <text x="813" y="255" text-anchor="middle" font-size="10" fill="#475569">单飞换票 · 复合缓存键</text>
+
+              <rect x="530" y="276" width="176" height="44" rx="8" fill="#ffffff" stroke="#14b8a6" stroke-width="1.3"/>
+              <text x="618" y="295" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0f172a">HTTP Basic Auth</text>
+              <text x="618" y="311" text-anchor="middle" font-size="10" fill="#475569">用户名 + 密钥句柄</text>
+
+              <rect x="722" y="276" width="182" height="44" rx="8" fill="#ffffff" stroke="#14b8a6" stroke-width="1.3"/>
+              <text x="813" y="295" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0f172a">mTLS Client Cert</text>
+              <text x="813" y="311" text-anchor="middle" font-size="10" fill="#475569">证书引用 · 独立信任链</text>
+
+              <!-- Tier 2 Protocol Pills -->
+              <rect x="112" y="96" width="176" height="88" rx="8" fill="#ffffff" stroke="#6366f1" stroke-width="1.3"/>
+              <text x="200" y="118" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1e1b4b">顺丰国际 IECS</text>
+              <text x="200" y="136" text-anchor="middle" font-size="10" fill="#475569">AES-256-CBC + SHA-256</text>
+              <text x="200" y="152" text-anchor="middle" font-size="10" fill="#475569">provider-signer 独立进程</text>
+              <text x="200" y="170" text-anchor="middle" font-size="9.5" font-family="monospace" fill="#4338ca">SF_INTL_ENVELOPE</text>
+
+              <rect x="304" y="96" width="176" height="88" rx="8" fill="#ffffff" stroke="#6366f1" stroke-width="1.3"/>
+              <text x="392" y="118" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1e1b4b">万邦开发者令牌</text>
+              <text x="392" y="136" text-anchor="middle" font-size="10" fill="#475569">每请求 32 位 hex 随机数</text>
+              <text x="392" y="152" text-anchor="middle" font-size="10" fill="#475569">gateway-authz 内置来源</text>
+              <text x="392" y="170" text-anchor="middle" font-size="9.5" font-family="monospace" fill="#4338ca">WANB_DEVELOPER_TOKEN</text>
+
+              <!-- Zone 4: Forbidden Anti-Pattern Zone (Bottom-Left) -->
+              <rect x="96" y="214" width="400" height="120" rx="10" fill="url(#danger-hatch)" stroke="#b91c1c" stroke-width="1.6"/>
+              <rect x="110" y="226" width="372" height="96" rx="8" fill="rgba(254, 242, 242, 0.94)" stroke="#fca5a5"/>
+              <text x="126" y="249" font-size="12.5" font-weight="700" fill="#991b1b">明确禁区 · 通用 UI 脚本 / 任意头拼接引擎</text>
+              <text x="126" y="270" font-size="10.5" fill="#7f1d1d">• ADR-0011 &amp; ADR-0014 明确否决自由拼接表达式或动态插件</text>
+              <text x="126" y="288" font-size="10.5" fill="#7f1d1d">• 高危后果：头注入、绕过前缀与白名单护栏、秘密外泄、不可审计</text>
+              <text x="126" y="306" font-size="10.5" fill="#7f1d1d">• 铁律：未知协议必须先评审建模，再走命名适配器或标准模板晋升</text>
+
+              <!-- Axes -->
+              <line x1="86" y1="344" x2="936" y2="344" stroke="#475569" stroke-width="1.8" marker-end="url(#axis-arr)"/>
+              <line x1="86" y1="344" x2="86" y2="20" stroke="#475569" stroke-width="1.8" marker-end="url(#axis-arr)"/>
+              <text x="510" y="376" text-anchor="middle" font-size="12" font-weight="700" fill="#334155">协议标准化与跨供应商复用度（低 → 高）</text>
+              <text x="34" y="188" text-anchor="middle" font-size="12" font-weight="700" fill="#334155" transform="rotate(-90 34 188)">正文改写与密码学复杂度（低 → 高）</text>
+            </svg>
+          </div>
+          <figcaption>
+            <strong>图 2 · 80/20 分层封装策略：</strong>将工程精力集中在右下角“标准模板”以换取 80% 场景的零代码自助配置，同时把左上角非标加密协议隔离在可逐行审计的 Go 标准库适配器中，彻底封死左下角“万能脚本”攻击面。
+          </figcaption>
+        </figure>
+
+        <h3>交互式协议落位对照表（按方案切换查看三系统职责）</h3>
+        <div class="tabs" data-tabs>
+          <div class="tablist" role="tablist" aria-label="认证方案三系统落位对照">
+            <button class="tab-btn" role="tab" id="tab-apikey" aria-selected="true" aria-controls="panel-apikey" type="button">API Key / Bearer</button>
+            <button class="tab-btn" role="tab" id="tab-oauth2" aria-selected="false" aria-controls="panel-oauth2" type="button">OAuth2 Client Credentials</button>
+            <button class="tab-btn" role="tab" id="tab-wanb" aria-selected="false" aria-controls="panel-wanb" type="button">万邦开发者令牌</button>
+            <button class="tab-btn" role="tab" id="tab-sf" aria-selected="false" aria-controls="panel-sf" type="button">顺丰国际密文信封</button>
+          </div>
+
+          <div class="tab-panel" role="tabpanel" id="panel-apikey" aria-labelledby="tab-apikey">
+            <p><span class="pill pill--gk">Tier 1 标准模板</span> 适用于大多数 LLM 平台、REST SaaS 与静态凭证 API。</p>
+            <div class="spec-grid">
+              <div class="spec-cell">
+                <div class="spec-cell-head"><span class="pill pill--fabric">API Fabric UI</span></div>
+                <ul>
+                  <li>选 <code>auth_scheme = API_KEY</code></li>
+                  <li>配置投放位置：默认 <code>authorization</code>、允许头名或 <code>credential_query_parameter</code></li>
+                  <li>配置方案前缀（如 <code>Bearer </code>）并选择 <code>credential_binding_ref</code></li>
+                </ul>
+              </div>
+              <div class="spec-cell">
+                <div class="spec-cell-head"><span class="pill pill--gk">Gatekeeper / KMS</span></div>
+                <ul>
+                  <li>只写表单录入 API Key 密文</li>
+                  <li>按租户/账户绑定 <code>ExternalAccessGrant</code></li>
+                  <li>返回句柄（不回显 Key 内容）</li>
+                </ul>
+              </div>
+              <div class="spec-cell">
+                <div class="spec-cell-head"><span class="pill pill--gw">IDP Gateway 编译与运行</span></div>
+                <ul>
+                  <li><code>compile</code> 拒绝危险头名（<code>cookie</code>、<code>x-idp-*</code>、逐跳头）</li>
+                  <li>非 <code>Authorization</code> 位置自动改用 <code>extauthz.credential</code> + <code>backendAuth</code> 防夹带</li>
+                  <li>凭证经 <code>ports.Secret</code> 脱敏，零落日志</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div class="tab-panel" role="tabpanel" id="panel-oauth2" aria-labelledby="tab-oauth2" hidden>
+            <p><span class="pill pill--gk">Tier 1 标准模板</span> 遵循 RFC 6749 §4.4；仓内 <code>internal/egressauthz/adapters/oauthclient</code> 已完整实现。</p>
+            <div class="spec-grid">
+              <div class="spec-cell">
+                <div class="spec-cell-head"><span class="pill pill--fabric">API Fabric UI</span></div>
+                <ul>
+                  <li>选 <code>auth_scheme = OAUTH2_CLIENT_CREDENTIALS</code></li>
+                  <li>填写 <code>token_url</code>（强制 HTTPS）、<code>scope_set</code>、<code>audience</code>、<code>token_ttl_max_seconds</code></li>
+                  <li>绑定 <code>credential_binding_ref</code> 与审批单号</li>
+                </ul>
+              </div>
+              <div class="spec-cell">
+                <div class="spec-cell-head"><span class="pill pill--gk">Gatekeeper / KMS</span></div>
+                <ul>
+                  <li>只写录入 <code>client_id</code> 与 <code>client_secret</code></li>
+                  <li>维护 <code>key_version</code> 以支持即时轮换与旧缓存作废</li>
+                  <li>收回 Grant 后立即阻断该账户继续借用令牌</li>
+                </ul>
+              </div>
+              <div class="spec-cell">
+                <div class="spec-cell-head"><span class="pill pill--gw">IDP Gateway 编译与运行</span></div>
+                <ul>
+                  <li>复合缓存键隔离账户，并发取票 Singleflight 单飞</li>
+                  <li>提前刷新窗口 <code>min(30s, TTL / 10)</code>，取票超时 800ms</li>
+                  <li>撤销检查严格排在取票前；失败绝不复用过期令牌</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div class="tab-panel" role="tabpanel" id="panel-wanb" aria-labelledby="tab-wanb" hidden>
+            <p><span class="pill pill--fabric">Tier 2 命名适配器</span> 对应 <code>ADR-0011</code> 第一步，已通过万邦速达真实沙箱与单机池联调。</p>
+            <div class="spec-grid">
+              <div class="spec-cell">
+                <div class="spec-cell-head"><span class="pill pill--fabric">API Fabric UI</span></div>
+                <ul>
+                  <li>选固定类型 <code>WANB_DEVELOPER_TOKEN</code></li>
+                  <li>仅需声明上游路径、允许方法、超时与凭证句柄</li>
+                  <li>无需且不允许手工拼装 <code>Hc-OweDeveloper</code> 字符串</li>
+                </ul>
+              </div>
+              <div class="spec-cell">
+                <div class="spec-cell-head"><span class="pill pill--gk">Gatekeeper / KMS</span></div>
+                <ul>
+                  <li>托管承运商 <code>account</code> 与开发者 <code>token</code>（严格 ASCII，禁分号与空白）</li>
+                  <li>不存随机数；换令牌走原子写临时文件再改名（过渡期）或 KMS 轮换</li>
+                </ul>
+              </div>
+              <div class="spec-cell">
+                <div class="spec-cell-head"><span class="pill pill--gw">IDP Gateway 编译与运行</span></div>
+                <ul>
+                  <li>每次放行用 <code>crypto/rand</code> 生成 16 字节 32 位十六进制随机数</li>
+                  <li>拼装 <code>Hc-OweDeveloper 账号;令牌;随机数</code> 注入上游</li>
+                  <li>路由后端规则强校验前缀 <code>Hc-OweDeveloper </code></li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div class="tab-panel" role="tabpanel" id="panel-sf" aria-labelledby="tab-sf" hidden>
+            <p><span class="pill pill--fabric">Tier 2 命名适配器</span> 对应 <code>ADR-0014</code>，已通过顺丰国际 IECS 四条路由（含面单）沙箱联调。</p>
+            <div class="spec-grid">
+              <div class="spec-cell">
+                <div class="spec-cell-head"><span class="pill pill--fabric">API Fabric UI</span></div>
+                <ul>
+                  <li>选固定类型 <code>SF_INTL_ENVELOPE</code> 并指定 <code>request_signer_ref</code></li>
+                  <li>配置逻辑路径映射到固定 <code>msgType</code> 操作（如创建、取消、查询、面单）</li>
+                  <li>无需感知 AES 块填充与密文签名细节</li>
+                </ul>
+              </div>
+              <div class="spec-cell">
+                <div class="spec-cell-head"><span class="pill pill--gk">Gatekeeper / KMS</span></div>
+                <ul>
+                  <li>集中托管 <code>app_key</code>、<code>app_secret</code>、<code>encoding_aes_key</code> 与 <code>key_version</code></li>
+                  <li>强约束：同一 <code>app_key</code> 仅允许绑定单一句柄，防多处换票互踢</li>
+                </ul>
+              </div>
+              <div class="spec-cell">
+                <div class="spec-cell-head"><span class="pill pill--gw">IDP Gateway 编译与运行</span></div>
+                <ul>
+                  <li><code>gateway-authz</code> 取票并下发 <code>Sf-OpenApi </code> 复合凭证</li>
+                  <li>网关 mTLS 转发明文 JSON 至 <code>provider-signer</code></li>
+                  <li>签名器查固定操作表 → AES-256-CBC 加密 + SHA-256 签名 → 独立命名空间出口发出 → 解密验 <code>appKey</code> 后回传明文</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTION 4 -->
+      <section class="section-card" id="sec-4">
+        <div class="section-header">
+          <span class="section-num">§ 04</span>
+          <h2>零信任形式化判定与双路径运行时注入</h2>
+        </div>
+
+        <p>
+          依据 <code>docs/G04_Identity_and_Security.md</code> 第 0 节与第 3 节，任何外部 API 调用必须严格分离<strong>三道不可混淆的安全门禁</strong>：调用方身份认证（Caller Authentication）、多租户账户授权（Access Authorization）与上游供应商认证（Upstream Authentication）。
+        </p>
+
+        <div class="formula-block" role="region" aria-label="形式化零信任判定公式">
+          <div class="formula-label">Formal Zero-Trust Decision Predicate (G04 §3)</div>
+          <div class="formula-expr"><strong>ALLOW</strong> = TrustedCaller <span class="formula-op">∧</span> AudienceValid <span class="formula-op">∧</span> TenantBound <span class="formula-op">∧</span> ActiveGrant
+        <span class="formula-op">∧</span> ProviderAccountActive <span class="formula-op">∧</span> EnvironmentMatch <span class="formula-op">∧</span> OperationAllowed
+        <span class="formula-op">∧</span> RouteAllowlisted <span class="formula-op">∧</span> CredentialAllowed <span class="formula-op">∧</span> NoExplicitDeny
+
+<strong>FAIL-CLOSED AXIOM:</strong>   Decision ∈ { UNKNOWN, INDETERMINATE }  <span class="formula-op">⇒</span>  <strong>DENY</strong>  (HTTP 403 / 503)</div>
+        </div>
+
+        <figure class="diagram">
+          <div class="diagram-canvas">
+            <svg viewBox="0 0 980 580" role="img" aria-labelledby="fig3-title fig3-desc" xmlns="http://www.w3.org/2000/svg">
+              <title id="fig3-title">图 3：端到端零信任请求与双路径凭证注入时序图</title>
+              <desc id="fig3-desc">按时间顺序展示请求经过业务调用方、Front Nginx、agentgateway 1.7.0、gateway-authz、provider-signer 与外部 Provider 的 12 个步骤，包含公共零信任前置门禁、80% 标准直出分支与 20% 密文签名分支。</desc>
+              <defs>
+                <marker id="seq-arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#1e293b"/>
+                </marker>
+                <marker id="seq-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#1d4ed8"/>
+                </marker>
+                <marker id="seq-teal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#0f766e"/>
+                </marker>
+                <marker id="seq-indigo" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#4338ca"/>
+                </marker>
+              </defs>
+
+              <!-- Lifelines -->
+              <g stroke="#cbd5e1" stroke-width="1.3" stroke-dasharray="5 4">
+                <line x1="84" y1="62" x2="84" y2="566"/>
+                <line x1="230" y1="62" x2="230" y2="566"/>
+                <line x1="396" y1="62" x2="396" y2="566"/>
+                <line x1="576" y1="62" x2="576" y2="566"/>
+                <line x1="750" y1="62" x2="750" y2="566"/>
+                <line x1="904" y1="62" x2="904" y2="566"/>
+              </g>
+
+              <!-- Actor headers -->
+              <rect x="24" y="16" width="120" height="44" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.4"/>
+              <text x="84" y="36" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0f172a">业务调用方</text>
+              <text x="84" y="51" text-anchor="middle" font-size="9.5" fill="#475569">IDP Service / Port</text>
+
+              <rect x="172" y="16" width="116" height="44" rx="8" fill="#f8fafc" stroke="#64748b" stroke-width="1.4"/>
+              <text x="230" y="36" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0f172a">Front Nginx</text>
+              <text x="230" y="51" text-anchor="middle" font-size="9.5" fill="#475569">HTTP 协议护栏</text>
+
+              <rect x="322" y="16" width="148" height="44" rx="8" fill="#eff6ff" stroke="#1d4ed8" stroke-width="1.6"/>
+              <text x="396" y="36" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1e3a8a">agentgateway 1.7.0</text>
+              <text x="396" y="51" text-anchor="middle" font-size="9.5" fill="#1d4ed8">PEP · 路由 · 清洗</text>
+
+              <rect x="504" y="16" width="144" height="44" rx="8" fill="#f0fdfa" stroke="#0f766e" stroke-width="1.6"/>
+              <text x="576" y="36" text-anchor="middle" font-size="11.5" font-weight="700" fill="#115e59">gateway-authz</text>
+              <text x="576" y="51" text-anchor="middle" font-size="9.5" fill="#0f766e">PDP · 凭证兑现</text>
+
+              <rect x="680" y="16" width="140" height="44" rx="8" fill="#eef2ff" stroke="#4338ca" stroke-width="1.5" stroke-dasharray="4 3"/>
+              <text x="750" y="36" text-anchor="middle" font-size="11.5" font-weight="700" fill="#312e81">provider-signer</text>
+              <text x="750" y="51" text-anchor="middle" font-size="9.5" fill="#4338ca">受限加密签名器</text>
+
+              <rect x="844" y="16" width="120" height="44" rx="8" fill="#f1f5f9" stroke="#334155" stroke-width="1.5"/>
+              <text x="904" y="36" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0f172a">外部 Provider</text>
+              <text x="904" y="51" text-anchor="middle" font-size="9.5" fill="#475569">承运商 / LLM</text>
+
+              <!-- PHASE 1 BAND: Common Zero-Trust Gates -->
+              <rect x="18" y="74" width="944" height="214" rx="8" fill="rgba(240, 253, 250, 0.45)" stroke="#99f6e4" stroke-width="1.2"/>
+              <rect x="18" y="74" width="248" height="22" rx="6" fill="#0f766e"/>
+              <text x="30" y="89" font-size="10.5" font-weight="700" fill="#ffffff">公共零信任门禁（Gate 1 + Gate 2）</text>
+
+              <!-- Step 1 -->
+              <line x1="84" y1="118" x2="226" y2="118" stroke="#1e293b" stroke-width="1.6" marker-end="url(#seq-arr)"/>
+              <text x="155" y="111" text-anchor="middle" font-size="10.5" font-weight="600" fill="#0f172a">① 业务请求 + IDP JWT</text>
+              <line x1="230" y1="126" x2="392" y2="126" stroke="#1e293b" stroke-width="1.6" marker-end="url(#seq-arr)"/>
+              <text x="311" y="119" text-anchor="middle" font-size="10" fill="#334155">② 拒双 Host (400) 后转发</text>
+
+              <!-- Step 3 self-box on agentgateway -->
+              <rect x="330" y="138" width="132" height="32" rx="5" fill="#dbeafe" stroke="#93c5fd"/>
+              <text x="396" y="152" text-anchor="middle" font-size="10" font-weight="700" fill="#1e3a8a">③ JWKS 验签 JWT</text>
+              <text x="396" y="165" text-anchor="middle" font-size="9.5" fill="#1e3a8a">校验后立即剥离原 JWT</text>
+
+              <!-- Step 4 ExtAuthZ call -->
+              <line x1="396" y1="196" x2="572" y2="196" stroke="#0f766e" stroke-width="1.8" marker-end="url(#seq-teal)"/>
+              <text x="484" y="189" text-anchor="middle" font-size="10.5" font-weight="700" fill="#0f766e">④ mTLS POST /v1/extauthz/check</text>
+
+              <!-- Step 5 ordered pipeline on gateway-authz -->
+              <rect x="498" y="206" width="156" height="44" rx="5" fill="#ccfbf1" stroke="#14b8a6"/>
+              <text x="576" y="221" text-anchor="middle" font-size="10" font-weight="700" fill="#115e59">⑤ 严格顺序门禁链</text>
+              <text x="576" y="234" text-anchor="middle" font-size="9.2" fill="#134e4a">撤销表→封禁→Grant→限流</text>
+              <text x="576" y="246" text-anchor="middle" font-size="9.2" fill="#134e4a">最后才调 CredentialSource</text>
+
+              <!-- Step 6 return single header -->
+              <line x1="576" y1="270" x2="400" y2="270" stroke="#0f766e" stroke-width="1.8" stroke-dasharray="5 3" marker-end="url(#seq-teal)"/>
+              <text x="488" y="264" text-anchor="middle" font-size="10" font-weight="700" fill="#0f766e">⑥ 200 OK · 仅下发单凭证头 + decision_id</text>
+
+              <!-- PHASE 2A BAND: Direct Path (80%) -->
+              <rect x="18" y="302" width="944" height="112" rx="8" fill="rgba(239, 246, 255, 0.65)" stroke="#bfdbfe" stroke-width="1.2"/>
+              <rect x="18" y="302" width="318" height="22" rx="6" fill="#1d4ed8"/>
+              <text x="30" y="317" font-size="10.5" font-weight="700" fill="#ffffff">分支 A · 标准 Header / Query / OAuth2 路径（~80%）</text>
+
+              <!-- Step 7 guardrail -->
+              <rect x="318" y="334" width="156" height="32" rx="5" fill="#dbeafe" stroke="#60a5fa"/>
+              <text x="396" y="348" text-anchor="middle" font-size="9.8" font-weight="700" fill="#1e3a8a">⑦ 核对方案前缀 + 头白名单</text>
+              <text x="396" y="361" text-anchor="middle" font-size="9.2" fill="#1e3a8a">清 9 敏感头 · 禁重定向/重试</text>
+
+              <!-- Step 8 forward to provider -->
+              <line x1="396" y1="380" x2="900" y2="380" stroke="#1d4ed8" stroke-width="1.8" marker-end="url(#seq-blue)"/>
+              <text x="648" y="373" text-anchor="middle" font-size="10.5" font-weight="700" fill="#1d4ed8">⑧ 经 Egress Pinning 直发上游（仅含合法上游凭证）</text>
+
+              <!-- Step 9 response -->
+              <line x1="904" y1="402" x2="88" y2="402" stroke="#475569" stroke-width="1.4" stroke-dasharray="5 3" marker-end="url(#seq-arr)"/>
+              <text x="496" y="396" text-anchor="middle" font-size="9.8" fill="#334155">⑨ 剥离 Location / Set-Cookie / x-idp-decision-id 后返回业务响应</text>
+
+              <!-- PHASE 2B BAND: Body-Rewriting Path (20%) -->
+              <rect x="18" y="428" width="944" height="132" rx="8" fill="rgba(238, 242, 255, 0.6)" stroke="#c7d2fe" stroke-width="1.2"/>
+              <rect x="18" y="428" width="336" height="22" rx="6" fill="#4338ca"/>
+              <text x="30" y="443" font-size="10.5" font-weight="700" fill="#ffffff">分支 B · 正文加密与非标签名路径（如顺丰国际，~20%）</text>
+
+              <!-- Step 10 to signer -->
+              <line x1="396" y1="470" x2="746" y2="470" stroke="#4338ca" stroke-width="1.8" marker-end="url(#seq-indigo)"/>
+              <text x="571" y="463" text-anchor="middle" font-size="10.5" font-weight="700" fill="#3730a3">⑩ 校验 Sf-OpenApi 前缀，mTLS 转发明文 JSON</text>
+
+              <!-- Step 11 encrypt/sign box -->
+              <rect x="670" y="480" width="160" height="32" rx="5" fill="#e0e7ff" stroke="#818cf8"/>
+              <text x="750" y="494" text-anchor="middle" font-size="9.8" font-weight="700" fill="#312e81">⑪ 查固定 msgType 表</text>
+              <text x="750" y="507" text-anchor="middle" font-size="9.2" fill="#3730a3">AES-256-CBC + SHA-256</text>
+
+              <!-- Step 12 signer <-> provider -->
+              <line x1="750" y1="526" x2="900" y2="526" stroke="#4338ca" stroke-width="1.8" marker-end="url(#seq-indigo)"/>
+              <text x="825" y="520" text-anchor="middle" font-size="9.8" font-weight="700" fill="#3730a3">⑫ 独立出口发出密文</text>
+
+              <line x1="904" y1="546" x2="88" y2="546" stroke="#4338ca" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#seq-indigo)"/>
+              <text x="496" y="540" text-anchor="middle" font-size="9.8" fill="#312e81">签名器解密并核验末尾 appKey 后，回传明文 JSON 经网关返回调用方</text>
+            </svg>
+          </div>
+          <figcaption>
+            <strong>图 3 · 双路径运行时序列：</strong>无论标准协议还是非标加密协议，均强制经过相同的 JWT 验签剥离、mTLS ExtAuthZ 顺序门禁（撤销优先于取票）与出口钉死防线，确保安全模型无旁路缺口。
+          </figcaption>
+        </figure>
+
+        <h3>OAuth2 令牌生命周期与多租户缓存隔离数学约束</h3>
+        <p>
+          对于 <code>OAUTH2_CLIENT_CREDENTIALS</code> 模板，多租户串号（<code>S-03</code>）与撤销窗口泄漏是最危险的故障模式。<code>internal/egressauthz/adapters/oauthclient</code> 按 <code>G04 §4</code> 与 <code>ADR-0011</code> 强制执行三项不变量：
+        </p>
+        <div class="formula-block" role="region" aria-label="OAuth2 缓存键与刷新约束">
+          <div class="formula-label">OAuth2 Isolation &amp; Refresh Invariants</div>
+          <div class="formula-expr"><strong>CacheKey</strong>      = ( provider_id, account_id, environment, client_id, scope_or_audience, key_version )
+<strong>RefreshLead</strong>(L) = min( 30s, L / 10 )        // 到期前提前换新；并发请求 Singleflight 合并为 1 次上游取票
+<strong>Revocation</strong>     : RevocationCheck(account) ≺ CredentialSource(account)   // 已被撤销账户绝不触发缓存读取</div>
+        </div>
+      </section>
+
+      <!-- SECTION 5 -->
+      <section class="section-card" id="sec-5">
+        <div class="section-header">
+          <span class="section-num">§ 05</span>
+          <h2>编译器反夹带护栏与安全底线</h2>
+        </div>
+
+        <p>
+          即便用户在 Fabric UI 中只做结构化选项，配置一旦进入数据面仍须通过 <code>gateway-control compile</code> 的静态与原生校验（<code>ADR-0016</code>）。尤其在支持<strong>自定义凭证头（如 <code>X-API-Key</code>）或查询参数</strong>时，必须防范一类隐蔽的凭证夹带漏洞（已在锁定 <code>agentgateway 1.7.0</code> 上实测证实）。
+        </p>
+
+        <figure class="diagram">
+          <div class="diagram-canvas">
+            <svg viewBox="0 0 960 250" role="img" aria-labelledby="fig4-title fig4-desc" xmlns="http://www.w3.org/2000/svg">
+              <title id="fig4-title">图 4：编译器双模式凭证落位与反夹带防线</title>
+              <desc id="fig4-desc">对比默认 Authorization 头复制模式与自定义 Header/Query 参数的 backendAuth 覆写模式，阐明为何非 Authorization 位置不能直接复制响应头。</desc>
+              <defs>
+                <marker id="c-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#1d4ed8"/>
+                </marker>
+                <marker id="c-teal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#0f766e"/>
+                </marker>
+              </defs>
+
+              <!-- Left Card: Default Authorization -->
+              <rect x="16" y="16" width="452" height="218" rx="10" fill="#eff6ff" stroke="#1d4ed8" stroke-width="1.5"/>
+              <rect x="16" y="16" width="452" height="32" rx="10" fill="#1d4ed8"/>
+              <rect x="16" y="34" width="452" height="14" fill="#1d4ed8"/>
+              <text x="32" y="37" font-size="12" font-weight="700" fill="#ffffff">模式 1 · 默认 Authorization 头（复制响应头）</text>
+
+              <rect x="30" y="66" width="90" height="54" rx="6" fill="#ffffff" stroke="#93c5fd"/>
+              <text x="75" y="89" text-anchor="middle" font-size="10.5" font-weight="700" fill="#1e3a8a">JWT 验签</text>
+              <text x="75" y="106" text-anchor="middle" font-size="9.5" fill="#475569">清除原头</text>
+
+              <line x1="120" y1="93" x2="140" y2="93" stroke="#1d4ed8" stroke-width="1.6" marker-end="url(#c-blue)"/>
+
+              <rect x="144" y="66" width="106" height="54" rx="6" fill="#ffffff" stroke="#93c5fd"/>
+              <text x="197" y="89" text-anchor="middle" font-size="10.5" font-weight="700" fill="#1e3a8a">ExtAuthZ 返回</text>
+              <text x="197" y="106" text-anchor="middle" font-size="9.5" fill="#475569">复制单一头</text>
+
+              <line x1="250" y1="93" x2="270" y2="93" stroke="#1d4ed8" stroke-width="1.6" marker-end="url(#c-blue)"/>
+
+              <rect x="274" y="66" width="110" height="54" rx="6" fill="#ffffff" stroke="#1d4ed8" stroke-width="1.4"/>
+              <text x="329" y="89" text-anchor="middle" font-size="10.5" font-weight="700" fill="#1e3a8a">后端前缀规则</text>
+              <text x="329" y="106" text-anchor="middle" font-size="9.5" fill="#475569">startsWith 兜底</text>
+
+              <line x1="384" y1="93" x2="404" y2="93" stroke="#1d4ed8" stroke-width="1.6" marker-end="url(#c-blue)"/>
+
+              <rect x="408" y="66" width="48" height="54" rx="6" fill="#dbeafe" stroke="#60a5fa"/>
+              <text x="432" y="97" text-anchor="middle" font-size="10.5" font-weight="700" fill="#1e3a8a">上游</text>
+
+              <rect x="30" y="138" width="424" height="80" rx="7" fill="#ffffff" stroke="#bfdbfe"/>
+              <text x="44" y="159" font-size="11" font-weight="700" fill="#1e3a8a">为何安全（internal/routecompile/domain/compile.go）</text>
+              <text x="44" y="178" font-size="10.2" fill="#334155">• 调用方的 JWT 在验签后已被网关移除，此时请求上的</text>
+              <text x="44" y="194" font-size="10.2" fill="#334155">  Authorization 只能来自 PDP；若 PDP 放行却未给凭证，</text>
+              <text x="44" y="210" font-size="10.2" fill="#334155">  后端前缀规则必定拒发（黑盒 P1-DT-02 守卫）。</text>
+
+              <!-- Right Card: Custom Header / Query -->
+              <rect x="492" y="16" width="452" height="218" rx="10" fill="#f0fdfa" stroke="#0f766e" stroke-width="1.5"/>
+              <rect x="492" y="16" width="452" height="32" rx="10" fill="#0f766e"/>
+              <rect x="492" y="34" width="452" height="14" fill="#0f766e"/>
+              <text x="508" y="37" font-size="12" font-weight="700" fill="#ffffff">模式 2 · 自定义 Header / Query（backendAuth 覆写）</text>
+
+              <rect x="506" y="66" width="96" height="54" rx="6" fill="#ffffff" stroke="#5eead4"/>
+              <text x="554" y="89" text-anchor="middle" font-size="10.5" font-weight="700" fill="#115e59">不复制响应头</text>
+              <text x="554" y="106" text-anchor="middle" font-size="9.5" fill="#475569">防夹带穿透</text>
+
+              <line x1="602" y1="93" x2="622" y2="93" stroke="#0f766e" stroke-width="1.6" marker-end="url(#c-teal)"/>
+
+              <rect x="626" y="66" width="118" height="54" rx="6" fill="#ffffff" stroke="#5eead4"/>
+              <text x="685" y="88" text-anchor="middle" font-size="10" font-weight="700" fill="#115e59">extauthz.credential</text>
+              <text x="685" y="106" text-anchor="middle" font-size="9.5" fill="#475569">核对并剥离前缀</text>
+
+              <line x1="744" y1="93" x2="764" y2="93" stroke="#0f766e" stroke-width="1.6" marker-end="url(#c-teal)"/>
+
+              <rect x="768" y="66" width="102" height="54" rx="6" fill="#ffffff" stroke="#0f766e" stroke-width="1.4"/>
+              <text x="819" y="89" text-anchor="middle" font-size="10.5" font-weight="700" fill="#115e59">backendAuth</text>
+              <text x="819" y="106" text-anchor="middle" font-size="9.5" fill="#475569">覆盖写入目标位</text>
+
+              <line x1="870" y1="93" x2="884" y2="93" stroke="#0f766e" stroke-width="1.6" marker-end="url(#c-teal)"/>
+
+              <rect x="888" y="66" width="44" height="54" rx="6" fill="#ccfbf1" stroke="#14b8a6"/>
+              <text x="910" y="97" text-anchor="middle" font-size="10.5" font-weight="700" fill="#115e59">上游</text>
+
+              <rect x="506" y="138" width="424" height="80" rx="7" fill="#ffffff" stroke="#99f6e4"/>
+              <text x="520" y="159" font-size="11" font-weight="700" fill="#115e59">为何必须区分（1.7.0 实测防护结论）</text>
+              <text x="520" y="178" font-size="10.2" fill="#334155">• 调用方可自行夹带同名 X-API-Key 头或查询参数；若采用</text>
+              <text x="520" y="194" font-size="10.2" fill="#334155">  响应头复制，PDP 漏给凭证时夹带值将通过兜底规则直达上游。</text>
+              <text x="520" y="210" font-size="10.2" fill="#334155">• 改走 backendAuth 后缺失必答 403，且上游收不到 Authorization。</text>
+            </svg>
+          </div>
+          <figcaption>
+            <strong>图 4 · 凭证投放编译护栏：</strong>由 <code>gateway-control compile</code> 自动依据目标位置切换生成策略，用户在 Fabric UI 只需声明头名或参数名，无需手工维护复杂表达式。
+          </figcaption>
+        </figure>
+
+        <h3>面向 UI 化配置的三大不可妥协底线与威胁缓解矩阵</h3>
+        <div class="callout callout--danger">
+          <span class="callout-title">三条架构红线（任何 UI 或 API 迭代均不得突破）</span>
+          <strong>1. 密钥零入快照：</strong>编译器静态拒绝 <code>${...}</code> 与 <code>$VAR</code> 环境变量引用；所有凭证字段在内存经 <code>ports.Secret</code> 封装，错误/日志/JSON 序列化均输出占位符。<br>
+          <strong>2. 敏感头强清洗：</strong>请求入站固定剔除 9 个敏感/伪造头（<code>x-provider-account</code>、<code>cookie</code>、<code>x-forwarded-*</code>、<code>forwarded</code>、<code>x-idp-verified-*</code>）；响应剔除 <code>location</code>、<code>set-cookie</code>、<code>x-idp-decision-id</code>。<br>
+          <strong>3. 失败默认拒绝：</strong>禁止自动跟随 302 重定向、禁止对非幂等写操作自动重试、禁止回滚配置覆盖高优撤销表（<code>ADR-0012</code>）。
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>威胁编号 (G04 §5)</th>
+                <th>典型攻击 / 误配置路径</th>
+                <th>本方案内置防御机制</th>
+                <th>当前实证状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>S-01 / S-02</code><br>身份伪造与租户越权</td>
+                <td>伪造 <code>X-Tenant-ID</code> / <code>X-Provider-Account</code> 或混用不同环境 JWT</td>
+                <td>JWT 验签强制 <code>iss/aud/alg</code>；<code>tenant_id</code> 仅取自已验签 JWT；撤销与 Grant 检查绑定可信主体</td>
+                <td><span class="pill pill--ok">黑盒 &amp; 本机 GK 实测</span></td>
+              </tr>
+              <tr>
+                <td><code>S-03 / S-10</code><br>账户凭证混淆与缓存串号</td>
+                <td>不同租户或环境复用同一枚 OAuth2 Access Token</td>
+                <td>六元组复合缓存键 + 撤销检查严格先于 <code>CredentialSource</code> + 禁用不完整跨请求缓存</td>
+                <td><span class="pill pill--ok">替身双账户实测</span><br><span class="pill pill--muted">沙箱单账号待补</span></td>
+              </tr>
+              <tr>
+                <td><code>S-04 / S-09 / S-11</code><br>SSRF、DNS 重绑定与重定向</td>
+                <td>通过 UI 填内网主机、或承运商返回 302 跳转内网元数据地址</td>
+                <td>编译器白名单 + <code>redirect_policy = DENY</code> + <code>pin-egress.sh</code> 命名空间出口钉死</td>
+                <td><span class="pill pill--ok">黑盒 &amp; 单机池实测</span></td>
+              </tr>
+              <tr>
+                <td><code>S-05 / S-12</code><br>内部令牌外泄与快照泄密</td>
+                <td>IDP JWT 透传至外部承运商，或密钥被写入快照/日志</td>
+                <td>验签后剥离原 <code>Authorization</code>；编译期拒绝 <code>${ENV}</code>；审计日志自动剥离敏感键</td>
+                <td><span class="pill pill--ok">契约 &amp; 黑盒实测</span></td>
+              </tr>
+              <tr>
+                <td><code>S-06 / S-08</code><br>写操作重放与 Broker 滥用</td>
+                <td>下单超时被网关重放导致重复出面单，或非网关进程直调凭证接口</td>
+                <td>网关与 <code>provider-signer</code> 均禁止重试；<code>/v1/extauthz/check</code> 仅认网关工作负载 mTLS 证书</td>
+                <td><span class="pill pill--ok">黑盒 &amp; 沙箱实测</span><br><span class="pill pill--muted">正式渗透 NOT_RUN</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- SECTION 6 -->
+      <section class="section-card" id="sec-6">
+        <div class="section-header">
+          <span class="section-num">§ 06</span>
+          <h2>跨系统契约示例与配置字段映射</h2>
+        </div>
+
+        <p>
+          下图展示当用户在 <strong>API Fabric UI</strong> 完成一条外部 API 与认证方案配置并审批通过后，三系统间实际传递的强契约结构（直接取自仓库 <code>contracts/fabric/</code> 与 <code>contracts/gateway/policies/</code>）。请注意：两份契约中均<strong>不存在任何密钥明文</strong>。
+        </p>
+
+        <div class="split-2">
+          <div class="code-card">
+            <div class="code-card-head">
+              <span>1. Fabric → gateway-control 发布意图信封</span>
+              <span class="pill pill--fabric">RoutePublicationIntent</span>
+            </div>
+            <pre><code>{
+  "idempotency_key": "pub-mockcarrier-tracking-0001",
+  "release_ref": "fabric-release:consumer-api-mockcarrier-v1/0001",
+  "target_id": "fabric-target:egress-test",
+  "intent": {
+    "intent_id": "gwi-example-001",
+    "gateway_pool": "egress-test",
+    "traffic_class": "EGRESS",
+    "environment": "TEST",
+    "provider_id": "mockcarrier",
+    "operation_id": "tracking.get",
+    "logical_path": "/providers/mockcarrier/v1/tracking",
+    "allowed_methods": ["GET"],
+    "upstream_hostname": "mockcarrier.example",
+    "upstream_port": 443,
+    "upstream_tls": "VERIFY_REQUIRED",
+    "redirect_policy": "DENY",
+    "credential_binding_ref": "gatekeeper:mockcarrier-test",
+    "approval_ref": "APPROVAL-PENDING-001",
+    "expected_generation": 0
+  }
+}</code></pre>
+          </div>
+
+          <div class="code-card">
+            <div class="code-card-head">
+              <span>2. 认证方案与凭证引用绑定契约</span>
+              <span class="pill pill--gk">CredentialBinding</span>
+            </div>
+            <pre><code>{
+  "binding_id": "binding-fedex-test",
+  "provider_id": "mockcarrier",
+  "environment": "TEST",
+  "auth_scheme": "OAUTH2_CLIENT_CREDENTIALS",
+  "account_resolution": "GATEKEEPER_AUTHORIZED_ACCOUNT",
+  "gateway_workload_id": "idp-egress-test",
+  "authorized_credential_ref": "gatekeeper:mockcarrier-test",
+  "scope_set": ["tracking.read"],
+  "audience": "mockcarrier-test",
+  "token_ttl_max_seconds": 900,
+  "approval_ref": "APPROVAL-PENDING-005"
+}
+
+// 合法 auth_scheme 枚举（credential-binding.schema.json）：
+//   • API_KEY                     (Tier 1)
+//   • OAUTH2_CLIENT_CREDENTIALS   (Tier 1)
+//   • OAUTH2_AUTHORIZATION_CODE   (Tier 1)
+//   • MTLS_CLIENT_CERT            (Tier 1)
+//   • HMAC_REQUEST_SIGNING        (Tier 2 · 配合 request_signer_ref)</code></pre>
+          </div>
+        </div>
+
+        <div class="callout callout--ops">
+          <span class="callout-title">发布状态闭环约束（ReleaseState 单一词表）</span>
+          Fabric 提交 <code>POST /v1/route-intents</code> 后仅返回 <code>202 Accepted (DRAFT)</code>；随后由 <code>gateway-control</code> 异步经历 <code>VALIDATED → STAGED → APPLYING → OBSERVING → ACTIVE</code>。只有当回读到的运行态 <code>observed_digest == desired_digest</code> 时才可标记生效；若收敛未知则标记 <code>UNKNOWN</code> 并触发对账（<code>reconcile</code>），绝不允许把审批通过等同于流量已安全生效。
+        </div>
+      </section>
+
+      <!-- SECTION 7 -->
+      <section class="section-card" id="sec-7">
+        <div class="section-header">
+          <span class="section-num">§ 07</span>
+          <h2>分阶段演进路线图与当前验证基线</h2>
+        </div>
+
+        <p>
+          无需一次性建完所有三系统能力。依托当前已完成的 <code>idp-gateway</code> 编译、认证引擎、观测与轻量回环控制台，推荐按以下三阶段渐进交付：
+        </p>
+
+        <figure class="diagram">
+          <div class="diagram-canvas">
+            <svg viewBox="0 0 960 240" role="img" aria-labelledby="fig5-title fig5-desc" xmlns="http://www.w3.org/2000/svg">
+              <title id="fig5-title">图 5：认证封装与三系统协同的三阶段演进路线图</title>
+              <desc id="fig5-desc">展示近期 Phase I 对接 Fabric 发布意图与标准认证 Schema、中期 Phase II 接入 Gatekeeper 与 KMS 只写密钥录入、长期 Phase III 按需晋升新模板与多实例高可用验收。</desc>
+              <defs>
+                <marker id="road-arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#64748b"/>
+                </marker>
+              </defs>
+
+              <!-- Phase 1 -->
+              <rect x="18" y="20" width="286" height="198" rx="10" fill="#eef2ff" stroke="#4338ca" stroke-width="1.7"/>
+              <rect x="18" y="20" width="286" height="34" rx="10" fill="#4338ca"/>
+              <rect x="18" y="40" width="286" height="14" fill="#4338ca"/>
+              <text x="34" y="42" font-size="12" font-weight="700" fill="#ffffff">Phase I · 契约对齐与 Fabric 接通（近期）</text>
+              <text x="34" y="76" font-size="11" font-weight="700" fill="#1e1b4b">核心交付</text>
+              <text x="34" y="96" font-size="10.5" fill="#334155">• 统一 API_KEY / OAUTH2 / 命名适配器 Schema</text>
+              <text x="34" y="114" font-size="10.5" fill="#334155">• 实现 Fabric → gateway-control 发布适配器</text>
+              <text x="34" y="132" font-size="10.5" fill="#334155">• 落地 idempotency_key、CAS 与摘要对账</text>
+              <rect x="32" y="154" width="258" height="48" rx="6" fill="#ffffff" stroke="#c7d2fe"/>
+              <text x="44" y="173" font-size="10" font-weight="700" fill="#3730a3">退出标准：Fabric UI 选模板提交后，</text>
+              <text x="44" y="190" font-size="10" fill="#475569">自动完成 compile + 原生校验 + observed 对账</text>
+
+              <!-- Arrow 1->2 -->
+              <line x1="304" y1="119" x2="334" y2="119" stroke="#64748b" stroke-width="2" marker-end="url(#road-arr)"/>
+
+              <!-- Phase 2 -->
+              <rect x="338" y="20" width="286" height="198" rx="10" fill="#f0fdfa" stroke="#0f766e" stroke-width="1.7"/>
+              <rect x="338" y="20" width="286" height="34" rx="10" fill="#0f766e"/>
+              <rect x="338" y="40" width="286" height="14" fill="#0f766e"/>
+              <text x="354" y="42" font-size="12" font-weight="700" fill="#ffffff">Phase II · Gatekeeper 凭证与 KMS（中期）</text>
+              <text x="354" y="76" font-size="11" font-weight="700" fill="#115e59">核心交付</text>
+              <text x="354" y="96" font-size="10.5" fill="#334155">• Gatekeeper 正式落地 ProviderAccount 模型</text>
+              <text x="354" y="114" font-size="10.5" fill="#334155">• 接入 KMS / Secret Manager（只写录入 UI）</text>
+              <text x="354" y="132" font-size="10.5" fill="#334155">• 替换生产手工 0600 文件（保留测试文件源）</text>
+              <rect x="352" y="154" width="258" height="48" rx="6" fill="#ffffff" stroke="#99f6e4"/>
+              <text x="364" y="173" font-size="10" font-weight="700" fill="#0f766e">退出标准：业务自助录入密钥并轮换，</text>
+              <text x="364" y="190" font-size="10" fill="#475569">零明文回显、零重启生效、撤销秒级阻断</text>
+
+              <!-- Arrow 2->3 -->
+              <line x1="624" y1="119" x2="654" y2="119" stroke="#64748b" stroke-width="2" marker-end="url(#road-arr)"/>
+
+              <!-- Phase 3 -->
+              <rect x="658" y="20" width="284" height="198" rx="10" fill="#eff6ff" stroke="#1d4ed8" stroke-width="1.7"/>
+              <rect x="658" y="20" width="284" height="34" rx="10" fill="#1d4ed8"/>
+              <rect x="658" y="40" width="284" height="14" fill="#1d4ed8"/>
+              <text x="674" y="42" font-size="12" font-weight="700" fill="#ffffff">Phase III · 模板晋升与多实例 HA（长期）</text>
+              <text x="674" y="76" font-size="11" font-weight="700" fill="#1e3a8a">核心交付</text>
+              <text x="674" y="96" font-size="10.5" fill="#334155">• 第 2 家复用同类签名时晋升标准模板</text>
+              <text x="674" y="114" font-size="10.5" fill="#334155">• 多实例撤销传播与顺丰令牌共享协调</text>
+              <text x="674" y="132" font-size="10.5" fill="#334155">• 容量压测、渗透测试与 STD-CP 正式门禁</text>
+              <rect x="672" y="154" width="256" height="48" rx="6" fill="#ffffff" stroke="#bfdbfe"/>
+              <text x="684" y="173" font-size="10" font-weight="700" fill="#1d4ed8">退出标准：完成多副本漂移演练与容量基线，</text>
+              <text x="684" y="190" font-size="10" fill="#475569">经仓库所有者依据实证更新正式验收状态</text>
+            </svg>
+          </div>
+          <figcaption>
+            <strong>图 5 · 渐进交付路线图：</strong>遵循“先契约与发布闭环、再密钥托管自动化、后模板扩充与多副本 HA”的顺序，保证每一阶段都建立在可验证的事实证据之上。
+          </figcaption>
+        </figure>
+
+        <h3>当前仓内实证基线与待完成项（客观口径）</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>维度</th>
+                <th>当前实证事实（已入库）</th>
+                <th>仍待推进 / 明确保留项</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>数据面与黑盒回归</strong></td>
+                <td>锁定 <code>agentgateway 1.7.0</code>；黑盒套件 <strong>97/97 通过（752 项检查）</strong>（含仓库所有者已接受的 <code>P1-SS-04</code>，且前置 Nginx <code>P1-FP-01</code> 仍强制 400）</td>
+                <td>上游含 PR #4401 的 OSS 正式版发布后评估升级；正式 95 条验收用例与 <code>STD-CP1</code>–<code>STD-CP6</code> 门禁仍为 <code>NOT_RUN</code></td>
+              </tr>
+              <tr>
+                <td><strong>认证封装与真实沙箱</strong></td>
+                <td>Bearer、万邦开发者令牌、OAuth2 Client Credentials、顺丰国际 <code>provider-signer</code> 均已实现并跑通替身/真实沙箱（含单机池与出口钉死）</td>
+                <td>沙箱仅明文 HTTP 且单账号（TLS 与真实双账户隔离在替身验证）；尚未接入生产 KMS/Secret Manager</td>
+              </tr>
+              <tr>
+                <td><strong>Gatekeeper 联调</strong></td>
+                <td>本机真实 Gatekeeper <code>13/13</code> 通过，含 <code>gateway-control sync-jwks</code> 无重启密钥轮换与 mTLS PDP</td>
+                <td><code>provider_account</code> 模型、按客户端受众登记、环境声明与换钥流程待 Gatekeeper 团队并入正式服务</td>
+              </tr>
+              <tr>
+                <td><strong>可观测与运维台</strong></td>
+                <td>可选 OTLP Trace、0600 JSONL 审计、独立端口 Prometheus 指标、<code>gateway-console</code> BFF 与 React/TS 回环界面已验证</td>
+                <td><code>ADR-0018</code> / <code>ADR-0019</code> 仍为 <code>Proposed</code>；正式数字 SLO 须经容量压测与所有者批准，不预先宣称</td>
+              </tr>
+              <tr>
+                <td><strong>API Fabric 集成</strong></td>
+                <td><code>contracts/fabric/</code> 契约与 <code>gateway-control compile</code> 编译器就绪</td>
+                <td>Fabric → Gateway 发布适配器尚未开工（按计划排在最后阶段实施）</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer>
+    <span>IDP Gateway Architecture Documentation · 依据 <code>docs/adr/ADR-0001..0019</code>、<code>docs/G04_Identity_and_Security.md</code> 与 <code>contracts/</code> 编写</span>
+    <span>Baseline 2024 语义化单文件 HTML · 零外部依赖 · 支持离线阅读与打印导出 PDF</span>
+  </footer>
+
+  <script>
+    (function () {
+      // Accessible tablist switching with keyboard support (ArrowLeft / ArrowRight / Home / End)
+      document.querySelectorAll('[data-tabs]').forEach(function (root) {
+        var tabs = Array.prototype.slice.call(root.querySelectorAll('[role="tab"]'));
+        var panels = Array.prototype.slice.call(root.querySelectorAll('[role="tabpanel"]'));
+
+        function activate(nextTab, focusTab) {
+          tabs.forEach(function (tab, idx) {
+            var selected = tab === nextTab;
+            tab.setAttribute('aria-selected', selected ? 'true' : 'false');
+            tab.tabIndex = selected ? 0 : -1;
+            if (panels[idx]) {
+              panels[idx].hidden = !selected;
+            }
+          });
+          if (focusTab) {
+            nextTab.focus();
+          }
+        }
+
+        tabs.forEach(function (tab, idx) {
+          tab.tabIndex = tab.getAttribute('aria-selected') === 'true' ? 0 : -1;
+          tab.addEventListener('click', function () {
+            activate(tab, false);
+          });
+          tab.addEventListener('keydown', function (ev) {
+            var targetIdx = null;
+            if (ev.key === 'ArrowRight') targetIdx = (idx + 1) % tabs.length;
+            else if (ev.key === 'ArrowLeft') targetIdx = (idx - 1 + tabs.length) % tabs.length;
+            else if (ev.key === 'Home') targetIdx = 0;
+            else if (ev.key === 'End') targetIdx = tabs.length - 1;
+            if (targetIdx !== null) {
+              ev.preventDefault();
+              activate(tabs[targetIdx], true);
+            }
+          });
+        });
+      });
+
+      // Scroll-spy for TOC highlighting
+      var tocLinks = Array.prototype.slice.call(document.querySelectorAll('.toc a[href^="#"]'));
+      var sections = tocLinks
+        .map(function (link) {
+          return document.querySelector(link.getAttribute('href'));
+        })
+        .filter(Boolean);
+
+      if ('IntersectionObserver' in window && sections.length > 0) {
+        var observer = new IntersectionObserver(
+          function (entries) {
+            entries.forEach(function (entry) {
+              if (entry.isIntersecting) {
+                var id = '#' + entry.target.id;
+                tocLinks.forEach(function (link) {
+                  link.classList.toggle('is-active', link.getAttribute('href') === id);
+                });
+              }
+            });
+          },
+          { rootMargin: '-18% 0px -70% 0px', threshold: 0.01 }
+        );
+        sections.forEach(function (sec) {
+          observer.observe(sec);
+        });
+      }
+    })();
+  </script>
+</body>
+</html>
