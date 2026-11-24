@@ -164,14 +164,16 @@ STAGING="--image <compose.yml 里网关用的那个镜像，按摘要>
 
 `gateway-control keep` 是常驻的，守着这一个池；由 `idp-gateway-pool-keep.service` 跑，身份是 `CONTROL_USER` 那个账号。它做两件事：
 
-- **每 5 秒看一眼三个常驻容器**：`netns`、网关和 `front`。下文说的"三个常驻容器"都是这三个；第四个常驻的 `egress-watch` 它不看。有没在跑的，它跑启动命令 `docker compose up -d`。这与开机时是同一条命令，所以照样是 `place` 和 `egress` 在先，`confirm` 对上了才开 `front`。它自己不直接启动哪个容器，也不重启在跑着的容器。
+- **每 5 秒看一眼三个常驻容器**：`netns`、网关和 `front`。下文说的"三个常驻容器"都是这三个；第四个常驻的 `egress-watch` 它不看。有没在跑的，它跑启动命令 `docker compose up -d`。这与开机时是同一条命令，所以照样是 `place` 和 `egress` 在先，`confirm` 对上了才开 `front`。它自己不直接启动哪个容器，也不重启在跑着的容器（给了 `--tend-pinned` 时多一处例外，见下表和"叠加文件里的服务"）。
 - **网关在跑时每分钟对一次账**，做的就是 `gateway-control reconcile`。发布器死在半路留下的文件、有人绕过发布器写的文件，到这时被收回去。
 
 | 它看到的 | 它做什么 |
 |---|---|
 | 三个都在跑 | 到时候对一次账，别的不做 |
 | 网关或 `front` 没在跑：崩了，被杀掉，被人停了 | 跑启动命令。在跑的容器不动 |
-| `netns` 没在跑，网关或 `front` 却还在跑（它们这时谁也连不到，只跑启动命令修不好） | 先把这两个停下（`docker compose stop front agentgateway`，照常等在途的请求做完），再跑启动命令。它只在这一种情况下停容器 |
+| `netns` 没在跑，网关或 `front` 却还在跑（它们这时谁也连不到，只跑启动命令修不好） | 先把这两个停下（`docker compose stop front agentgateway`，照常等在途的请求做完），再跑启动命令。不给 `--tend-pinned` 时它只在这一种情况下停容器 |
+| 给了 `--tend`、`--tend-pinned` 的服务（见下）有容器没在跑，或者一个容器都没有 | 跑启动命令，与上面是同一条，照 `depends_on` 的先后。在跑的不动 |
+| `--tend-pinned` 的服务有了它没记下的地址，照看的和三个常驻的都在跑 | `egress forget`，再停下 `front` 和网关、跑启动命令（与上一种是同一条路）。启动之后的头一眼只记下地址 |
 | 另一次发布正占着这个池 | 不动手，下一眼再看。带重启的发布会让网关停一下，那不是它死了 |
 | 跑了启动命令却没修好：网关起不来，还没有记录，记录坏了 | 隔得越来越久再试：10 秒、20 秒、40 秒……最长 5 分钟。这期间 `front` 没开，账照样对。等着的时候账对上了（第一份发布刚做完，或者网关这才读得到），它不等到原定的时候，下一眼就再试 |
 | 对账时放着的不是记录的那一份 | 把记录的那一份放回去（`RESTORED`），写出原来放着的是哪一份 |
@@ -179,6 +181,19 @@ STAGING="--image <compose.yml 里网关用的那个镜像，按摘要>
 | 对账之后，历史里有一条停在半路、没有结局的发布 | 给它补上结局（见"发布历史"）。补不成不影响上面任何一行 |
 
 网关死了到它回来有多久：最长是看一眼的间隔，加上启动命令把它起起来的一两秒。测试里（`SH-16`）网关被强行杀掉之后，请求有 5 秒出头得到 502，然后照常；`front` 一直开着。
+
+**叠加文件里的服务（`--tend`、`--tend-pinned`，[ADR-0024](../../docs/adr/ADR-0024.md)，Proposed）。** 不给这两个参数时它只看上面那三个，与原来一字不差：`gateway-authz`、签名器、两个协调器死了，它看到的仍是一个完整的池。给了，它每一眼也看这几个服务的每一个容器（`--scale`、`deploy.replicas` 的几个都算）：
+
+```bash
+gateway-control keep … --compose-file compose.yml --compose-file gateway-authz.yml --compose-file provider-signer.yml --compose-file coordinators.yml \
+    --tend-pinned gateway-authz --tend-pinned provider-signer --tend signer --tend sf-token-coordinator --tend authz-state
+```
+
+- `--tend-pinned` 是网关经出口规则按名字连的服务：`gateway-authz`、`provider-signer`。它包含 `--tend`。
+- 名字要在给它的 compose 文件里（它启动时跑一次 `docker compose … config --services` 核对），不能是三个常驻的，也不能是跑完就退出的 `place`、`confirm`、`egress`、`signer-egress`，不能重复。不合要求就不启动，退出码 2。
+- 钉住的服务换了地址（副本重启之后、扩容），去新地址的请求是 503：规则不认它，网关也还连它记着的旧地址（"两个协调器"里写的）。看守做的就是那里写给人做的两步，只是第二步不是 `docker compose restart agentgateway`，而是它已有的 `stop front agentgateway` 加启动命令，经过 `place` 和 `confirm`。这会让池断一下。看守启动之前就已经换了的地址它看不出来：头一眼只记下。
+- 它写的那一行多 `tended`、`tended_why`、`moved`、`tended_after` 四项，`action` 多 `forget+stop+start`；指标多三样（见"告警"）。
+- 两个单元里没有带这些参数，带着跑没有在 systemd 里试过（单元文件开头有写法）。测试里看守由脚本直接起，对着 `tests/integration/coordinators` 的池（KP 那几个用例）。
 
 单元里它还带着 `--history-dir ${POOL_DIR}/history --pool idp-gateway-pool`：每一次对账之后，给历史里停在半路的发布补上结局。**历史有毛病时它不停**：目录不在、读不成、日志坏了，它照常启动、照常看三个容器、照常对账、照常把死掉的容器起回来，对账的结局和退出码也不变，只是不补历史：目录打不开时它启动时在标准错误上说一句；对账之后补不成时，它写的那一行里有 `history_notes`（它有事才写，所以不是每一分钟都有）（`SH-30`）。
 
@@ -192,7 +207,9 @@ STAGING="--image <compose.yml 里网关用的那个镜像，按摘要>
 |---|---|
 | `condition`、`why` | 三个常驻容器合起来的样子和依据：`whole` 都在跑；`down` 有没在跑的；`orphaned` 网关或 `front` 接着的命名空间已经不在了 |
 | `busy` | 另一次发布正占着这个池，这一次该做的没有做 |
-| `action` | 对容器做了什么：空着是没有动；`start` 跑了启动命令；`stop+start` 先停下接错了命名空间的，再跑启动命令 |
+| `action` | 对容器做了什么：空着是没有动；`start` 跑了启动命令；`stop+start` 先停下接错了命名空间的，再跑启动命令；`forget+stop+start` 钉住的服务有了新地址（只在给了 `--tend-pinned` 时），`forget` 和 `forget+stop` 是那一步没做成、后面的没有做 |
+| `tended`、`tended_after` | 只在给了 `--tend`、`--tend-pinned` 时有：动手之前、之后每个照看的服务的容器（名字、在不在跑、状态、在项目网络上的地址），`pinned` 标出钉住的 |
+| `tended_why`、`moved` | 照看的服务里哪几个不是每个容器都在跑；钉住的服务有了的、看守没记下的地址（`"服务 地址"`）。没有时不出现 |
 | `repaired`、`start_error`、`retry_in_seconds` | 动手之后三个容器是不是都在跑了；启动命令没成功时它最后说的那一句；没修好时离下一次再试还有几秒 |
 | `reconcile` | 这一次对账的结果，与 `gateway-control reconcile` 写的是同一种；这一次没有对账时是 `null` |
 | `pool`、`after` | 动手之前、之后三个容器各自的状态 |
@@ -297,6 +314,9 @@ scrape_configs:
 | `idp_gateway_pool_reconcile_outcome{outcome=…}` | 上一次对账的结局，是哪个哪个是 1；还没有对过账时都是 0。网关没在跑时不对账，这里留着的是之前的那一次 |
 | `idp_gateway_pool_last_reconcile_timestamp_seconds` | 上一次对账是什么时候做完的；还没有对过时是 0 |
 | `idp_gateway_pool_snapshots_put_back_total` | 对账时把记录的那一份放回去过多少次。启动命令里 `place` 放回去的不算在这里 |
+| `idp_gateway_pool_tended_running{service=…,pinned=…}` | 只在给了 `--tend`、`--tend-pinned` 时有：上一眼看完时这个服务的每个容器都在跑，是 1；有没在跑的、一个容器都没有、没看成，是 0 |
+| `idp_gateway_pool_unfollowed_addresses` | 同上：上一眼时钉住的服务有几个看守没记下、也还没让网关跟上的地址 |
+| `idp_gateway_pool_repins_total` | 同上：为这样的地址跑过几次 `egress forget`（成了的，接着停下 `front` 和网关、跑启动命令） |
 
 **规则。** 各条的时长是执笔时取的，没有对着真实的要求调过。
 
@@ -364,12 +384,12 @@ docker compose -f compose.yml -f gateway-authz.yml -f provider-signer.yml -f coo
 
 - **加了什么。** 两个服务：`sf-token-coordinator`（顺丰国际访问令牌的租约，ADR-0022：几个 `gateway-authz` 只有一个去向承运商取，别的拿它取到的，不互相作废）和 `authz-state`（撤销、封禁表和配额桶，ADR-0023：每次判定都向它要一份新快照，撤销、恢复和扣配额都在它那里做）。各自在项目默认网络上，有自己的网络命名空间；`gateway-authz` 按名字找它们：`https://sf-token-coordinator:9445`、`https://authz-state:9446`。都是双向 TLS。`gateway-authz` 出示它给 PDP 的那张客户端证书（`GATEWAY_AUTHZ_PDP_CERT`），这张证书上的 URI 要等于 `COORDINATORS_AUTHZ_IDENTITY`，协调器只认这一个身份；`gateway-authz` 只信 `COORDINATORS_CA` 签的协调器证书。
 - **加固照 `gateway-authz`。** 同一个壳镜像，按摘要引用；跑的是本机上的静态二进制（`CGO_ENABLED=0 go build -trimpath -o sf-token-coordinator ./cmd/sf-token-coordinator`，`./cmd/authz-state` 同样），`read_only`、`cap_drop: ALL`、`no-new-privileges`、不是 root、`restart: "no"`。证书只读挂进去。每个协调器只写一个本机目录：`SF_TOKEN_COORDINATOR_STATE_DIR` 里是 `leases.json`（里面是访问令牌），`AUTHZ_STATE_STATE_DIR` 里是 `state.json`（撤销和封禁；配额桶不在里面）。目录要事先建好，归那个协调器的账号，0700；文件由程序建，0600。
-- **先后。** 带了 `--authz-state-url` 的 `gateway-authz` 监听之前先取一份快照，取不到就以 1 退出，`restart: "no"`，之后没人再起它。所以它等两个协调器都健康了才启动（`depends_on: service_healthy`）。健康检查是在协调器自己的容器里用壳镜像的 busybox `nc -z` 连一下自己的端口，只说明进程在听；每查一次，协调器日志里多一行 `TLS handshake error ... EOF`。起来的时候每秒查一次，健康之后一小时一次：它是给启动的先后用的，不是监控。`docker start`、`docker restart` 和看守都不看 `depends_on`：`authz-state` 停着的时候重启 `gateway-authz`，它起不来（[`tests/integration/coordinators`](../../tests/integration/coordinators/README.md) 的 CO-05）。没有为此给产品加重试参数。
+- **先后。** 带了 `--authz-state-url` 的 `gateway-authz` 监听之前先取一份快照，取不到就以 1 退出，`restart: "no"`，之后没人再起它。所以它等两个协调器都健康了才启动（`depends_on: service_healthy`）。健康检查是在协调器自己的容器里用壳镜像的 busybox `nc -z` 连一下自己的端口，只说明进程在听；每查一次，协调器日志里多一行 `TLS handshake error ... EOF`。起来的时候每秒查一次，健康之后一小时一次：它是给启动的先后用的，不是监控。`docker start`、`docker restart` 都不看 `depends_on`：`authz-state` 停着的时候重启 `gateway-authz`，它起不来（[`tests/integration/coordinators`](../../tests/integration/coordinators/README.md) 的 CO-05）。没有为此给产品加重试参数。看守不给 `--tend` 时不看这几个服务；给了，它跑的是 `docker compose up -d`，照 `depends_on` 等两个协调器健康（见"看守"，KP-02）。
 - **`gateway-authz` 的命令又整份写了一遍**（`provider-signer.yml` 里那一份），末尾加：`--revocations`、`--revoker-identity`、`--rate-limits`、五个 `--sf-openapi-lease-*`、五个 `--authz-state-*`。compose 合并时 `command` 整份换掉，不会往后加。`--rate-limits` 是必填的：列表里没法让一个参数可有可无。不要配额就给一份 `{"version": "none", "buckets": []}`，这时也不发配额请求。
-- **撤销文件在每个容器自己的 tmpfs 里。** 有 `authz-state` 时，`gateway-authz` 不按这份文件判定：启动时和自己做了改动之后，把协调器的快照写进去；文件不在就不启动。它放在容器自己的 tmpfs（`/authz/mirror`）里，`--scale gateway-authz=N` 的几个副本就不会共用一份，每次启动它都是空的。所以入口先用镜像里的 shell，在文件不在时写一份空表（0600），再 exec `gateway-authz`。这份空表在 `gateway-authz` 监听之前就被协调器的快照换掉；换不了，它以 1 退出。`mode=1777` 要写明：不写时 docker 29.8.1 第一次启动给 1777，同一个容器以后每次启动给 root 的 0755，shell 写不了文件，副本起不来（测出来的）。不要去掉 `--authz-state-*` 却留着这个入口：那样每次启动写下的空表就成了判定用的表。
+- **撤销文件在每个容器自己的 tmpfs 里。** 有 `authz-state` 时，`gateway-authz` 不按这份文件判定：启动时和自己做了改动之后，把协调器的快照写进去；文件不在就不启动。它放在容器自己的 tmpfs（`/authz/mirror`）里，`--scale gateway-authz=N` 的几个副本就不会共用一份，每次启动它都是空的。所以入口先用镜像里的 shell，在文件不在时写一份空表（0600），再 exec `gateway-authz`。这份空表在 `gateway-authz` 监听之前就被协调器的快照换掉；换不了，它以 1 退出。`mode=1777` 要写明：不写时 docker 29.8.1 第一次启动给 1777，同一个容器以后每次启动给 root 的 0755，shell 写不了文件，副本起不来（测出来的）。只有镜像里本来没有的挂载点会这样；`compose.yml` 里 `front` 和出口两步挂的 `/tmp` 镜像里本来就是 1777，重启之后不变（同一台 docker 上量过 stop/start 和 `docker restart` 各三轮）。不要去掉 `--authz-state-*` 却留着这个入口：那样每次启动写下的空表就成了判定用的表。
 - **变量**写在 [`coordinators.env.example`](coordinators.env.example)，抄进同一个 `.env`，全部必填。
-- **两个副本和出口规则。** `--scale gateway-authz=2` 时，名字 `gateway-authz` 解析到两个地址，`pin-egress.sh` 两个都钉；测试里网关把 extAuthz 轮流发给两个副本。一个副本重启之后可能换了地址，规则只认第一次解析到的，要 `docker compose run --rm --no-deps egress forget`。`forget` 之后网关还会把一部分 extAuthz 发到它记着的旧地址，那些请求是 503（失败关闭），`docker compose restart agentgateway` 之后才好（测试里 `forget` 之后 6 个请求有 3 个这样）。看守不做这两步。
-- **还没有的**：`gateway-authz` 和两个协调器出去的连接都没有出口规则；协调器多实例（各一个；停了 `gateway-authz` 失败关闭，503，不退回各取各的令牌、各用各的表）；重启后还在的配额桶（在内存里，`authz-state` 一重启全满）；证书热重载经这些单文件挂载用不上（宿主机上改名换掉的文件，容器里看不到）；生产证书；systemd 单元和看守带上这个文件；别的机器。这个叠加文件和顺丰国际的配置一起，在 [`tests/integration/coordinators`](../../tests/integration/coordinators/README.md) 里跑过两个副本，对着替身。这不是验收通过。
+- **两个副本和出口规则。** `--scale gateway-authz=2` 时，名字 `gateway-authz` 解析到两个地址，`pin-egress.sh` 两个都钉；测试里网关把 extAuthz 轮流发给两个副本。一个副本重启之后可能换了地址，规则只认第一次解析到的，要 `docker compose run --rm --no-deps egress forget`。`forget` 之后网关还会把一部分 extAuthz 发到它记着的旧地址，那些请求是 503（失败关闭），`docker compose restart agentgateway` 之后才好（测试里 `forget` 之后 6 个请求有 3 个这样）。看守给了 `--tend-pinned gateway-authz` 时做这两步：先 `forget`，再停下 `front` 和网关、跑启动命令（不是 `restart agentgateway`，见"看守"，KP-03）；不给时不做，要人来做。
+- **还没有的**：`gateway-authz` 和两个协调器出去的连接都没有出口规则；协调器多实例（各一个；停了 `gateway-authz` 失败关闭，503，不退回各取各的令牌、各用各的表）；重启后还在的配额桶（在内存里，`authz-state` 一重启全满）；证书热重载经这些单文件挂载用不上（宿主机上改名换掉的文件，容器里看不到）；生产证书；systemd 单元带上这个文件（看守可以经 `--compose-file` 和 `--tend` 带上，见"看守"，单元里没有）；别的机器。这个叠加文件和顺丰国际的配置一起，在 [`tests/integration/coordinators`](../../tests/integration/coordinators/README.md) 里跑过两个副本，对着替身。这不是验收通过。
 
 ## sync-jwks（叠加文件）
 

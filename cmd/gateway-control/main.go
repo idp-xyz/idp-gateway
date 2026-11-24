@@ -4,7 +4,7 @@
 //	gateway-control restart   [--snapshot <文件>] --container <网关容器> …   （其余参数与 publish 相同）
 //	gateway-control reconcile --config-dir <池的配置目录> --read-back <host:port> …
 //	gateway-control place     --config-dir <池的配置目录>
-//	gateway-control keep      --config-dir <池的配置目录> --read-back <host:port> … [--compose-file <文件>]
+//	gateway-control keep      --config-dir <池的配置目录> --read-back <host:port> … [--compose-file <文件>] [--tend <服务>] [--tend-pinned <服务>]
 //
 // 另有三条命令不属于池，对着一个 gateway-authz 的撤销接口发一次请求（revoke.go，docs/adr/ADR-0012.md V1.2）：
 //
@@ -61,7 +61,9 @@
 // keep 是常驻的：它守着这个池，直到被叫停。池里常驻的容器有没在跑的，它跑启动这个池的那条命令
 // （docker compose up -d，所以仍然先 place、后 reconcile、对上了才开前置代理）；网关在跑时，它隔一阵
 // 对一次账。另一次发布正占着这个池时它不动手。它每报告一次往标准输出写一行 JSON，格式见 tended。
-// 要让这个池停着，先停它。
+// 要让这个池停着，先停它。给了 --tend、--tend-pinned 时它另外照看那几个服务（docs/adr/ADR-0024.md）：它们的
+// 容器有没在跑的，跑的是同一条启动命令；--tend-pinned 的那几个有了没记下的地址，它先 egress forget，再停下
+// 前置代理和网关、跑启动命令。名字不在给的 compose 文件里（docker compose config --services）时它不启动，退出码 2。
 //
 // 这些命令要以池的配置目录的属主的身份运行，别的账号占不了这个池。
 //
@@ -113,6 +115,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -273,6 +276,8 @@ type options struct {
 	composeFiles    list
 	composeEnvFiles list
 	composeTimeout  time.Duration
+	// 看守另外照看的服务（ADR-0024）：tendPinned 是其中网关经出口规则按名字连的。都不给时只看三个常驻的。
+	tend, tendPinned list
 	// 看守在哪个地址上给出指标；空表示不给
 	metricsListen string
 	// 发布历史（ADR-0013）：历史目录；池的标识；操作员的备注（未经核实）。historyDir 为空表示没有历史。
@@ -282,6 +287,11 @@ type options struct {
 	// rollback：回到历史里的哪一条，要不要在需要时重启网关
 	rollbackTo  uint64
 	withRestart bool
+}
+
+// tended 是看守另外照看的全部服务：钉住的在前。
+func (o options) tended() []string {
+	return append(append([]string(nil), o.tendPinned...), o.tend...)
 }
 
 // endpoint 是一个回读口和读它用的证书。
@@ -331,6 +341,9 @@ func parse(command string, args []string, output io.Writer) (options, error) {
 		flags.Var(&o.composeFiles, "compose-file", "compose 文件，可以给多次；不给时 docker compose 用当前目录里的 compose.yml")
 		flags.Var(&o.composeEnvFiles, "compose-env-file", "给 docker compose 的变量文件，可以给多次；不给时它用当前目录里的 .env。文件里只能有 名字=值 这样的行")
 		flags.DurationVar(&o.composeTimeout, "compose-timeout", 3*time.Minute, "启动命令、停止命令各自最多跑多久")
+		flags.Var(&o.tend, "tend", "另外照看的服务（compose 文件里的服务名），可以给多次：它的容器有没在跑的，跑启动命令（ADR-0024）。不给就只看三个常驻的")
+		flags.Var(&o.tendPinned, "tend-pinned", "另外照看、并且网关经出口规则按名字连的服务（gateway-authz、provider-signer），可以给多次：包含 --tend；"+
+			"它有了没记下的地址，先 egress forget，再停下前置代理和网关、跑启动命令")
 		flags.StringVar(&o.metricsListen, "metrics-listen", "", "在这个地址的 "+telemetry.Path+" 上给出指标（Prometheus 的文本格式），host:port；不给就不开")
 	}
 	staged := command == commandPublish || command == commandRestart || command == commandRollback
@@ -412,6 +425,9 @@ func parse(command string, args []string, output io.Writer) (options, error) {
 			return o, errors.New("--max-backoff must not be shorter than --interval")
 		case o.composeTimeout <= 0:
 			return o, errors.New("--compose-timeout must be positive")
+		}
+		if err := container.CheckTended(o.tended()); err != nil {
+			return o, fmt.Errorf("--tend, --tend-pinned: %w", err)
 		}
 		// 给了这个参数却是空的，多半是变量文件里漏了那一项：当成"不开"的话，告警就悄悄没有了。
 		// 地址要写全：只写端口是在所有网卡上听，这些数没有设防。
@@ -595,9 +611,28 @@ func keep(ctx context.Context, o options, stdout, stderr io.Writer, docker docke
 	if err != nil {
 		return fail(err)
 	}
+	// 另外照看的服务要在给的 compose 文件里：名字写错了，看守会把一个不存在的服务当成一直没在跑，一直去起它。
+	if tended := o.tended(); len(tended) > 0 {
+		declared, err := project.Declared(ctx)
+		if err != nil {
+			return fail(err)
+		}
+		for _, name := range tended {
+			if !slices.Contains(declared, name) {
+				fmt.Fprintf(stderr, "gateway-control: --tend, --tend-pinned: %q is not a service of the compose files keep was given (docker compose config --services lists %s)\n",
+					name, strings.Join(declared, ", "))
+				return exitUsage
+			}
+		}
+	}
 	keeper, err := application.NewKeeper(project, delivery, pool, o.timing, o.pace)
 	if err != nil {
 		return fail(err)
+	}
+	if tended := o.tended(); len(tended) > 0 {
+		if err := keeper.Tend(project, tended, o.tendPinned); err != nil {
+			return fail(err)
+		}
 	}
 	// 历史打不开不让看守停：照常看、照常对账、照常起容器，只是不补历史。开头说一次，之后补不成的话
 	// 每一次对账的那一行里有 history_notes。
@@ -624,6 +659,9 @@ func keep(ctx context.Context, o options, stdout, stderr io.Writer, docker docke
 			return fail(fmt.Errorf("metrics: %w", err))
 		}
 		metrics := telemetry.New(o.composeProject, o.pace, time.Now())
+		if tended := o.tended(); len(tended) > 0 {
+			metrics.Tend(tended, o.tendPinned)
+		}
 		server := &http.Server{
 			Handler: metrics.Handler(), ReadHeaderTimeout: 5 * time.Second,
 			ErrorLog: log.New(stderr, "gateway-control: metrics: ", 0),
@@ -654,7 +692,9 @@ type tended struct {
 	// Busy 为真：另一次发布正占着这个池，该做的这一次没有做。
 	Busy bool `json:"busy"`
 	// Action 是这一次对容器做了什么：空串是没有动；start 是跑了启动命令；stop+start 是先停下接错了
-	// 命名空间的再跑启动命令；stop 是停的那一步没做成，没有接着启动。
+	// 命名空间的再跑启动命令；stop 是停的那一步没做成，没有接着启动。给了 --tend-pinned 时另有
+	// forget+stop+start：钉住的服务有了没记下的地址，先 egress forget，再停下前置代理和网关、跑启动命令；
+	// forget、forget+stop 是 forget 或者停的那一步没做成，后面的没有做。
 	Action string `json:"action"`
 	// StartError 是启动命令没有成功时它说的；成功或者没跑时为空。
 	StartError string `json:"start_error"`
@@ -669,6 +709,44 @@ type tended struct {
 	Error string `json:"error"`
 	// HistoryNotes 是对账时发布历史那一边要说的：补不成、读不成，或者没有补。没有给历史时没有这一项。
 	HistoryNotes []string `json:"history_notes,omitempty"`
+	// 下面四项只在给了 --tend 或 --tend-pinned 时有（ADR-0024），不给时这一行与原来一字不差。
+	// Tended 是另外照看的服务动手之前的样子，TendedAfter 是动手之后的（没有动手、或者之后没看成时没有）。
+	// TendedWhy 说其中哪几个不是每个容器都在跑；都在跑时没有。Moved 是钉住的服务有了的、没记下的地址，"服务 地址"。
+	Tended      []tendedService `json:"tended,omitempty"`
+	TendedWhy   string          `json:"tended_why,omitempty"`
+	Moved       []string        `json:"moved,omitempty"`
+	TendedAfter []tendedService `json:"tended_after,omitempty"`
+}
+
+// tendedService 是另外照看的一个服务：Pinned 为真时网关经出口规则按名字连它。
+type tendedService struct {
+	Service    string          `json:"service"`
+	Pinned     bool            `json:"pinned"`
+	Containers []tendedReplica `json:"containers"`
+}
+
+// tendedReplica 是它的一个容器。Addresses 是它在这个项目的网络上的 IPv4 地址；没在跑的没有。
+type tendedReplica struct {
+	Name      string   `json:"name"`
+	Running   bool     `json:"running"`
+	State     string   `json:"state"`
+	Addresses []string `json:"addresses"`
+}
+
+func tendedServices(seen []domain.Service) []tendedService {
+	var described []tendedService
+	for _, s := range seen {
+		one := tendedService{Service: s.Name, Pinned: s.Pinned, Containers: []tendedReplica{}}
+		for _, r := range s.Replicas {
+			addresses := r.Addresses
+			if addresses == nil {
+				addresses = []string{}
+			}
+			one.Containers = append(one.Containers, tendedReplica{Name: r.Name, Running: r.Running, State: r.State, Addresses: addresses})
+		}
+		described = append(described, one)
+	}
+	return described
 }
 
 // members 的三个名字是 deploy/compose/compose.yml 里的服务名。
@@ -696,7 +774,9 @@ func describe(tending application.Tending, now time.Time) tended {
 	}
 	if tending.After != nil {
 		line.After = containers(*tending.After)
+		line.TendedAfter = tendedServices(tending.ServicesAfter)
 	}
+	line.Tended, line.TendedWhy, line.Moved = tendedServices(tending.Services), domain.Down(tending.Services), tending.Moved
 	switch {
 	case tending.Stopped && tending.Started:
 		line.Action = "stop+start"
@@ -704,6 +784,9 @@ func describe(tending application.Tending, now time.Time) tended {
 		line.Action = "start"
 	case tending.Stopped:
 		line.Action = "stop"
+	}
+	if tending.Forgot {
+		line.Action = strings.TrimSuffix("forget+"+line.Action, "+")
 	}
 	if tending.Reconciled != nil {
 		reconciled := report(*tending.Reconciled)

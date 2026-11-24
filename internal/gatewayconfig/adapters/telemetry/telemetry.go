@@ -54,11 +54,30 @@ type Metrics struct {
 	putBack      uint64
 	outcome      application.Outcome
 	reconciledAt time.Time
+
+	// 看守另外照看的服务（ADR-0024）。没有时下面这几样一样都不给出，给出来的与没有它们时一字不差。
+	tended  []string
+	pinned  map[string]bool
+	running map[string]bool
+	moved   int
+	repins  uint64
 }
 
 // New 返回一个还没有看过一眼的看守的指标。project 是它守着的 compose 项目，started 是它启动的时刻。
 func New(project string, pace application.Pace, started time.Time) *Metrics {
 	return &Metrics{project: project, pace: pace, started: started, lookedAt: started, condition: ConditionUnknown}
+}
+
+// Tend 让指标另外给出看守照看的这几个服务（--tend、--tend-pinned，ADR-0024）；pinned 是其中钉在网关出口规则里的。
+// 要在第一次 Observe 之前设。
+func (m *Metrics) Tend(services, pinned []string) *Metrics {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tended, m.pinned, m.running = append([]string(nil), services...), map[string]bool{}, map[string]bool{}
+	for _, name := range pinned {
+		m.pinned[name] = true
+	}
+	return m
 }
 
 // Observe 记下看守刚看完的这一眼。at 是看完的时刻。
@@ -88,6 +107,29 @@ func (m *Metrics) Observe(tending application.Tending, at time.Time) {
 		if tending.Reconciled.Replaced {
 			m.putBack++
 		}
+	}
+	if len(m.tended) == 0 {
+		return
+	}
+	// 与池的样子同一个取法：动过手的，是动手之后的；动过手之后没看成、或者这一眼没看成，一个都不算在跑。
+	seen := tending.Services
+	switch {
+	case tending.After != nil:
+		seen = tending.ServicesAfter
+	case tending.Acted(), tending.Err != nil:
+		seen = nil
+	}
+	m.running = map[string]bool{}
+	for _, service := range seen {
+		m.running[service.Name] = service.Running()
+	}
+	if tending.Forgot {
+		m.repins++
+	}
+	// 出口规则重新解析了、网关也停下了，那些地址从这时起就是记下的。
+	m.moved = len(tending.Moved)
+	if tending.Forgot && tending.Stopped {
+		m.moved = 0
 	}
 }
 
@@ -158,6 +200,21 @@ func (m *Metrics) Text() []byte {
 		"When the keeper last finished a reconcile, in seconds since the epoch; 0 until it has reconciled once.", reconciledAt)
 	one("idp_gateway_pool_snapshots_put_back_total", "counter",
 		"Times a reconcile by the keeper wrote the recorded snapshot back into the configuration directory.", count(m.putBack))
+	if len(m.tended) == 0 {
+		return b.Bytes()
+	}
+
+	family("idp_gateway_pool_tended_running", "gauge",
+		"1 when every container of this service the keeper tends besides the three (--tend, --tend-pinned) ran when the last look ended, 0 otherwise: "+
+			"one is not running, it has no container, or the keeper could not see it. pinned: the gateway reaches it by name through its egress rules.")
+	for _, name := range m.tended {
+		sample("idp_gateway_pool_tended_running", label("service", name)+","+label("pinned", strconv.FormatBool(m.pinned[name])), flag(m.running[name]))
+	}
+	one("idp_gateway_pool_unfollowed_addresses", "gauge",
+		"Addresses the pinned services had at the last look that the keeper had not recorded and has not yet made the gateway follow.", strconv.Itoa(m.moved))
+	one("idp_gateway_pool_repins_total", "counter",
+		"Times the keeper ran egress forget because a pinned service had an address it had not recorded; when that worked it then "+
+			"stopped the front proxy and the gateway and ran the command that starts the pool.", count(m.repins))
 	return b.Bytes()
 }
 

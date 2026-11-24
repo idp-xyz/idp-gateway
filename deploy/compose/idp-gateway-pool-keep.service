@@ -27,6 +27,15 @@
 # ${POOL_DIR}/history 要先建好（README.md 的"头一次安装"）；它不在、读不成时看守照常工作，只是不补历史，
 # 并在它的输出里说出来。--pool 是 compose.yml 的项目名（name:）。
 #
+# 叠加文件里的服务（gateway-authz、签名器、两个协调器）它默认不看。要它也照看，在 ExecStart 末尾加上
+# （docs/adr/ADR-0024.md，Proposed；README.md 的"看守"）：
+#
+#   --compose-file compose.yml --compose-file gateway-authz.yml --compose-file provider-signer.yml --compose-file coordinators.yml
+#   --tend-pinned gateway-authz --tend-pinned provider-signer --tend signer --tend sf-token-coordinator --tend authz-state
+#
+# 开机的单元跑的 docker compose 要用同一组文件，不然开机时起的和看守起的不是同一个池。名字不在这些文件里时
+# 看守不启动（退出码 2）。下面的 ExecStart 没有带这些参数；带着跑没有在 systemd 里试过。
+#
 # 这个单元没有在真机上跑过，见 README.md 的"没有验证的"。
 
 [Unit]

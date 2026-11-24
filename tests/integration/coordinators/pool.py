@@ -3,10 +3,18 @@
 and authz-state (ADR-0023). Not an acceptance pass: the three ADRs are Proposed and no formal gate is run here.
 
     tests/integration/gatekeeper/stack.sh up                                  the local Gatekeeper (this file does not start it)
-    .venv/bin/python tests/integration/coordinators/pool.py                   coordinators.yml, gateway-authz x2
+    .venv/bin/python tests/integration/coordinators/pool.py                   coordinators.yml, gateway-authz x2, then the keeper
     .venv/bin/python tests/integration/coordinators/pool.py --control no-coordinators
                                                                               the same two replicas without coordinators.yml
+    .venv/bin/python tests/integration/coordinators/pool.py --control keep-no-tend
+                                                                              the keeper without --tend / --tend-pinned (ADR-0024)
     tests/integration/gatekeeper/stack.sh down
+
+The KP cases (ADR-0024, Proposed) run gateway-control keep as a process on this host, the way tests/integration/compose/run.py
+runs it: not through systemd, with the project, compose files and env file of this suite's own docker compose calls. By default
+it is given --tend-pinned gateway-authz and provider-signer, --tend signer, sf-token-coordinator and authz-state; it starts after
+CO-07, so the CO cases run without it. While a case needs to see the pool broken, the suite holds the pool's lock as a
+publication does, and the keeper does not act until it lets go.
 
 The machinery is tests/integration/sfintl/pool.py, imported and used as it is (with its run.py, the rig, the stand-in image and
 its pool.yml), under a compose project of its own (PROJECT) on ports 27881-27895. The files laid over the pool are
@@ -21,7 +29,8 @@ network: the gateway's certificate for a decision, the revoker's for gateway-con
 token is compared by a hash prefix.
 """
 from __future__ import annotations
-import argparse, atexit, collections, datetime, importlib.util, json, os, secrets, shutil, socket, subprocess, sys, tempfile, time
+import argparse, atexit, collections, contextlib, datetime, fcntl, http.client, importlib.util, json, os, secrets, shutil, signal, socket, \
+    subprocess, sys, tempfile, threading, time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -38,10 +47,12 @@ SF_PROJECT = sp.PROJECT
 PROJECT = 'idp-gateway-coord-pool'
 NETWORK = f'{PROJECT}_default'
 CALLER = f'{PROJECT}-caller'
+PLACEHOLDER = f'{PROJECT}-address-holder'   # KP-03: holds a replica's old address for a moment
 # 27611-27623 rig, black-box, Gatekeeper, compose suite; 27630-27645 egressnet and the WanbExpress and sfintl pools;
 # 27651-27679, 27701-27709, 27721-27735 other suites; 27841-27875 the loopback suites ha/ and authzstate/.
 PORTS = tuple(range(27881, 27896))
 PORT = {'front': 27881, 'readback': 27882, 'staging': 27883, 'mock': 27884, 'signer': 27885}
+KEEPER_METRICS = 27886   # the keeper's --metrics-listen, on the loopback, in the KP cases only
 FRONT_IMAGE = 'public.ecr.aws/nginx/nginx-unprivileged:stable-alpine@sha256:c3fc8fa482be50ef709c6438eb1bc98d50dbfe5a9b48be90711b8814f4dfd701'
 AUTHZ_PORT = 9443
 LEASE_LEAF = ('sf-token-coordinator', 'sf-token-coordinator.idp.test', 'spiffe://idp.test/egress/sf-token-coordinator')
@@ -668,6 +679,370 @@ def control_cases(r: sf.Results, made: dict):
     r.check('gateway-control revoke: exit 3, NO_REVOKER_CONFIGURED', refused['code'] == 3 and (refused['json'] or {}).get('outcome') == 'NO_REVOKER_CONFIGURED')
 
 
+# ---- the keeper (ADR-0024) --------------------------------------------------------------------------------------------------
+KEEPERS: list = []   # stopped before the project is taken down: a keeper that runs starts again what is being taken down
+TENDED = ('--tend-pinned', 'gateway-authz', '--tend-pinned', 'provider-signer', '--tend', 'signer', '--tend', 'sf-token-coordinator',
+          '--tend', 'authz-state')
+TIMINGS: dict = {}
+
+
+class Keeper:
+    """gateway-control keep as a process on this host. Each JSON line it writes is kept with the moment it arrived (at, Unix time);
+    what it writes on stderr is kept in said. It looks every second; the rest is the defaults."""
+
+    def __init__(self, *extra: str):
+        self.lines, self.said = [], []
+        files = compose_files()[1::2]
+        command = [str(sp.WORK / 'bin/gateway-control'), 'keep', *sp.control_flags(), '--compose-project', PROJECT,
+                   '--compose-env-file', str(sp.WORK / 'pool.env'), *[a for f in files for a in ('--compose-file', f)],
+                   '--interval', '1s', '--metrics-listen', f'127.0.0.1:{KEEPER_METRICS}', *extra]
+        self.flags = list(extra)
+        if shutil.which('setpriv'):   # this script killed: the keeper dies with it instead of tending a pool nobody watches
+            command = ['setpriv', '--pdeathsig', 'KILL', *command]
+        # The environment of the suite's own docker compose calls (sfintl/pool.py's compose): none of the env file's names, and
+        # the stand-in's profile.
+        names = set(settings())
+        env = {k: v for k, v in sp.clean_env().items() if k not in names and not k.startswith('COMPOSE_')}
+        env['COMPOSE_PROFILES'] = 'standin'
+        self.started = time.time()
+        self.process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        KEEPERS.append(self)
+        self.readers = [threading.Thread(target=self._read, daemon=True), threading.Thread(target=self._listen, daemon=True)]
+        for reader in self.readers:
+            reader.start()
+
+    def _read(self):
+        for line in self.process.stdout:
+            try:
+                self.lines.append({'at': time.time(), **json.loads(line)})
+            except ValueError:
+                self.lines.append({'at': time.time(), 'unparsed': line[:300]})
+
+    def _listen(self):
+        for line in self.process.stderr:
+            self.said.append(line.rstrip())
+
+    def mark(self) -> int:
+        return len(self.lines)
+
+    def next(self, want, seconds: float, since: int = 0) -> dict:
+        found = wait_for(lambda: next((line for line in self.lines[since:] if want(line)), None), seconds, 0.1)
+        return found or {}
+
+    def acted_since(self, since: int) -> list:
+        return [line for line in self.lines[since:] if line.get('action')]
+
+    def stop(self, seconds: float = 200) -> int:
+        if self.process.poll() is None:
+            self.process.send_signal(signal.SIGTERM)
+        try:
+            code = self.process.wait(seconds)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            code = self.process.wait(30)
+        for reader in self.readers:
+            reader.join(5)
+        return code
+
+
+def brief(line: dict) -> dict:
+    """What matters in one line of the keeper: not the containers of the three, not the reconcile beyond its outcome."""
+    keep = ('condition', 'why', 'busy', 'action', 'repaired', 'start_error', 'retry_in_seconds', 'error', 'tended_why', 'moved')
+    found = {k: line.get(k) for k in keep if line.get(k) not in (None, '', [])}
+    found['reconcile'] = (line.get('reconcile') or {}).get('outcome')
+    found['tended'] = {s['service']: [[c['name'][-15:], c['running'], c['addresses']] for c in s['containers']] for s in line.get('tended') or []}
+    if line.get('tended_after'):
+        found['tended_after'] = {s['service']: [[c['name'][-15:], c['running'], c['addresses']] for c in s['containers']] for s in line['tended_after']}
+    if 'at' in line:
+        found['at'] = datetime.datetime.fromtimestamp(line['at'], datetime.timezone.utc).isoformat(timespec='milliseconds')
+    return found
+
+
+def keeper_metrics() -> dict:
+    """The keeper's metrics, name{labels} -> value; {} when nothing answers."""
+    try:
+        conn = http.client.HTTPConnection('127.0.0.1', KEEPER_METRICS, timeout=3)
+        conn.request('GET', '/metrics')
+        body = conn.getresponse().read().decode()
+        conn.close()
+    except OSError:
+        return {}
+    return {line.rpartition(' ')[0]: line.rpartition(' ')[2] for line in body.splitlines() if line and not line.startswith('#')}
+
+
+@contextlib.contextmanager
+def pool_held():
+    """Holds the pool as a publication does: an flock on the configuration directory's lock file (the one gateway-control takes).
+    The keeper looks, sees the pool busy and does nothing until it is let go. Waits out a reconcile that holds it at that moment."""
+    fd = os.open(sp.WORK / 'pool/config/.config.yaml.lock', os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        deadline = time.time() + 30
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.time() > deadline:
+                    raise
+                time.sleep(0.01)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def restart_elsewhere(x: dict) -> tuple[dict, str]:
+    """Restarts one replica onto another address, on purpose: the CO-07 situation (a replica restarted and came back elsewhere),
+    made certain. Docker hands a container the lowest free address of the network, so a plain restart mostly gets the same one
+    back (CO-02, CO-06, KP-01). Here: docker stop; a throwaway container (no compose label, so the keeper does not see it) takes the
+    address just freed; docker start, which has to give the replica another one; the throwaway goes, and the old address is left
+    to nobody. -> the replica as it is now, and the address the throwaway took.
+
+    Moving the replica while it runs (docker network disconnect, then connect with its aliases) was tried first and does give it
+    another address, but the replica itself then answered 503 REVOCATION_STATE_UNAVAILABLE to all 16 direct checks in the 60 s
+    it was watched: its connection to authz-state had been opened from the address it no longer has. That is not what the case
+    is about, so it is not used."""
+    before = listening(x)
+    docker('rm', '-f', PLACEHOLDER)
+    docker('stop', '-t', '5', x['id'], timeout=60)
+    docker('run', '-d', '--rm', '--name', PLACEHOLDER, '--network', NETWORK, '--user', '65534:65534', '--read-only', '--cap-drop', 'ALL',
+           '--security-opt', 'no-new-privileges:true', '--entrypoint', 'sleep', FRONT_IMAGE, '300')
+    taken = ((json.loads(docker('inspect', PLACEHOLDER).stdout or '[{}]')[0].get('NetworkSettings') or {}).get('Networks') or {}).get(NETWORK, {}).get('IPAddress', '')
+    docker('start', x['id'], timeout=60)
+    wait_for(lambda: listening(x) > before or not inspect(x['id']).get('running'), 40, 0.25)
+    docker('rm', '-f', PLACEHOLDER)
+    return inspect(x['id']), taken
+
+
+def queries(n: int, seconds: float = 3) -> tuple[list, list]:
+    """n blue queries through front, and the decisions found for each (an answer that no replica decided has none)."""
+    answers = [through(sf.QUERIES, query()) for _ in range(n)]
+    return answers, deciders(answers, seconds)
+
+
+def tally(answers: list, found: list) -> dict:
+    return {'HTTP status': dict(collections.Counter(str(a['status']) for a in answers)),
+            'decided by a replica': sum(1 for w in found if len(w) == 1), 'decided by none': sum(1 for w in found if not w)}
+
+
+def first_200(seconds: float) -> float | None:
+    """The moment (Unix time) a blue query through front was first answered 200 with apiResultCode 0, asking every 0.25 s;
+    None when it never was within seconds."""
+    began = time.time()
+    while time.time() - began < seconds:
+        if served(through(sf.QUERIES, query())):
+            return time.time()
+        time.sleep(0.25)
+    return None
+
+
+def since_(moment: float | None, start: float) -> float | None:
+    return round(moment - start, 2) if moment else None
+
+
+def front_open(seconds: float = 40) -> bool:
+    return bool(wait_for(lambda: sf.req('GET', sf.ORDERS, TOKENS['blue'])['status'] == 404, seconds, 0.25))
+
+
+def keeper_cases(r: sf.Results, tend: bool):
+    """KP-00 to KP-04 with --tend-pinned / --tend (after CO-07); with --control keep-no-tend, the same pool and a keeper without
+    them: what it does not do."""
+    label = '' if tend else 'control: '
+    sf.STATE['label'] = 'KP-00'
+    r.case('KP-00', f'{label}the keeper starts' + (' with --tend-pinned gateway-authz, provider-signer and --tend signer, sf-token-coordinator, authz-state: '
+                                                   'its first look records the pinned addresses and starts what is down (sf-token-coordinator, left stopped by CO-07)'
+                                                   if tend else ' without --tend: one line, the three are whole, nothing about the other services'))
+    keeper = Keeper(*(TENDED if tend else ()))
+    first = keeper.next(lambda line: True, 90)
+    r.note('first line', brief(first))
+    if tend:
+        r.check('the first line: the three are whole; it lists the five services; sf-token-coordinator has no running container (CO-07 stopped it)',
+                first.get('condition') == 'whole' and len(first.get('tended') or []) == 5 and 'sf-token-coordinator' in (first.get('tended_why') or ''))
+        r.check('its first look only records the addresses: no "moved", no forget', not first.get('moved') and not (first.get('action') or '').startswith('forget'))
+        r.check('it ran the start command for sf-token-coordinator and everything was running after it (action start, repaired)',
+                first.get('action') == 'start' and first.get('repaired') is True and not first.get('start_error'))
+        r.check('sf-token-coordinator listens again and its check says healthy', bool(wait_for(lambda: service('sf-token-coordinator').get('health') == 'healthy', 30, 0.5)))
+        r.check('a blue query through front: HTTP 200, apiResultCode 0', served(through(sf.QUERIES, query())))
+        TIMINGS['KP-00 keeper start to its first line (s)'] = round(first.get('at', 0) - keeper.started, 2)
+    else:
+        r.check('the first line: the three are whole, no action, and nothing about other services in it',
+                first.get('condition') == 'whole' and not first.get('action') and not any(k in first for k in ('tended', 'tended_why', 'moved', 'tended_after')))
+    pins = sp.pinned('egress').get('gateway-authz:9443') or []
+    r.note('pinned gateway-authz:9443 and the replicas now', {'pinned': pins, 'replicas': sorted(x['ip'] for x in replicas())})
+
+    sf.STATE['label'] = 'KP-01'
+    r.case('KP-01', f'{label}one gateway-authz replica killed: ' + ('the keeper starts it again; requests through front are 200 again'
+                                                                   if tend else 'the keeper does not start it; it stays dead'))
+    reps = replicas()
+    victim = reps[1]
+    before, mark, since = listening(victim), keeper.mark(), time.time()
+    docker('kill', victim['id'])
+    if tend:
+        back = keeper.next(lambda line: line.get('action'), 40, mark)
+        r.note('the keeper\'s line', brief(back))
+        r.check(f"the keeper's line names {victim['name'][-15:]} as not running and its action is start; everything ran after it",
+                back.get('action') == 'start' and victim['name'] in (back.get('tended_why') or '') and back.get('repaired') is True)
+        came = wait_for(lambda: listening(victim) > before, 40, 0.25)
+        came_at = time.time()
+        now = inspect(victim['id'])
+        r.note('the replica', {'address before': victim['ip'], 'address after': now.get('ip')})
+        r.check('the replica runs again and logged a new "gateway-authz listening"', bool(came) and now.get('running') is True)
+        if now.get('ip') != victim['ip']:
+            repinned = keeper.next(lambda line: (line.get('action') or '').startswith('forget'), 40, mark)
+            r.note('it came back on another address; the keeper\'s line for that', brief(repinned))
+            r.check('the keeper made the gateway follow the new address (forget+stop+start, repaired)',
+                    repinned.get('action') == 'forget+stop+start' and repinned.get('repaired') is True)
+            front_open()
+        answers, found = queries(6)
+        TIMINGS['KP-01 kill to the keeper\'s start line (s)'] = since_(back.get('at'), since)
+        TIMINGS['KP-01 kill to the replica listening again (s)'] = since_(came_at if came else None, since)
+        TIMINGS['KP-01 kill to 6 of 6 decided by a replica (s)'] = since_(time.time() if all(len(w) == 1 for w in found) else None, since)
+        r.note('6 queries through front afterwards', tally(answers, found))
+        r.check('6 blue queries through front: all HTTP 200, each decided by one replica', all(served(a) for a in answers) and all(len(w) == 1 for w in found))
+        RESTARTS.append({'replica': victim['name'], 'address before': victim['ip'], 'address after': now.get('ip'), 'case': 'KP-01 (by the keeper)'})
+    else:
+        time.sleep(10)
+        now = inspect(victim['id'])
+        answers, found = queries(6)
+        r.note('after 10 s (10 looks)', {'replica': {'running': now.get('running'), 'exit': now.get('exit')}, 'queries': tally(answers, found),
+                                          'keeper lines since': [brief(x) for x in keeper.lines[mark:]]})
+        r.check('after 10 s the replica is still not running (exit 137): the keeper did not start it', now.get('running') is False and now.get('exit') == 137)
+        r.check('the keeper wrote no line with an action', not keeper.acted_since(mark))
+        with pool_held():   # the suite brings it back; the keeper must not take the gateway restart below for a crash
+            docker('start', victim['id'])
+            wait_for(lambda: listening(victim) > before, 40, 0.25)
+            RESTARTS.append({'replica': victim['name'], 'address before': victim['ip'], 'address after': inspect(victim['id']).get('ip'), 'case': 'KP-01 (by the suite)'})
+            follow_addresses(r, 'KP-01 control: the suite started the replica')
+
+    sf.STATE['label'] = 'KP-02'
+    r.case('KP-02', f'{label}authz-state killed: 503 meanwhile (fail closed); ' + ('the keeper starts it again once the pool is free; then 200'
+                                                                                 if tend else 'the keeper does not start it'))
+    mark = keeper.mark()
+    if tend:
+        with pool_held():
+            docker('kill', service('authz-state')['id'])
+            answers, found = queries(4)
+            busy = keeper.next(lambda line: line.get('busy') and 'authz-state' in (line.get('tended_why') or ''), 20, mark)
+            r.note('4 queries while it is down and the pool is held', shown(answers, found))
+            r.note('the keeper\'s line while the pool is held', brief(busy))
+            r.check('4 blue queries through front: all 503, each decided REVOCATION_STATE_UNAVAILABLE by a replica',
+                    all(a['status'] == 503 for a in answers) and all(len(w) == 1 and w[0]['reason'] == 'REVOCATION_STATE_UNAVAILABLE' for w in found))
+            r.check('the keeper saw authz-state not running and the pool busy, and did nothing', bool(busy) and not keeper.acted_since(mark))
+            released, mark = time.time(), keeper.mark()
+        back = keeper.next(lambda line: line.get('action'), 60, mark)
+        seconds = first_200(60)
+        r.note('the keeper\'s line once the pool was free', brief(back))
+        r.check('then the keeper ran the start command: action start, repaired, authz-state running in tended_after',
+                back.get('action') == 'start' and back.get('repaired') is True and all(c['running'] for s in back.get('tended_after') or [] for c in s['containers']))
+        r.check('authz-state is running and healthy; a blue query through front is 200 again', service('authz-state').get('health') == 'healthy' and seconds is not None)
+        TIMINGS['KP-02 pool let go to the keeper\'s start line (s)'] = since_(back.get('at'), released)
+        TIMINGS['KP-02 pool let go to the first 200 (s)'] = since_(seconds, released)
+        answers, found = queries(4)
+        r.check('4 more blue queries through front: all 200', all(served(a) for a in answers))
+    else:
+        docker('kill', service('authz-state')['id'])
+        answers, found = queries(4)
+        r.check('4 blue queries through front: all 503 (REVOCATION_STATE_UNAVAILABLE)', all(a['status'] == 503 for a in answers))
+        time.sleep(10)
+        r.check('after 10 s authz-state is still not running: the keeper did not start it', service('authz-state').get('running') is False)
+        r.check('the keeper wrote no line with an action', not keeper.acted_since(mark))
+        r.check('the suite starts authz-state again (healthy)', start_coordinator('authz-state'))
+        r.check('a blue query through front is 200 again', first_200(30) is not None)
+
+    if tend:
+        sf.STATE['label'] = 'KP-04'
+        r.case('KP-04', 'the signer process killed (provider-signer, its namespace, left running): the keeper starts it again; queries are 200 again')
+        mark, since = keeper.mark(), time.time()
+        docker('kill', service('signer')['id'])
+        back = keeper.next(lambda line: line.get('action'), 40, mark)
+        seconds = first_200(40)
+        r.note('the keeper\'s line', brief(back))
+        r.check('the keeper ran the start command for signer: action start, repaired', back.get('action') == 'start' and back.get('repaired') is True
+                and 'signer' in (back.get('tended_why') or ''))
+        r.check('signer runs again; a blue query through front is 200 again', service('signer').get('running') is True and seconds is not None)
+        TIMINGS['KP-04 kill to the keeper\'s start line (s)'] = since_(back.get('at'), since)
+        TIMINGS['KP-04 kill to the first 200 (s)'] = since_(seconds, since)
+
+    sf.STATE['label'] = 'KP-03'
+    r.case('KP-03', f'{label}a gateway-authz replica restarted onto another address: part of the traffic is 503; ' +
+           ('the keeper runs egress forget and restarts the front proxy and the gateway; then every request is decided by a replica'
+            if tend else 'the keeper does nothing; the new address stays unreachable'))
+    target = replicas()[0]
+    repins = keeper_metrics().get('idp_gateway_pool_repins_total')
+    mark = keeper.mark()
+    held = pool_held() if tend else contextlib.nullcontext()
+    with held:
+        moved, taken = restart_elsewhere(target)
+        RESTARTS.append({'replica': target['name'], 'address before': target['ip'], 'address after': moved.get('ip'), 'case': 'KP-03 (by the suite)'})
+        warm: list = []
+
+        def answers_directly() -> bool:
+            got = direct([check(moved, 'blue')])[0]
+            warm.append(got.get('status') or got.get('error', '')[:60])
+            return allowed(got)
+
+        warmed = wait_for(answers_directly, 30, 1) if moved.get('ip') else None
+        r.note('direct checks on the restarted replica until it answered 200', warm)
+        resolved = sp.from_namespace('netns', sp.RESOLVE, 'gateway-authz').get('gateway-authz')
+        pins = sp.pinned('egress').get('gateway-authz:9443') or []
+        answers, found = queries(6)
+        r.note('the replica', {'name': target['name'][-15:], 'address before': target['ip'], 'address after': moved.get('ip'),
+                               'the throwaway container held meanwhile': taken})
+        r.note('from the gateway\'s namespace gateway-authz resolves to', resolved)
+        r.note('pinned gateway-authz:9443', pins)
+        r.note('6 queries through front', tally(answers, found))
+        r.note('...each of them', shown(answers, found))
+        r.check('the replica runs again, on another address (the throwaway container held the old one while it started)',
+                moved.get('running') is True and moved.get('ip') not in ('', None, target['ip']))
+        r.check('asked directly on its new address, the replica answers 200', bool(warmed))
+        r.check('the name gateway-authz resolves to the new address; the gateway\'s rules do not pin it', moved.get('ip') in (resolved or []) and moved.get('ip') not in pins)
+        r.check('of 6 blue queries through front, some were decided by no replica (the gateway answered 503 itself: fail closed)',
+                any(not w for w in found) and all(a['status'] == 503 for a, w in zip(answers, found) if not w))
+        if tend:
+            busy = keeper.next(lambda line: line.get('busy') and line.get('moved'), 20, mark)
+            r.note('the keeper\'s line while the pool is held', brief(busy))
+            r.check('the keeper saw the new address ("moved") and the pool busy, and did nothing',
+                    (busy.get('moved') or []) == [f"gateway-authz {moved.get('ip')}"] and not keeper.acted_since(mark))
+            released, mark = time.time(), keeper.mark()
+    if tend:
+        followed = keeper.next(lambda line: line.get('action'), 120, mark)
+        opened = front_open(60)
+        opened_at = time.time()
+        r.note('the keeper\'s line once the pool was free', brief(followed))
+        r.check('the keeper: action forget+stop+start, moved is the new address, repaired, the reconcile IN_SYNC',
+                followed.get('action') == 'forget+stop+start' and (followed.get('moved') or []) == [f"gateway-authz {moved.get('ip')}"]
+                and followed.get('repaired') is True and (followed.get('reconcile') or {}).get('outcome') == 'IN_SYNC')
+        after = (followed.get('after') or {}).get('agentgateway', {}).get('started'), (followed.get('pool') or {}).get('agentgateway', {}).get('started')
+        r.check('the gateway and front were started again; netns was not', after[0] != after[1] and
+                (followed.get('after') or {}).get('netns') == (followed.get('pool') or {}).get('netns'))
+        pinned_now, ips = sp.pinned('egress').get('gateway-authz:9443') or [], sorted(x['ip'] for x in replicas())
+        r.check('the gateway\'s rules now pin the addresses the replicas have', set(ips) <= set(pinned_now))
+        answers, found = queries(6, 6)
+        r.note('6 queries through front afterwards', {**tally(answers, found), 'per replica': per_replica(found)})
+        r.note('...each of them afterwards', shown(answers, found))
+        r.check('front is open again, and 6 of 6 blue queries through front were decided by a replica, all 200', opened and all(len(w) == 1 for w in found)
+                and all(served(a) for a in answers))
+        metrics = keeper_metrics()
+        r.note('the keeper\'s metrics', {k: v for k, v in metrics.items() if 'tended' in k or 'repins' in k or 'unfollowed' in k})
+        r.check('the keeper\'s repins_total went up by one, and no address is left unfollowed',
+                int(metrics.get('idp_gateway_pool_repins_total') or 0) == int(repins or 0) + 1 and metrics.get('idp_gateway_pool_unfollowed_addresses') == '0')
+        TIMINGS['KP-03 pool let go to the keeper\'s line (forget, stop, up -d done) (s)'] = since_(followed.get('at'), released)
+        TIMINGS['KP-03 pool let go to front open again (s)'] = since_(opened_at if opened else None, released)
+        TIMINGS['KP-03 pool let go to 6 of 6 decided by a replica (s)'] = since_(time.time() if all(len(w) == 1 for w in found) else None, released)
+        FORGETS.append({'why': 'KP-03, by the keeper', 'line': brief(followed)})
+    else:
+        time.sleep(10)
+        again, found_again = queries(6)
+        r.note('after 10 s (10 looks): 6 more queries through front', tally(again, found_again))
+        r.note('keeper lines since', [brief(x) for x in keeper.lines[mark:]])
+        r.check('the keeper wrote no line with an action', not keeper.acted_since(mark))
+        r.check('after 10 s some of 6 more queries were still decided by no replica (503), and the rules still do not pin the new address',
+                any(not w for w in found_again) and moved.get('ip') not in (sp.pinned('egress').get('gateway-authz:9443') or []))
+    stopped = keeper.stop()
+    r.note('the keeper stopped', {'exit': stopped, 'stderr': keeper.said[-3:]})
+    r.check('the keeper, told to stop (SIGTERM), exits 0 and said nothing on stderr', stopped == 0 and not keeper.said)
+
+
 # ---- the run ----------------------------------------------------------------------------------------------------------------
 def my_containers() -> list:
     return docker('ps', '-a', '-q', '--filter', f'label=com.docker.compose.project={PROJECT}').stdout.split()
@@ -676,6 +1051,12 @@ def my_containers() -> list:
 def teardown():
     if sp.WORK is None or os.environ.get('COORD_POOL_KEEP'):
         return
+    for keeper in KEEPERS:   # first the keeper, then the pool it tends
+        try:
+            keeper.stop(seconds=200)
+        except Exception:
+            pass
+    docker('rm', '-f', PLACEHOLDER, CALLER)   # not the project's, but on its network: the network cannot go while they are there
     try:
         if (sp.WORK / 'pool.env').exists():
             compose('down', '--volumes', '--remove-orphans', '--timeout', '5')
@@ -703,6 +1084,9 @@ def logs_of() -> dict:
     if COORDINATED:
         found['sf-token-coordinator log'] = text('sf-token-coordinator')
         found['authz-state log'] = text('authz-state')
+    if KEEPERS:
+        found['keeper output'] = '\n'.join(json.dumps(line) for keeper in KEEPERS for line in keeper.lines) + '\n' + \
+            '\n'.join(said for keeper in KEEPERS for said in keeper.said)
     return found
 
 
@@ -719,9 +1103,10 @@ def ports_in_use() -> list:
 def main() -> int:
     global COORDINATED, STANDIN_IMAGE
     parser = argparse.ArgumentParser(description='two gateway-authz replicas with the Phase 2 coordinators, on the single-host pool; not an acceptance pass')
-    parser.add_argument('--control', choices=['no-coordinators'], help='the same two replicas without coordinators.yml')
+    parser.add_argument('--control', choices=['no-coordinators', 'keep-no-tend'],
+                        help='no-coordinators: the same two replicas without coordinators.yml; keep-no-tend: the KP cases with a keeper given no --tend')
     args = parser.parse_args()
-    COORDINATED = args.control is None
+    COORDINATED = args.control != 'no-coordinators'
     if ports_in_use():
         die(f'ports in use: {ports_in_use()} (this suite needs 27881-27895)')
     if my_containers():
@@ -762,7 +1147,7 @@ def run(args, made: dict, reported: dict) -> int:
     sp.put(sp.WORK / 'authz/rate-limits.json', json.dumps(RATE_LIMITS), 0o600)
     sp.build('./cmd/sf-token-coordinator', 'sf-token-coordinator')
     sp.build('./cmd/authz-state', 'authz-state')
-    mode = 'control: no-coordinators' if args.control else 'coordinators.yml'
+    mode = f'control: {args.control}' if args.control else 'coordinators.yml, then the keeper with --tend'
     say(f'pool {PROJECT} in {sp.WORK} ({mode}); not an acceptance pass')
     stood = compose('up', '-d', 'sfintl-standin', timeout=180)
     if stood.returncode != 0 or not wait_for(lambda: sp.container('sfintl-standin').get('running') and sp.container('sfintl-standin').get('ip'), 30):
@@ -812,7 +1197,13 @@ def run(args, made: dict, reported: dict) -> int:
     started_at = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')
     failure: BaseException | None = None
     try:
-        (control_cases if args.control else default_cases)(results, made)
+        if args.control == 'no-coordinators':
+            control_cases(results, made)
+        elif args.control == 'keep-no-tend':
+            keeper_cases(results, False)
+        else:
+            default_cases(results, made)
+            keeper_cases(results, True)
     except BaseException as caught:
         failure = caught
     finally:
@@ -830,11 +1221,12 @@ def run(args, made: dict, reported: dict) -> int:
               'gatekeeper_commit': subprocess.run(['git', '-C', os.environ.get('GK_SRC', str(Path.home() / '.local/src/idp-gatekeeper')), 'rev-parse', '--short', 'HEAD'],
                                                   capture_output=True, text=True).stdout.strip(),
               'replica_restarts': RESTARTS, 'egress_forget': FORGETS, 'coordinator_health_check_lines': health_lines,
-              'calls': len(sf.CALLS), 'cases': results.cases}
+              'keeper': {'flags': [k.flags for k in KEEPERS], 'timings': TIMINGS}, 'calls': len(sf.CALLS), 'cases': results.cases}
     if failure is not None:
         record['aborted'] = f'{type(failure).__name__}: {failure}'
     scanned, looked_for = sf.scan(made, state, json.dumps(record, ensure_ascii=False), False, logs_of())
-    results.case('CO-08' if not args.control else 'CTL-04', 'the logs (gateway, both replicas, signer, coordinators), this run\'s output and the record hold none of this run\'s secrets')
+    results.case({'no-coordinators': 'CTL-04', 'keep-no-tend': 'KP-05'}.get(args.control, 'CO-08'),
+                 'the logs (gateway, both replicas, signer, coordinators), the keeper\'s output, this run\'s output and the record hold none of this run\'s secrets')
     for where, found in scanned.items():
         results.check(f'{where}: none of the {len(looked_for)} secrets of this run, and no value of the carrier\'s authorization scheme',
                       not found['secret found'] and not found['Sf-OpenApi value found'])
@@ -845,11 +1237,14 @@ def run(args, made: dict, reported: dict) -> int:
     results.check('no network or volume of the project', not docker('network', 'ls', '-q', '--filter', mine).stdout.split()
                   and not docker('volume', 'ls', '-q', '--filter', mine).stdout.split())
     results.check('ports 27881-27895 are free', not ports_in_use())
-    results.check('no probe, caller or staging container left', all(docker('inspect', name).returncode != 0 for name in (sp.PROBE, sp.SCRATCH, CALLER)))
+    results.check('no probe, caller, address holder or staging container left',
+                  all(docker('inspect', name).returncode != 0 for name in (sp.PROBE, sp.SCRATCH, CALLER, PLACEHOLDER)))
     say(f'\nagentgateway {reported["version"]}; {mode}; repository {record["repository_head"]}; Gatekeeper {record["gatekeeper_commit"]}')
     say(f'started {started_at}, finished {record["finished_at"]}; coordinator health-check lines: {health_lines}')
     say('replica restarts (address before -> after): ' + '; '.join(f"{x['case']} {x['replica'][-15:]} {x['address before']} -> {x['address after']}" for x in RESTARTS))
     say(f'egress forget + gateway restart needed: {len(FORGETS)}')
+    if TIMINGS:
+        say('keeper timings: ' + json.dumps(TIMINGS, ensure_ascii=False))
     results.report()
     failed = results.failed()
     checks = sum(1 for case in results.cases for item in case['checks'] if item['ok'])

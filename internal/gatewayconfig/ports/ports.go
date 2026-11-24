@@ -1,5 +1,5 @@
 // Package ports 是配置发布对外部的要求：发布之前在哪里试着加载一份快照，快照怎么送到一个池的
-// 网关那里，网关在跑什么从哪里读，网关进程怎么重启，池的容器死了怎么起回来。
+// 网关那里，网关在跑什么从哪里读，网关进程怎么重启，池的容器死了怎么起回来，池里另外照看的服务怎么看。
 //
 // 这几样都是对着一个池说的。平台不同，实现不同；第一期是单机上的 docker compose
 // （docs/adr/ADR-0010.md 第 10 条）。
@@ -77,6 +77,17 @@ type Pool interface {
 	// StopDependents 停下接在网络命名空间里的两个容器：前置代理先停，然后是网关。
 	// 占着命名空间的那个它不动。开始之后不随 ctx 取消。
 	StopDependents(ctx context.Context) error
+}
+
+// Others 是单机上一个池里另外几个常驻的服务：叠加文件里的 gateway-authz、签名器、两个协调器那样的
+// （docs/adr/ADR-0024.md）。它们死了，看守跑的也是 Pool.Start；其中网关经出口规则按名字连的那几个换了地址，
+// 看守让出口规则重新解析，再让网关重新起来。
+type Others interface {
+	// Services 报告这几个服务各自的每个容器此刻的样子，按给的先后。docker compose run 临时起的不算。
+	Services(ctx context.Context, names []string) ([]domain.Service, error)
+	// Forget 让网关所在的网络命名空间里的出口规则丢掉钉住的每一个地址，按现在的解析重新钉一遍。
+	// 在跑着的网关不跟着变：它还连它记着的地址。开始之后不随 ctx 取消。
+	Forget(ctx context.Context) error
 }
 
 // ErrImageRecreate 表示换镜像时，变量文件里的 GATEWAY_IMAGE 已经整份写好，

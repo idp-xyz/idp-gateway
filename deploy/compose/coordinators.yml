@@ -30,7 +30,8 @@
 # coordinator's own port from inside its container (nc -z of the shell image's busybox): the process is listening, nothing more.
 # Every check leaves one "TLS handshake error ... EOF" line in that coordinator's log. It is tried every second while the
 # coordinator starts (start_interval) and once an hour after that (interval): it is there for the order at start, not to watch.
-# docker start and docker restart do not read depends_on, and neither does the keeper.
+# docker start and docker restart do not read depends_on. The keeper looks at these services only when it is given --tend
+# (docs/adr/ADR-0024.md, Proposed); then it runs docker compose up -d, which does.
 #
 # gateway-authz's command is repeated here in full, as provider-signer.yml has it, then the arguments this file adds. Compose
 # replaces a command list; it does not append. Added: --revocations and --revoker-identity (the --authz-state-* arguments need
