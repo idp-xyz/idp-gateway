@@ -1,0 +1,1602 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light">
+  <title>IDP Gateway 完整生产发布与跨系统对接实施计划（D3 → D4）</title>
+  <style>
+    :root {
+      --bg-page: #f7f8fa;
+      --bg-surface: #ffffff;
+      --bg-subtle: #f1f5f9;
+      --bg-code: #0f172a;
+      --ink-primary: #0f172a;
+      --ink-body: #334155;
+      --ink-muted: #64748b;
+      --border-hairline: #e2e8f0;
+      --border-strong: #cbd5e1;
+
+      /* Semantic Engineering Palette */
+      --fabric: #4338ca;
+      --fabric-bg: #eef2ff;
+      --fabric-border: #c7d2fe;
+
+      --gk: #0f766e;
+      --gk-bg: #f0fdfa;
+      --gk-border: #99f6e4;
+
+      --gw: #1d4ed8;
+      --gw-bg: #eff6ff;
+      --gw-border: #bfdbfe;
+
+      --ops: #b45309;
+      --ops-bg: #fffbeb;
+      --ops-border: #fde68a;
+
+      --danger: #b91c1c;
+      --danger-bg: #fef2f2;
+      --danger-border: #fecaca;
+
+      --ok: #15803d;
+      --ok-bg: #f0fdf4;
+      --ok-border: #bbf7d0;
+
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 14px;
+      --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+
+      --font-sans: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-mono: "JetBrains Mono", "Cascadia Code", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html { scroll-behavior: smooth; font-size: 16px; }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    body {
+      margin: 0;
+      font-family: var(--font-sans);
+      color: var(--ink-body);
+      background: var(--bg-page);
+      line-height: 1.72;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .skip-link {
+      position: absolute;
+      top: -100px;
+      left: 16px;
+      z-index: 1000;
+      padding: 8px 14px;
+      background: var(--ink-primary);
+      color: #ffffff;
+      border-radius: var(--radius-sm);
+      text-decoration: none;
+      font-size: 0.875rem;
+      font-weight: 600;
+    }
+    .skip-link:focus { top: 12px; }
+
+    /* Masthead */
+    .masthead {
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 52%, #134e4a 100%);
+      color: #f8fafc;
+      border-bottom: 3px solid var(--gk);
+      padding: 2.65rem 1.5rem 2.2rem;
+    }
+    .masthead-inner { max-width: 1240px; margin: 0 auto; }
+
+    .doc-kicker {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.55rem;
+      font-family: var(--font-mono);
+      font-size: 0.77rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #99f6e4;
+      margin-bottom: 0.85rem;
+    }
+    .doc-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.18rem 0.6rem;
+      border-radius: 999px;
+      font-size: 0.73rem;
+      font-weight: 600;
+      background: rgba(148, 163, 184, 0.18);
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      color: #e2e8f0;
+    }
+    .doc-badge--warn {
+      background: rgba(245, 158, 11, 0.18);
+      border-color: rgba(251, 191, 36, 0.45);
+      color: #fde68a;
+    }
+    .doc-badge--danger {
+      background: rgba(220, 38, 38, 0.22);
+      border-color: rgba(248, 113, 113, 0.5);
+      color: #fecaca;
+    }
+
+    .masthead h1 {
+      margin: 0 0 0.6rem;
+      font-size: clamp(1.62rem, 3vw, 2.3rem);
+      font-weight: 700;
+      line-height: 1.25;
+      letter-spacing: -0.015em;
+      color: #ffffff;
+    }
+    .masthead-subtitle {
+      margin: 0 0 1.45rem;
+      font-size: 0.98rem;
+      color: #cbd5e1;
+      max-width: 880px;
+      line-height: 1.62;
+    }
+
+    .meta-strip {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 0.8rem;
+      padding-top: 1.1rem;
+      border-top: 1px solid rgba(148, 163, 184, 0.24);
+    }
+    .meta-item { display: flex; flex-direction: column; gap: 0.16rem; }
+    .meta-label {
+      font-size: 0.71rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #94a3b8;
+      font-family: var(--font-mono);
+    }
+    .meta-value { font-size: 0.86rem; color: #f1f5f9; font-weight: 500; }
+    .meta-value code {
+      color: #99f6e4;
+      background: rgba(15, 23, 42, 0.52);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      padding: 0.06rem 0.34rem;
+      border-radius: 4px;
+      font-size: 0.8rem;
+    }
+
+    /* Layout & Sticky TOC */
+    .layout {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 4rem;
+      display: grid;
+      grid-template-columns: 254px minmax(0, 1fr);
+      gap: 2rem;
+      align-items: start;
+    }
+
+    .toc {
+      position: sticky;
+      top: 1.25rem;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-md);
+      padding: 1.1rem 1rem;
+      box-shadow: var(--shadow-sm);
+    }
+    .toc-title {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--ink-muted);
+      margin: 0 0 0.75rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid var(--border-hairline);
+    }
+    .toc ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.2rem; }
+    .toc a {
+      display: flex;
+      align-items: baseline;
+      gap: 0.45rem;
+      padding: 0.42rem 0.55rem;
+      border-radius: var(--radius-sm);
+      color: var(--ink-body);
+      text-decoration: none;
+      font-size: 0.83rem;
+      line-height: 1.4;
+      border-left: 2px solid transparent;
+      transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    }
+    .toc a:hover, .toc a:focus-visible { background: var(--bg-subtle); color: var(--ink-primary); outline: none; }
+    .toc a.is-active { background: var(--gk-bg); color: var(--gk); border-left-color: var(--gk); font-weight: 600; }
+    .toc-num { font-family: var(--font-mono); font-size: 0.74rem; color: var(--ink-muted); flex-shrink: 0; }
+
+    .toc-legend {
+      margin-top: 1rem;
+      padding-top: 0.85rem;
+      border-top: 1px solid var(--border-hairline);
+      display: grid;
+      gap: 0.36rem;
+    }
+    .legend-row { display: flex; align-items: center; gap: 0.45rem; font-size: 0.75rem; color: var(--ink-muted); }
+    .swatch { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+
+    /* Sections */
+    main { min-width: 0; display: flex; flex-direction: column; gap: 1.75rem; }
+
+    .section-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-lg);
+      padding: 1.85rem 2rem;
+      box-shadow: var(--shadow-sm);
+      scroll-margin-top: 1.25rem;
+    }
+    .section-header {
+      display: flex;
+      align-items: baseline;
+      gap: 0.7rem;
+      margin-bottom: 1.1rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--border-hairline);
+    }
+    .section-num {
+      font-family: var(--font-mono);
+      font-size: 0.84rem;
+      font-weight: 700;
+      color: var(--gk);
+      background: var(--gk-bg);
+      border: 1px solid var(--gk-border);
+      padding: 0.14rem 0.5rem;
+      border-radius: var(--radius-sm);
+      flex-shrink: 0;
+    }
+
+    h2 { margin: 0; font-size: 1.3rem; font-weight: 700; color: var(--ink-primary); line-height: 1.35; }
+    h3 { margin: 1.45rem 0 0.65rem; font-size: 1.02rem; font-weight: 700; color: var(--ink-primary); }
+    p { margin: 0 0 0.9rem; }
+    p:last-child { margin-bottom: 0; }
+
+    code {
+      font-family: var(--font-mono);
+      font-size: 0.83em;
+      background: var(--bg-subtle);
+      color: #0f172a;
+      padding: 0.1rem 0.36rem;
+      border-radius: 4px;
+      border: 1px solid #e2e8f0;
+      word-break: break-word;
+    }
+
+    /* Callouts & KPI / Decision Cards */
+    .abstract-box {
+      background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+      border-left: 4px solid var(--gk);
+      border-radius: 0 var(--radius-md) var(--radius-md) 0;
+      padding: 1.15rem 1.3rem;
+      margin-bottom: 1.3rem;
+    }
+    .abstract-box strong { color: var(--ink-primary); }
+
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
+      gap: 0.85rem;
+      margin: 1.2rem 0;
+    }
+    .kpi-card {
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-md);
+      padding: 0.9rem 1rem;
+      background: #ffffff;
+    }
+    .kpi-label { font-size: 0.75rem; font-weight: 700; color: var(--ink-muted); margin-bottom: 0.3rem; }
+    .kpi-val { font-family: var(--font-mono); font-size: 1.22rem; font-weight: 700; color: var(--ink-primary); line-height: 1.25; }
+    .kpi-val--ok { color: var(--ok); }
+    .kpi-val--warn { color: var(--ops); }
+    .kpi-val--danger { color: var(--danger); }
+    .kpi-sub { font-size: 0.77rem; color: var(--ink-muted); margin-top: 0.3rem; line-height: 1.45; }
+
+    .decision-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 1rem;
+      margin: 1.15rem 0;
+    }
+    .decision-card {
+      border: 1px solid var(--border-hairline);
+      border-top: 3px solid var(--fabric);
+      border-radius: var(--radius-md);
+      padding: 1.05rem 1.1rem;
+      background: #ffffff;
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+    }
+    .decision-card--gk { border-top-color: var(--gk); }
+    .decision-card--gw { border-top-color: var(--gw); }
+    .decision-kicker {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 700;
+      color: var(--ink-muted);
+      text-transform: uppercase;
+    }
+    .decision-title { margin: 0; font-size: 0.96rem; font-weight: 700; color: var(--ink-primary); }
+    .decision-body { margin: 0; font-size: 0.85rem; color: var(--ink-body); line-height: 1.58; }
+    .decision-rec {
+      margin-top: auto;
+      padding: 0.55rem 0.7rem;
+      border-radius: var(--radius-sm);
+      background: var(--bg-subtle);
+      font-size: 0.8rem;
+      color: var(--ink-primary);
+      line-height: 1.5;
+    }
+
+    /* Figures & SVGs */
+    figure.diagram {
+      margin: 1.35rem 0;
+      background: #fbfcfe;
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+    }
+    .diagram-canvas { padding: 1rem; overflow-x: auto; background: #ffffff; }
+    .diagram-canvas svg { display: block; width: 100%; height: auto; min-width: 700px; }
+    figure.diagram figcaption {
+      padding: 0.75rem 1.1rem;
+      background: var(--bg-subtle);
+      border-top: 1px solid var(--border-hairline);
+      font-size: 0.83rem;
+      color: var(--ink-body);
+      line-height: 1.55;
+    }
+    figure.diagram figcaption strong { color: var(--ink-primary); }
+
+    /* Tables */
+    .table-wrap {
+      overflow-x: auto;
+      margin: 1.1rem 0;
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-md);
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; text-align: left; background: #ffffff; }
+    thead th {
+      background: #f8fafc;
+      color: var(--ink-primary);
+      font-weight: 700;
+      padding: 0.7rem 0.85rem;
+      border-bottom: 2px solid var(--border-strong);
+      white-space: nowrap;
+    }
+    tbody td {
+      padding: 0.68rem 0.85rem;
+      border-bottom: 1px solid var(--border-hairline);
+      vertical-align: top;
+      line-height: 1.55;
+    }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr:hover { background: #f8fafc; }
+
+    /* Pills */
+    .pill {
+      display: inline-block;
+      padding: 0.13rem 0.5rem;
+      border-radius: 999px;
+      font-size: 0.73rem;
+      font-weight: 600;
+      line-height: 1.4;
+      white-space: nowrap;
+    }
+    .pill--fabric { background: var(--fabric-bg); color: var(--fabric); border: 1px solid var(--fabric-border); }
+    .pill--gk { background: var(--gk-bg); color: var(--gk); border: 1px solid var(--gk-border); }
+    .pill--gw { background: var(--gw-bg); color: var(--gw); border: 1px solid var(--gw-border); }
+    .pill--ops { background: var(--ops-bg); color: var(--ops); border: 1px solid var(--ops-border); }
+    .pill--danger { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger-border); }
+    .pill--ok { background: var(--ok-bg); color: var(--ok); border: 1px solid var(--ok-border); }
+    .pill--muted { background: var(--bg-subtle); color: var(--ink-muted); border: 1px solid var(--border-strong); }
+
+    /* Callouts */
+    .callout {
+      padding: 0.95rem 1.15rem;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-hairline);
+      margin: 1.1rem 0;
+      font-size: 0.87rem;
+      line-height: 1.62;
+    }
+    .callout--danger { background: var(--danger-bg); border-color: var(--danger-border); color: #7f1d1d; }
+    .callout--ops { background: var(--ops-bg); border-color: var(--ops-border); color: #78350f; }
+    .callout--gk { background: var(--gk-bg); border-color: var(--gk-border); color: #134e4a; }
+    .callout--gw { background: var(--gw-bg); border-color: var(--gw-border); color: #1e3a8a; }
+    .callout-title { font-weight: 700; margin-bottom: 0.3rem; display: block; }
+
+    /* Interactive Tabs */
+    .tabs {
+      margin: 1.2rem 0;
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      background: #ffffff;
+    }
+    .tablist {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.25rem;
+      padding: 0.55rem 0.65rem;
+      background: var(--bg-subtle);
+      border-bottom: 1px solid var(--border-hairline);
+    }
+    .tab-btn {
+      appearance: none;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--ink-body);
+      font-family: var(--font-sans);
+      font-size: 0.83rem;
+      font-weight: 600;
+      padding: 0.45rem 0.85rem;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+    }
+    .tab-btn:hover { background: #ffffff; color: var(--ink-primary); }
+    .tab-btn:focus-visible { outline: 2px solid var(--gk); outline-offset: 2px; }
+    .tab-btn[aria-selected="true"] {
+      background: #ffffff;
+      color: var(--gk);
+      border-color: var(--gk-border);
+      box-shadow: var(--shadow-sm);
+    }
+    .tab-panel { padding: 1.15rem 1.25rem; }
+    .tab-panel[hidden] { display: none; }
+
+    /* Filter Bar for 11 Exercises */
+    .filter-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.45rem;
+      margin: 1rem 0 0.6rem;
+    }
+    .filter-btn {
+      appearance: none;
+      border: 1px solid var(--border-strong);
+      background: #ffffff;
+      color: var(--ink-body);
+      font-family: var(--font-sans);
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0.34rem 0.72rem;
+      border-radius: 999px;
+      cursor: pointer;
+    }
+    .filter-btn:hover { background: var(--bg-subtle); }
+    .filter-btn:focus-visible { outline: 2px solid var(--gw); outline-offset: 2px; }
+    .filter-btn[aria-pressed="true"] {
+      background: var(--gw);
+      color: #ffffff;
+      border-color: var(--gw);
+    }
+    .filter-count {
+      margin-left: auto;
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      color: var(--ink-muted);
+    }
+
+    /* Interactive Go/No-Go Checklist */
+    .checklist-box {
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-md);
+      background: #fbfcfe;
+      padding: 1.1rem 1.2rem;
+      margin-top: 1.1rem;
+    }
+    .checklist-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      margin-bottom: 0.8rem;
+    }
+    .progress-track {
+      width: 100%;
+      height: 8px;
+      background: var(--border-hairline);
+      border-radius: 999px;
+      overflow: hidden;
+      margin-bottom: 0.9rem;
+    }
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--gk), var(--ok));
+      transition: width 0.2s ease;
+    }
+    .check-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 0.5rem;
+    }
+    .check-item label {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.6rem;
+      padding: 0.6rem 0.75rem;
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-sm);
+      background: #ffffff;
+      cursor: pointer;
+      font-size: 0.85rem;
+      line-height: 1.5;
+    }
+    .check-item input[type="checkbox"] {
+      margin-top: 0.25rem;
+      width: 16px;
+      height: 16px;
+      accent-color: var(--ok);
+      flex-shrink: 0;
+    }
+    .check-item.is-checked label {
+      background: var(--ok-bg);
+      border-color: var(--ok-border);
+      color: #14532d;
+    }
+
+    footer {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 1.5rem 1.5rem 3rem;
+      border-top: 1px solid var(--border-hairline);
+      color: var(--ink-muted);
+      font-size: 0.82rem;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 0.75rem;
+    }
+
+    @media (max-width: 960px) {
+      .layout { grid-template-columns: 1fr; padding: 1.25rem 1rem 3rem; }
+      .toc { position: static; }
+      .toc ol { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 0.25rem; }
+      .section-card { padding: 1.35rem 1.15rem; }
+    }
+
+    @media print {
+      body { background: #ffffff; color: #000000; font-size: 10.5pt; }
+      .masthead { background: #ffffff !important; color: #000000 !important; border-bottom: 2px solid #000000; padding: 1rem 0; }
+      .masthead h1, .masthead-subtitle, .meta-value, .meta-label, .doc-kicker { color: #000000 !important; }
+      .layout { grid-template-columns: 1fr; padding: 0.5rem 0; }
+      .toc, .tablist, .filter-bar { display: none; }
+      .section-card { box-shadow: none; border: 1px solid #cbd5e1; break-inside: avoid; }
+      .tab-panel[hidden] { display: block !important; border-top: 1px dashed #cbd5e1; }
+      tr[hidden] { display: table-row !important; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">跳至正文内容</a>
+
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="doc-kicker">
+        <span>IDP Production Readiness Blueprint</span>
+        <span class="doc-badge">G03 · G04 · G05 · G06</span>
+        <span class="doc-badge">agentgateway 1.7.0</span>
+        <span class="doc-badge doc-badge--danger">Release Gate: NOT READY FOR PROD · D3/D4 NOT_RUN</span>
+      </div>
+      <h1>IDP Gateway 完整生产发布与跨系统对接实施计划</h1>
+      <p class="masthead-subtitle">
+        覆盖生产 Gatekeeper 对接、KMS 密钥托管、API Fabric 自动化发布闭环、多副本分池高可用（含顺丰令牌跨实例协调）、D3 生产候选验证（容量压测、独立渗透、11 项故障演练、六大 STD-CP 门禁）与 D4 受控灰度放量的全周期工程路线图。
+      </p>
+      <div class="meta-strip">
+        <div class="meta-item">
+          <span class="meta-label">当前已实证基线</span>
+          <span class="meta-value">黑盒 <code>97/97</code> · 本机 GK <code>13/13</code> · 万邦/顺丰沙箱通过</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">核心推进节奏</span>
+          <span class="meta-value">阶段 0 拍板 → 双轨并行（GK/KMS ∥ Fabric）→ HA → D3 → D4</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">生产安全红线</span>
+          <span class="meta-value">绝不触碰 <code>gk.idp.xyz</code> 做测试 · <code>PROD</code> 禁明文 HTTP</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">文档日期与口径</span>
+          <span class="meta-value">2026-11-24 · 不预设排期、不编造未实测数字 SLO</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="toc" aria-label="文档目录">
+      <p class="toc-title">计划目录</p>
+      <ol>
+        <li><a href="#sec-0"><span class="toc-num">00</span><span>就绪度总览与阶段 0 拍板</span></a></li>
+        <li><a href="#sec-1"><span class="toc-num">01</span><span>五阶段关键路径全景图</span></a></li>
+        <li><a href="#sec-2"><span class="toc-num">02</span><span>轨道 A：生产 Gatekeeper 与 KMS</span></a></li>
+        <li><a href="#sec-3"><span class="toc-num">03</span><span>轨道 B：API Fabric 发布闭环</span></a></li>
+        <li><a href="#sec-4"><span class="toc-num">04</span><span>阶段 2：多副本高可用与生产上游</span></a></li>
+        <li><a href="#sec-5"><span class="toc-num">05</span><span>阶段 3：D3 生产候选验证与演练</span></a></li>
+        <li><a href="#sec-6"><span class="toc-num">06</span><span>阶段 4：D4 灰度放量与放行清单</span></a></li>
+      </ol>
+      <div class="toc-legend" aria-label="阶段与系统图例">
+        <div class="legend-row"><span class="swatch" style="background: var(--gk);"></span><span>轨道 A · Gatekeeper / KMS</span></div>
+        <div class="legend-row"><span class="swatch" style="background: var(--fabric);"></span><span>轨道 B · API Fabric / 状态机</span></div>
+        <div class="legend-row"><span class="swatch" style="background: var(--gw);"></span><span>阶段 2 · 多副本分池与 TLS</span></div>
+        <div class="legend-row"><span class="swatch" style="background: var(--ops);"></span><span>阶段 3 · D3 压测与故障演练</span></div>
+        <div class="legend-row"><span class="swatch" style="background: var(--ok);"></span><span>阶段 4 · D4 灰度放量与收口</span></div>
+        <div class="legend-row"><span class="swatch" style="background: var(--danger);"></span><span>生产阻塞红线 / Fail-Closed</span></div>
+      </div>
+    </nav>
+
+    <main id="main-content">
+      <!-- SECTION 0 -->
+      <section class="section-card" id="sec-0">
+        <div class="section-header">
+          <span class="section-num">§ 00</span>
+          <h2>当前生产就绪度诊断与阶段 0 开工前拍板</h2>
+        </div>
+
+        <div class="abstract-box">
+          <strong>客观现状结论：</strong><code>idp-gateway</code> 的<strong>单机出站核心内核</strong>（数据面规则、认证封装、编译器、观测、回环应急台）已经基本成型并在沙箱与替身上跑稳；但<strong>尚未达到完整生产发布与接入生产 Gatekeeper 的条件</strong>。剩余工作集中在四块系统级硬骨头：<strong>生产 Gatekeeper 5 项前置改造、API Fabric 发布闭环、KMS + 多副本高可用（含顺丰令牌协调），以及 D3/D4 正式真实验证</strong>。
+        </div>
+
+        <div class="kpi-grid" role="region" aria-label="当前仓库实证状态指标">
+          <div class="kpi-card">
+            <div class="kpi-label">黑盒回归（锁定 1.7.0）</div>
+            <div class="kpi-val kpi-val--ok">97 / 97</div>
+            <div class="kpi-sub">752 项检查通过（含已接受的 <code>P1-SS-04</code>，<code>P1-FP-01</code> 仍 400）</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">契约 / 安全 / 联调</div>
+            <div class="kpi-val kpi-val--ok">248 · 17 · 13/13</div>
+            <div class="kpi-sub">本机改造 GK、万邦与顺丰 4 路由沙箱均已跑通</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">生产 Gatekeeper 缺口</div>
+            <div class="kpi-val kpi-val--danger">5 项硬前置</div>
+            <div class="kpi-sub">缺 <code>provider_account</code>、专属 <code>aud</code>、mTLS PDP 等，直连即 503/401</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">D3/D4 正式门禁状态</div>
+            <div class="kpi-val kpi-val--warn">6 / 6 NOT_RUN</div>
+            <div class="kpi-sub">95 条验收 + 12 项协议 + 11 项故障演练 + <code>STD-CP1..6</code></div>
+          </div>
+        </div>
+
+        <h3>阶段 0：开工前须由仓库所有者拍板的 3 项范围决策</h3>
+        <p>按照本仓库治理规程（不设执行人/批准人分离，由仓库所有者拍板、以可核验证据为准），开工前先定好以下 3 项边界，避免阶段 1 与阶段 2 出现架构返工：</p>
+
+        <div class="decision-grid">
+          <article class="decision-card">
+            <span class="decision-kicker">Decision 0-1 · UI 与采集范围</span>
+            <h3 class="decision-title">ADR-0018/0019 定态与 18 页台边界</h3>
+            <p class="decision-body">
+              确定 <code>ADR-0018</code>（观测/审计）与 <code>ADR-0019</code>（回环应急台）是否转为 <code>Accepted</code>；同时明确冻结中的 18 页完整 Console（<code>ui_ux_expansion</code>）与正文采集（<code>GW-GAP-07</code>）是否移出生产一期。
+            </p>
+            <div class="decision-rec"><strong>建议：</strong>生产一期保持 18 页台冻结、关闭正文采集；配置走 Fabric，应急走现有 <code>gateway-console</code>，显著缩小 <code>STD-CP4</code> 验收范围。</div>
+          </article>
+
+          <article class="decision-card decision-card--gw">
+            <span class="decision-kicker">Decision 0-2 · 运行底座选型</span>
+            <h3 class="decision-title">Kubernetes 多副本 vs 多机 Compose</h3>
+            <p class="decision-body">
+              决定生产多副本底座形态。直接决定安全域隔离载体（K8s NetworkPolicy vs 多机 <code>pin-egress.sh</code>）、发布器下发机制以及是否同步启动 <code>ADR-0013</code> 的 PostgreSQL + <code>idp-bento-go</code> 持久化升级。
+            </p>
+            <div class="decision-rec"><strong>建议：</strong>完整生产发布首选 Kubernetes 分池部署（Ingress / Egress / AI 独立 Namespace）+ PostgreSQL/Outbox 控制面持久化。</div>
+          </article>
+
+          <article class="decision-card decision-card--gk">
+            <span class="decision-kicker">Decision 0-3 · 顺丰令牌协调模式</span>
+            <h3 class="decision-title">顺丰多副本互踢治理策略</h3>
+            <p class="decision-body">
+              顺丰国际协议“取新令牌即作废旧令牌”（<code>ADR-0014</code>）。若生产一期启用多副本 <code>gateway-authz</code>，各实例独立换票会互相作废线上令牌，且重启会踢掉在途请求。
+            </p>
+            <div class="decision-rec"><strong>建议：</strong>多副本生产必选“集中令牌租约协调器”；若一期急于上线可先将顺丰池锁定主备单活，二期补跨实例协调。</div>
+          </article>
+        </div>
+      </section>
+
+      <!-- SECTION 1 -->
+      <section class="section-card" id="sec-1">
+        <div class="section-header">
+          <span class="section-num">§ 01</span>
+          <h2>五阶段关键路径与双轨并行全景图</h2>
+        </div>
+
+        <p>
+          为了避免外部 Gatekeeper 排期阻塞本仓库研发，计划采用<strong>“阶段 0 拍板 → 阶段 1 双轨并行 → 阶段 2 合流生产化 → 阶段 3 逐层验证 → 阶段 4 灰度放量”</strong>的推进拓扑。任一阶段均设有刚性退出门槛，禁止跳过 D3 直接切流生产。
+        </p>
+
+        <figure class="diagram">
+          <div class="diagram-canvas">
+            <svg viewBox="0 0 1020 390" role="img" aria-labelledby="fig1-title fig1-desc" xmlns="http://www.w3.org/2000/svg">
+              <title id="fig1-title">图 1：IDP Gateway 完整生产发布五阶段与双轨并行关键路径图</title>
+              <desc id="fig1-desc">展示从阶段 0 范围拍板出发，进入阶段 1 轨道 A（Gatekeeper 5 项前置与 KMS）与轨道 B（API Fabric 发布适配器与认证模板编译）并行，随后合流进入阶段 2 多副本高可用与生产 TLS、阶段 3 D3 生产候选验证、阶段 4 D4 受控灰度放量的依赖链路。</desc>
+              <defs>
+                <marker id="p-arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#475569"/>
+                </marker>
+                <marker id="p-teal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#0f766e"/>
+                </marker>
+                <marker id="p-indigo" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#4338ca"/>
+                </marker>
+              </defs>
+
+              <!-- Phase 0 -->
+              <rect x="14" y="96" width="142" height="196" rx="10" fill="#f8fafc" stroke="#475569" stroke-width="1.8"/>
+              <rect x="14" y="96" width="142" height="32" rx="10" fill="#334155"/>
+              <rect x="14" y="114" width="142" height="14" fill="#334155"/>
+              <text x="85" y="117" text-anchor="middle" font-size="11.5" font-weight="700" fill="#ffffff">阶段 0 · 拍板</text>
+              <text x="26" y="150" font-size="10.2" font-weight="700" fill="#0f172a">3 项范围决策</text>
+              <text x="26" y="170" font-size="9.8" fill="#334155">1. ADR-18/19 态</text>
+              <text x="26" y="188" font-size="9.8" fill="#334155">   与 18 页台边界</text>
+              <text x="26" y="210" font-size="9.8" fill="#334155">2. K8s vs 多机</text>
+              <text x="26" y="228" font-size="9.8" fill="#334155">   + PG 持久化</text>
+              <text x="26" y="250" font-size="9.8" fill="#334155">3. 顺丰多副本</text>
+              <text x="26" y="268" font-size="9.8" fill="#334155">   vs 主备单活</text>
+
+              <!-- Fork arrows Phase 0 -> Track A & Track B -->
+              <path d="M 156 170 L 176 170 L 176 96 L 196 96" fill="none" stroke="#0f766e" stroke-width="1.8" marker-end="url(#p-teal)"/>
+              <path d="M 156 218 L 176 218 L 176 292 L 196 292" fill="none" stroke="#4338ca" stroke-width="1.8" marker-end="url(#p-indigo)"/>
+
+              <!-- Phase 1 Outer Group -->
+              <rect x="190" y="12" width="246" height="366" rx="12" fill="none" stroke="#cbd5e1" stroke-width="1.4" stroke-dasharray="6 4"/>
+              <rect x="242" y="2" width="142" height="20" rx="10" fill="#f1f5f9" stroke="#cbd5e1"/>
+              <text x="313" y="15" text-anchor="middle" font-size="9.8" font-weight="700" fill="#334155">阶段 1 · 双轨并行</text>
+
+              <!-- Track A -->
+              <rect x="200" y="30" width="226" height="154" rx="10" fill="#f0fdfa" stroke="#0f766e" stroke-width="1.7"/>
+              <rect x="200" y="30" width="226" height="30" rx="10" fill="#0f766e"/>
+              <rect x="200" y="48" width="226" height="12" fill="#0f766e"/>
+              <text x="212" y="50" font-size="11" font-weight="700" fill="#ffffff">轨道 A · Gatekeeper &amp; KMS</text>
+              <text x="212" y="80" font-size="10" fill="#134e4a">• OpenFGA 合入 provider_account</text>
+              <text x="212" y="98" font-size="10" fill="#134e4a">• 按客户端登记专属 aud</text>
+              <text x="212" y="116" font-size="10" fill="#134e4a">• PDP 工作负载 mTLS + env 约定</text>
+              <text x="212" y="134" font-size="10" fill="#134e4a">• 确认 10dc843 与先发后用换钥</text>
+              <text x="212" y="152" font-size="10" fill="#134e4a">• KMS 适配器替代手工 0600 文件</text>
+              <rect x="212" y="160" width="202" height="18" rx="4" fill="#ccfbf1"/>
+              <text x="313" y="173" text-anchor="middle" font-size="9.2" font-weight="700" fill="#115e59">退出：预发 GK 13/13 + KMS 只写轮换</text>
+
+              <!-- Track B -->
+              <rect x="200" y="206" width="226" height="158" rx="10" fill="#eef2ff" stroke="#4338ca" stroke-width="1.7"/>
+              <rect x="200" y="206" width="226" height="30" rx="10" fill="#4338ca"/>
+              <rect x="200" y="224" width="226" height="12" fill="#4338ca"/>
+              <text x="212" y="226" font-size="11" font-weight="700" fill="#ffffff">轨道 B · API Fabric 发布闭环</text>
+              <text x="212" y="256" font-size="10" fill="#312e81">• 认证模板统一 Schema + 反夹带</text>
+              <text x="212" y="274" font-size="10" fill="#312e81">• /v1/route-intents mTLS 适配器</text>
+              <text x="212" y="292" font-size="10" fill="#312e81">• 幂等 409 / CAS / ReleaseState</text>
+              <text x="212" y="310" font-size="10" fill="#312e81">• PG + Outbox 持久化（多池需要）</text>
+              <text x="212" y="328" font-size="10" fill="#312e81">• Fabric 集成套件 + 黑盒干净重跑</text>
+              <rect x="212" y="338" width="202" height="18" rx="4" fill="#e0e7ff"/>
+              <text x="313" y="351" text-anchor="middle" font-size="9.2" font-weight="700" fill="#3730a3">退出：UI 声明→编译→observed ACTIVE</text>
+
+              <!-- Merge arrows Track A/B -> Phase 2 -->
+              <path d="M 426 106 L 448 106 L 448 194 L 464 194" fill="none" stroke="#475569" stroke-width="1.8" marker-end="url(#p-arr)"/>
+              <path d="M 426 286 L 448 286 L 448 194 L 464 194" fill="none" stroke="#475569" stroke-width="1.8"/>
+
+              <!-- Phase 2 -->
+              <rect x="468" y="64" width="174" height="260" rx="10" fill="#eff6ff" stroke="#1d4ed8" stroke-width="1.8"/>
+              <rect x="468" y="64" width="174" height="32" rx="10" fill="#1d4ed8"/>
+              <rect x="468" y="82" width="174" height="14" fill="#1d4ed8"/>
+              <text x="555" y="85" text-anchor="middle" font-size="11.2" font-weight="700" fill="#ffffff">阶段 2 · HA 与生产底座</text>
+              <text x="480" y="118" font-size="10" font-weight="700" fill="#1e3a8a">分池与多副本补齐</text>
+              <text x="480" y="138" font-size="9.8" fill="#334155">• Ingress / Egress / AI 分池</text>
+              <text x="480" y="156" font-size="9.8" fill="#334155">• 顺丰令牌跨实例租约协调</text>
+              <text x="480" y="174" font-size="9.8" fill="#334155">• 跨节点撤销 / 封禁 / 限流</text>
+              <text x="480" y="192" font-size="9.8" fill="#334155">• 工作负载 mTLS 证书热轮换</text>
+              <text x="480" y="214" font-size="10" font-weight="700" fill="#1e3a8a">上游与可观测实装</text>
+              <text x="480" y="234" font-size="9.8" fill="#334155">• 生产 HTTPS/SNI，禁明文</text>
+              <text x="480" y="252" font-size="9.8" fill="#334155">• 跟踪 PR #4401 OSS 升级</text>
+              <text x="480" y="270" font-size="9.8" fill="#334155">• 接入 OTel / Grafana / 告警人</text>
+              <rect x="478" y="288" width="154" height="26" rx="5" fill="#dbeafe"/>
+              <text x="555" y="305" text-anchor="middle" font-size="9.2" font-weight="700" fill="#1e3a8a">退出：预发多副本自愈+HTTPS通</text>
+
+              <!-- Arrow Phase 2 -> Phase 3 -->
+              <line x1="642" y1="194" x2="664" y2="194" stroke="#475569" stroke-width="1.8" marker-end="url(#p-arr)"/>
+
+              <!-- Phase 3 -->
+              <rect x="668" y="64" width="166" height="260" rx="10" fill="#fffbeb" stroke="#b45309" stroke-width="1.8"/>
+              <rect x="668" y="64" width="166" height="32" rx="10" fill="#b45309"/>
+              <rect x="668" y="82" width="166" height="14" fill="#b45309"/>
+              <text x="751" y="85" text-anchor="middle" font-size="11.2" font-weight="700" fill="#ffffff">阶段 3 · D3 正式验证</text>
+              <text x="680" y="118" font-size="10" font-weight="700" fill="#78350f">不可跳步（G06 §11.1）</text>
+              <text x="680" y="138" font-size="9.8" fill="#334155">• V4 三基线压测定数字 SLO</text>
+              <text x="680" y="156" font-size="9.8" fill="#334155">• V5 独立渗透与 SSRF 测试</text>
+              <text x="680" y="174" font-size="9.8" fill="#334155">• 11 项故障与回滚演练</text>
+              <text x="680" y="192" font-size="9.8" fill="#334155">• 95 条验收 + 12 项协议矩阵</text>
+              <text x="680" y="210" font-size="9.8" fill="#334155">• 镜像签名 + SBOM 入 CI 门</text>
+              <text x="680" y="232" font-size="10" font-weight="700" fill="#78350f">门禁收口</text>
+              <text x="680" y="252" font-size="9.8" fill="#334155">• STD-CP1 至 STD-CP5 举证</text>
+              <text x="680" y="270" font-size="9.8" fill="#334155">• 所有者依证据拍板放行</text>
+              <rect x="678" y="288" width="146" height="26" rx="5" fill="#fef3c7"/>
+              <text x="751" y="305" text-anchor="middle" font-size="9.2" font-weight="700" fill="#92400e">退出：零 P0/P1 阻断 + D3 证据包</text>
+
+              <!-- Arrow Phase 3 -> Phase 4 -->
+              <line x1="834" y1="194" x2="856" y2="194" stroke="#475569" stroke-width="1.8" marker-end="url(#p-arr)"/>
+
+              <!-- Phase 4 -->
+              <rect x="860" y="64" width="146" height="260" rx="10" fill="#f0fdf4" stroke="#15803d" stroke-width="1.8"/>
+              <rect x="860" y="64" width="146" height="32" rx="10" fill="#15803d"/>
+              <rect x="860" y="82" width="146" height="14" fill="#15803d"/>
+              <text x="933" y="85" text-anchor="middle" font-size="11.2" font-weight="700" fill="#ffffff">阶段 4 · D4 发布</text>
+              <text x="872" y="118" font-size="10" font-weight="700" fill="#14532d">受控灰度放量</text>
+              <text x="872" y="140" font-size="9.8" fill="#334155">1. 镜像/快照封板</text>
+              <text x="872" y="160" font-size="9.8" fill="#334155">2. Canary 1 只读</text>
+              <text x="872" y="180" font-size="9.8" fill="#334155">   对账 digest/审计</text>
+              <text x="872" y="202" font-size="9.8" fill="#334155">3. Canary 2 写操作</text>
+              <text x="872" y="222" font-size="9.8" fill="#334155">   单号逐笔对账</text>
+              <text x="872" y="244" font-size="9.8" fill="#334155">4. 跨 2h/换钥周期</text>
+              <text x="872" y="264" font-size="9.8" fill="#334155">   分批切流</text>
+              <rect x="870" y="288" width="126" height="26" rx="5" fill="#dcfce7"/>
+              <text x="933" y="305" text-anchor="middle" font-size="9.2" font-weight="700" fill="#166534">退出：STD-CP6 闭合</text>
+            </svg>
+          </div>
+          <figcaption>
+            <strong>图 1 · 完整生产发布关键路径：</strong>阶段 1 将外部依赖（Gatekeeper / KMS）与本仓库研发（Fabric 发布适配器）解耦并行；两轨产物在阶段 2 汇聚进多副本生产底座，经 D3 全量真实验证后进入 D4 四波次灰度放量。
+          </figcaption>
+        </figure>
+      </section>
+
+      <!-- SECTION 2 -->
+      <section class="section-card" id="sec-2">
+        <div class="section-header">
+          <span class="section-num">§ 02</span>
+          <h2>阶段 1 · 轨道 A：生产 Gatekeeper 5 项前置与 KMS 托管</h2>
+        </div>
+
+        <p>
+          之前跑通的 <code>13/13</code> Gatekeeper 联调依赖<strong>本机只读检出基础上的 3 处局部补丁</strong>（<code>provider_account</code> 模型补丁、全局 <code>TOKEN_AUDIENCE</code> 开关、前置临时 <code>pdp-mtls</code> nginx）。若不完成生产侧变更就直接指向 <code>gk.idp.xyz</code>，系统会因零信任默认拒绝机制直接拦截流量。
+        </p>
+
+        <figure class="diagram">
+          <div class="diagram-canvas">
+            <svg viewBox="0 0 980 318" role="img" aria-labelledby="fig2-title fig2-desc" xmlns="http://www.w3.org/2000/svg">
+              <title id="fig2-title">图 2：生产 Gatekeeper 5 项硬前置阻塞与改造目标对照图</title>
+              <desc id="fig2-desc">左侧列出当前生产 Gatekeeper 存在的 5 项能力缺口及其直接触发的网关拒绝状态码，右侧展示改造完成后与 gateway-authz 及 sync-jwks 配合的目标生产链路。</desc>
+              <defs>
+                <marker id="g-red" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#b91c1c"/>
+                </marker>
+                <marker id="g-teal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#0f766e"/>
+                </marker>
+              </defs>
+
+              <!-- Left: Current Production Blockers -->
+              <rect x="16" y="14" width="454" height="290" rx="10" fill="#fef2f2" stroke="#b91c1c" stroke-width="1.6"/>
+              <rect x="16" y="14" width="454" height="32" rx="10" fill="#b91c1c"/>
+              <rect x="16" y="32" width="454" height="14" fill="#b91c1c"/>
+              <text x="32" y="35" font-size="12" font-weight="700" fill="#ffffff">现状：直连生产 Gatekeeper 会触发的 5 处阻断</text>
+
+              <rect x="30" y="60" width="426" height="40" rx="6" fill="#ffffff" stroke="#fecaca"/>
+              <text x="42" y="77" font-size="10.8" font-weight="700" fill="#991b1b">① OpenFGA 缺 provider_account 类型</text>
+              <text x="42" y="93" font-size="9.8" fill="#475569">PDP 返回 unknown action → 网关 Fail-Closed 全拒 HTTP 503</text>
+
+              <rect x="30" y="108" width="426" height="40" rx="6" fill="#ffffff" stroke="#fecaca"/>
+              <text x="42" y="125" font-size="10.8" font-weight="700" fill="#991b1b">② 缺按客户端登记的专属受众 idp-egress-gateway</text>
+              <text x="42" y="141" font-size="9.8" fill="#475569">Hydra 拒签或被迫复用 bip-api → 401 拒绝或破坏受众隔离</text>
+
+              <rect x="30" y="156" width="426" height="40" rx="6" fill="#ffffff" stroke="#fecaca"/>
+              <text x="42" y="173" font-size="10.8" font-weight="700" fill="#991b1b">③ 生产 PDP 端无工作负载 mTLS 终结</text>
+              <text x="42" y="189" font-size="9.8" fill="#475569">gateway-authz 对非回环 URL 强制要求 HTTPS+证书，缺即拒启动</text>
+
+              <rect x="30" y="204" width="426" height="40" rx="6" fill="#ffffff" stroke="#fecaca"/>
+              <text x="42" y="221" font-size="10.8" font-weight="700" fill="#991b1b">④ M2M 访问令牌无 env 顶层声明</text>
+              <text x="42" y="237" font-size="9.8" fill="#475569">未明确一签发者一环境契约前，跨环境令牌缺少第二道防御</text>
+
+              <rect x="30" y="252" width="426" height="40" rx="6" fill="#ffffff" stroke="#fecaca"/>
+              <text x="42" y="269" font-size="10.8" font-weight="700" fill="#991b1b">⑤ 换钥窗口与 indeterminate 版本未对齐</text>
+              <text x="42" y="285" font-size="9.8" fill="#475569">无 10dc843 则把故障误判 403；直换 Hydra 密钥导致最长 ~16m 拒单</text>
+
+              <!-- Center arrows -->
+              <line x1="474" y1="80" x2="506" y2="80" stroke="#0f766e" stroke-width="1.8" marker-end="url(#g-teal)"/>
+              <line x1="474" y1="128" x2="506" y2="128" stroke="#0f766e" stroke-width="1.8" marker-end="url(#g-teal)"/>
+              <line x1="474" y1="176" x2="506" y2="176" stroke="#0f766e" stroke-width="1.8" marker-end="url(#g-teal)"/>
+              <line x1="474" y1="224" x2="506" y2="224" stroke="#0f766e" stroke-width="1.8" marker-end="url(#g-teal)"/>
+              <line x1="474" y1="272" x2="506" y2="272" stroke="#0f766e" stroke-width="1.8" marker-end="url(#g-teal)"/>
+
+              <!-- Right: Target Production State -->
+              <rect x="510" y="14" width="454" height="290" rx="10" fill="#f0fdfa" stroke="#0f766e" stroke-width="1.6"/>
+              <rect x="510" y="14" width="454" height="32" rx="10" fill="#0f766e"/>
+              <rect x="510" y="32" width="454" height="14" fill="#0f766e"/>
+              <text x="526" y="35" font-size="12" font-weight="700" fill="#ffffff">目标：轨道 A 验收闭环（预发环境 13/13 实测）</text>
+
+              <rect x="524" y="60" width="426" height="40" rx="6" fill="#ffffff" stroke="#99f6e4"/>
+              <text x="536" y="77" font-size="10.8" font-weight="700" fill="#115e59">① 正式模型合入 provider_account (org / caller / use)</text>
+              <text x="536" y="93" font-size="9.8" fill="#475569">验收：GK-01/02/05/06/07 通过，收回授权下一个请求即 403</text>
+
+              <rect x="524" y="108" width="426" height="40" rx="6" fill="#ffffff" stroke="#99f6e4"/>
+              <text x="536" y="125" font-size="10.8" font-weight="700" fill="#115e59">② 按 M2M 客户端显式登记受众 idp-egress-gateway</text>
+              <text x="536" y="141" font-size="9.8" fill="#475569">验收：GK-03 确认 bip-api / 空受众令牌全部被网关 401 拦下</text>
+
+              <rect x="524" y="156" width="426" height="40" rx="6" fill="#ffffff" stroke="#99f6e4"/>
+              <text x="536" y="173" font-size="10.8" font-weight="700" fill="#115e59">③ 生产 PDP 原生工作负载 mTLS（校验 SAN URI 身份）</text>
+              <text x="536" y="189" font-size="9.8" fill="#475569">验收：GK-13 确认无证/错 CA/非 gateway-authz 证书全部拒绝</text>
+
+              <rect x="524" y="204" width="426" height="40" rx="6" fill="#ffffff" stroke="#99f6e4"/>
+              <text x="536" y="221" font-size="10.8" font-weight="700" fill="#115e59">④ 令牌写入 env 声明，或签署一签发者一环境硬约束</text>
+              <text x="536" y="237" font-size="9.8" fill="#475569">验收：TEST 签发令牌发送到 PROD 池 100% 拒绝</text>
+
+              <rect x="524" y="252" width="426" height="40" rx="6" fill="#ffffff" stroke="#99f6e4"/>
+              <text x="536" y="269" font-size="10.8" font-weight="700" fill="#115e59">⑤ ≥10dc843 + 先发布后启用换钥 + sync-jwks + KMS</text>
+              <text x="536" y="285" font-size="9.8" fill="#475569">验收：GK-08 停 OpenFGA 答 503；GK-12 无重启换钥零报错</text>
+            </svg>
+          </div>
+          <figcaption>
+            <strong>图 2 · 轨道 A 阻断与验收映射：</strong>每一项 Gatekeeper 改造均有对应的自动化联调用例（<code>GK-01</code>–<code>GK-13</code>）作为客观核验标准，绝不以口头确认替代测试证据；同时严禁使用生产 <code>gk.idp.xyz</code> 开展联调测试。
+          </figcaption>
+        </figure>
+
+        <div class="callout callout--gk">
+          <span class="callout-title">A3 · KMS / Secret Manager 接管策略（不破坏既有零依赖与测试基线）</span>
+          <code>gateway-authz</code> 已将凭证读取抽象为 <code>ports.CredentialSource</code>。接入生产 KMS / Secret Manager 时新增受控适配器（负责只写录入句柄读取、版本化 <code>key_version</code> 轮换与内存 <code>ports.Secret</code> 封装），<strong>保留现有 0600 文件源专供离线与黑盒测试</strong>，从而在不引入回归风险的前提下彻底消除生产手工分发密钥文件。
+        </div>
+      </section>
+
+      <!-- SECTION 3 -->
+      <section class="section-card" id="sec-3">
+        <div class="section-header">
+          <span class="section-num">§ 03</span>
+          <h2>阶段 1 · 轨道 B：API Fabric 发布闭环与状态机实现</h2>
+        </div>
+
+        <p>
+          按 <code>ADR-0006</code> 与仓库既定顺序，Fabric 对接是本仓库的下一项核心开发工作。动代码前先起草 <code>ADR-0020</code> 提案经你点头，再按“契约对齐 → mTLS 适配器与状态机 → 可选持久化升级 → 集成与干净树黑盒验证”四步交付。
+        </p>
+
+        <figure class="diagram">
+          <div class="diagram-canvas">
+            <svg viewBox="0 0 980 310" role="img" aria-labelledby="fig3-title fig3-desc" xmlns="http://www.w3.org/2000/svg">
+              <title id="fig3-title">图 3：API Fabric → gateway-control 完整发布状态机（ReleaseState）</title>
+              <desc id="fig3-desc">基于 G03 第 3 节与 contracts/fabric/route-publication-intent.openapi.yaml，展示从 DRAFT 经 VALIDATED、APPROVED、STAGED、APPLYING、OBSERVING 到 ACTIVE 的主流程，以及 REJECTED/CANCELED、FAILED/PARTIAL/UNKNOWN 对账回路与 SUPERSEDED/REVOKED 退服路径。</desc>
+              <defs>
+                <marker id="sm-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#1d4ed8"/>
+                </marker>
+                <marker id="sm-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#15803d"/>
+                </marker>
+                <marker id="sm-red" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#b91c1c"/>
+                </marker>
+                <marker id="sm-amber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#b45309"/>
+                </marker>
+                <marker id="sm-slate" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#475569"/>
+                </marker>
+              </defs>
+
+              <!-- Entry badge -->
+              <rect x="14" y="16" width="320" height="32" rx="6" fill="#eef2ff" stroke="#818cf8"/>
+              <text x="174" y="36" text-anchor="middle" font-size="10.5" font-weight="700" fill="#312e81">POST /v1/route-intents（mTLS · 幂等 409 · 预检 422）</text>
+              <line x1="74" y1="48" x2="74" y2="74" stroke="#4338ca" stroke-width="1.8" marker-end="url(#sm-blue)"/>
+
+              <!-- Main Happy Path Row (y=78..122) -->
+              <rect x="20" y="78" width="108" height="44" rx="8" fill="#eef2ff" stroke="#4338ca" stroke-width="1.6"/>
+              <text x="74" y="98" text-anchor="middle" font-size="11" font-weight="700" fill="#312e81">DRAFT</text>
+              <text x="74" y="113" text-anchor="middle" font-size="9" fill="#4338ca">202 受理</text>
+
+              <line x1="128" y1="100" x2="152" y2="100" stroke="#1d4ed8" stroke-width="1.6" marker-end="url(#sm-blue)"/>
+
+              <rect x="156" y="78" width="108" height="44" rx="8" fill="#eff6ff" stroke="#1d4ed8" stroke-width="1.5"/>
+              <text x="210" y="98" text-anchor="middle" font-size="11" font-weight="700" fill="#1e3a8a">VALIDATED</text>
+              <text x="210" y="113" text-anchor="middle" font-size="9" fill="#334155">预检与策略校验</text>
+
+              <line x1="264" y1="100" x2="288" y2="100" stroke="#1d4ed8" stroke-width="1.6" marker-end="url(#sm-blue)"/>
+
+              <rect x="292" y="78" width="108" height="44" rx="8" fill="#eff6ff" stroke="#1d4ed8" stroke-width="1.5"/>
+              <text x="346" y="98" text-anchor="middle" font-size="11" font-weight="700" fill="#1e3a8a">APPROVED</text>
+              <text x="346" y="113" text-anchor="middle" font-size="9" fill="#334155">核验审批与 CAS</text>
+
+              <line x1="400" y1="100" x2="424" y2="100" stroke="#1d4ed8" stroke-width="1.6" marker-end="url(#sm-blue)"/>
+
+              <rect x="428" y="78" width="114" height="44" rx="8" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.6"/>
+              <text x="485" y="98" text-anchor="middle" font-size="11" font-weight="700" fill="#1e3a8a">STAGED</text>
+              <text x="485" y="113" text-anchor="middle" font-size="9" fill="#1e3a8a">1.7.0 校验 + 摘要</text>
+
+              <line x1="542" y1="100" x2="566" y2="100" stroke="#1d4ed8" stroke-width="1.6" marker-end="url(#sm-blue)"/>
+
+              <rect x="570" y="78" width="110" height="44" rx="8" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.6"/>
+              <text x="625" y="98" text-anchor="middle" font-size="11" font-weight="700" fill="#1e3a8a">APPLYING</text>
+              <text x="625" y="113" text-anchor="middle" font-size="9" fill="#1e3a8a">分批写池/灰度</text>
+
+              <line x1="680" y1="100" x2="704" y2="100" stroke="#1d4ed8" stroke-width="1.6" marker-end="url(#sm-blue)"/>
+
+              <rect x="708" y="78" width="116" height="44" rx="8" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.6"/>
+              <text x="766" y="98" text-anchor="middle" font-size="11" font-weight="700" fill="#1e3a8a">OBSERVING</text>
+              <text x="766" y="113" text-anchor="middle" font-size="9" fill="#1e3a8a">全副本回读对账</text>
+
+              <line x1="824" y1="100" x2="848" y2="100" stroke="#15803d" stroke-width="2" marker-end="url(#sm-green)"/>
+
+              <rect x="852" y="74" width="112" height="52" rx="9" fill="#f0fdf4" stroke="#15803d" stroke-width="2"/>
+              <text x="908" y="97" text-anchor="middle" font-size="12" font-weight="700" fill="#14532d">ACTIVE</text>
+              <text x="908" y="114" text-anchor="middle" font-size="9" font-weight="600" fill="#15803d">observed == desired</text>
+
+              <!-- Pre-approval stop -->
+              <path d="M 210 122 L 210 170" fill="none" stroke="#b91c1c" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#sm-red)"/>
+              <rect x="116" y="174" width="188" height="40" rx="7" fill="#fef2f2" stroke="#fca5a5" stroke-width="1.4"/>
+              <text x="210" y="191" text-anchor="middle" font-size="10.5" font-weight="700" fill="#991b1b">REJECTED / CANCELED</text>
+              <text x="210" y="206" text-anchor="middle" font-size="9" fill="#7f1d1d">Schema / 策略违规或审批取消</text>
+
+              <!-- Non-converged & Reconcile loop (separate x=740 down and x=786 up) -->
+              <path d="M 625 122 L 625 170" fill="none" stroke="#b45309" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#sm-amber)"/>
+              <path d="M 740 122 L 740 152 L 672 152 L 672 170" fill="none" stroke="#b45309" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#sm-amber)"/>
+
+              <rect x="444" y="174" width="276" height="48" rx="8" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.6"/>
+              <text x="582" y="194" text-anchor="middle" font-size="10.8" font-weight="700" fill="#92400e">FAILED / PARTIAL / UNKNOWN</text>
+              <text x="582" y="211" text-anchor="middle" font-size="9.2" fill="#78350f">绝不伪报 ACTIVE · 触发 RECONCILE 或 ROLLBACK</text>
+
+              <!-- Reconcile return arrow -->
+              <path d="M 444 198 L 408 198 L 408 266 L 786 266 L 786 126" fill="none" stroke="#b45309" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#sm-amber)"/>
+              <rect x="478" y="255" width="228" height="20" rx="4" fill="#fef3c7" stroke="#fde68a"/>
+              <text x="592" y="269" text-anchor="middle" font-size="9.2" font-weight="700" fill="#92400e">RECONCILE 重驱观察 / ROLLBACK 建新发布</text>
+
+              <!-- Leaving service states (cleanly aligned on center x=900) -->
+              <path d="M 900 126 L 900 170" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#sm-slate)"/>
+              <rect x="826" y="174" width="144" height="40" rx="7" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.4"/>
+              <text x="898" y="191" text-anchor="middle" font-size="10.2" font-weight="700" fill="#1e293b">SUPERSEDED</text>
+              <text x="898" y="206" text-anchor="middle" font-size="8.8" fill="#475569">被更新 ACTIVE / 回滚替代</text>
+
+              <path d="M 900 214 L 900 238" fill="none" stroke="#475569" stroke-width="1.4" stroke-dasharray="3 3" marker-end="url(#sm-slate)"/>
+              <rect x="810" y="242" width="160" height="50" rx="7" fill="#f8fafc" stroke="#64748b" stroke-width="1.4"/>
+              <text x="890" y="261" text-anchor="middle" font-size="9.3" font-weight="700" fill="#0f172a">WITHDRAW_REQUESTED</text>
+              <text x="890" y="279" text-anchor="middle" font-size="9.3" font-weight="700" fill="#334155">→ REVOKING → REVOKED</text>
+
+              <!-- Status query pill -->
+              <rect x="14" y="254" width="356" height="36" rx="6" fill="#f0fdfa" stroke="#99f6e4"/>
+              <text x="192" y="276" text-anchor="middle" font-size="10" font-weight="700" fill="#115e59">GET /v1/route-intents/{id}/status 返回 desired 与 observed 独立摘要</text>
+            </svg>
+          </div>
+          <figcaption>
+            <strong>图 3 · Fabric 发布状态机（严格采用 <code>ReleaseState</code> 单一词表）：</strong>Fabric 审批通过（<code>APPROVED</code>）绝不等于运行时生效；只有全副本回读摘要匹配后才能进入 <code>ACTIVE</code>。凭证撤销与操作封禁仍走高优独立路径，不受慢速发布队列阻塞。
+          </figcaption>
+        </figure>
+
+        <div class="tabs" data-tabs>
+          <div class="tablist" role="tablist" aria-label="阶段 1 轨道 B 工作包明细">
+            <button class="tab-btn" role="tab" id="tab-b1" aria-selected="true" aria-controls="panel-b1" type="button">B1 · 认证模板与编译对齐</button>
+            <button class="tab-btn" role="tab" id="tab-b2" aria-selected="false" aria-controls="panel-b2" type="button">B2 · Fabric mTLS 发布适配器</button>
+            <button class="tab-btn" role="tab" id="tab-b3" aria-selected="false" aria-controls="panel-b3" type="button">B3 · 控制面持久化升级</button>
+            <button class="tab-btn" role="tab" id="tab-b4" aria-selected="false" aria-controls="panel-b4" type="button">B4 · 集成测试与黑盒回归</button>
+          </div>
+
+          <div class="tab-panel" role="tabpanel" id="panel-b1" aria-labelledby="tab-b1">
+            <p>打通 <code>route-intent.schema.json</code>、<code>credential-binding.schema.json</code> 与 <code>internal/routecompile</code> 的统一输入映射：</p>
+            <ul>
+              <li><strong>Tier 1 标准声明模板：</strong><code>API_KEY</code>（支持默认 <code>Authorization</code>、白名单头名与 Query 参数，自动启用 <code>extauthz.credential</code> + <code>backendAuth</code> 防夹带路径）、<code>OAUTH2_CLIENT_CREDENTIALS</code>、<code>HTTP Basic</code>、<code>MTLS_CLIENT_CERT</code>。</li>
+              <li><strong>Tier 2 命名适配器：</strong><code>WANB_DEVELOPER_TOKEN</code> 与 <code>SF_INTL_ENVELOPE</code>（强绑定 <code>request_signer_ref</code>）；UI 只传类型与结构化字段。</li>
+              <li><strong>硬校验延续：</strong>拒绝密钥明文、<code>${ENV}</code> 引用、非 HTTPS 的 <code>PROD</code> 上游、危险头名与自由脚本表达式。</li>
+            </ul>
+          </div>
+
+          <div class="tab-panel" role="tabpanel" id="panel-b2" aria-labelledby="tab-b2" hidden>
+            <p>按 <code>contracts/fabric/route-publication-intent.openapi.yaml</code> 在控制面暴露受控 HTTP 接口（零外部 Go 依赖或仅在持久化层按规程引入）：</p>
+            <ul>
+              <li><strong>工作负载身份隔离：</strong>仅接受具备 Fabric 工作负载客户端证书的 mTLS 连接，拒绝未授权身份与双 <code>Host</code> 头。</li>
+              <li><strong>并发与幂等保护：</strong>相同 <code>idempotency_key</code> + 相同正文返回原结果；同键异体或 <code>expected_generation</code> 失配返回 <code>409</code>；Schema 或编译器预检失败返回 <code>422</code>。</li>
+              <li><strong>单一配置权威：</strong>编排 <code>compile → agentgateway --validate-only → publish → reconcile</code>，<code>GET /status</code> 分离呈现 <code>desired_digest</code> 与 <code>observed_digest</code>。</li>
+            </ul>
+          </div>
+
+          <div class="tab-panel" role="tabpanel" id="panel-b3" aria-labelledby="tab-b3" hidden>
+            <p>对应 <code>ADR-0009</code> 第 4 条与 <code>ADR-0013</code> 第 9 条，在进入多池/多实例生产前替换单机 <code>releases.log</code> 文件历史：</p>
+            <ul>
+              <li>先锁定 <code>idp-bento-go</code> 的实际可用版本/提交号，新增 <code>tests/bentocontract</code> 契约测试；</li>
+              <li>实现 PostgreSQL + Outbox 存储适配器与显式迁移命令，落库发布意图、幂等键、CAS 代次、不可变快照摘要与各副本观测记录；</li>
+              <li>严禁跨数据库直读 Fabric 或 Gatekeeper 私表（保持领域边界清洁）。</li>
+            </ul>
+          </div>
+
+          <div class="tab-panel" role="tabpanel" id="panel-b4" aria-labelledby="tab-b4" hidden>
+            <p>严格遵守项目测试与对照规程，杜绝“校验通过但运行时失效”的假绿：</p>
+            <ul>
+              <li>新增 <code>tests/integration/fabric/</code> 套件：用 Fabric 替身驱动全链（正常发布到 <code>ACTIVE</code>、重复键幂等、同键异体 409、CAS 冲突 409、非法 Intent 422、漂移 <code>UNKNOWN</code> 对账、回滚、无 mTLS 401）并配安全负向对照；</li>
+              <li>所有 Go 改动先提交代码，再在干净工作区重跑 <code>tests/acceptance/blackbox/run.py</code>（保持 97/97）并单独提交证据文件。</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTION 4 -->
+      <section class="section-card" id="sec-4">
+        <div class="section-header">
+          <span class="section-num">§ 04</span>
+          <h2>阶段 2：多副本分池高可用、短板治理与生产上游收口</h2>
+        </div>
+
+        <p>
+          当前 <code>deploy/compose/</code> 是单机单点结构（宿主机或 Docker 停即中断），且存在 3 项已记录在 ADR 中的多副本短板。阶段 2 将轨道 A 与轨道 B 的成果落到高可用底座上，完成生产化收口。
+        </p>
+
+        <figure class="diagram">
+          <div class="diagram-canvas">
+            <svg viewBox="0 0 980 374" role="img" aria-labelledby="fig4-title fig4-desc" xmlns="http://www.w3.org/2000/svg">
+              <title id="fig4-title">图 4：ADR-0002 物理分池多副本拓扑与三大生产短板治理图</title>
+              <desc id="fig4-desc">上方展示 Ingress 池、Egress 池与 AI 池的物理隔离多副本架构，下方展示解决顺丰令牌互踢、跨节点撤销/限流同步与工作负载 mTLS 证书热轮换的三大基础能力层。</desc>
+              <defs>
+                <marker id="ha-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#1d4ed8"/>
+                </marker>
+                <marker id="ha-teal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#0f766e"/>
+                </marker>
+              </defs>
+
+              <!-- Pool 1: Ingress Pool -->
+              <rect x="16" y="16" width="234" height="202" rx="10" fill="#f8fafc" stroke="#64748b" stroke-width="1.6"/>
+              <rect x="16" y="16" width="234" height="30" rx="10" fill="#334155"/>
+              <rect x="16" y="34" width="234" height="12" fill="#334155"/>
+              <text x="133" y="36" text-anchor="middle" font-size="11.5" font-weight="700" fill="#ffffff">Ingress 池（独立故障域）</text>
+              <rect x="30" y="60" width="96" height="48" rx="6" fill="#ffffff" stroke="#94a3b8"/>
+              <text x="78" y="81" text-anchor="middle" font-size="10.2" font-weight="700" fill="#0f172a">Replica #1</text>
+              <text x="78" y="97" text-anchor="middle" font-size="9.2" fill="#475569">front + agw</text>
+              <rect x="140" y="60" width="96" height="48" rx="6" fill="#ffffff" stroke="#94a3b8"/>
+              <text x="188" y="81" text-anchor="middle" font-size="10.2" font-weight="700" fill="#0f172a">Replica #N</text>
+              <text x="188" y="97" text-anchor="middle" font-size="9.2" fill="#475569">front + agw</text>
+              <rect x="30" y="122" width="206" height="82" rx="6" fill="#f1f5f9" stroke="#cbd5e1"/>
+              <text x="42" y="142" font-size="9.8" fill="#1e293b">• 独立 Namespace / NetPol</text>
+              <text x="42" y="160" font-size="9.8" fill="#1e293b">• 严格 JWT + 后端 mTLS</text>
+              <text x="42" y="178" font-size="9.8" fill="#1e293b">• 全副本 observed_digest 一致</text>
+              <text x="42" y="196" font-size="9.8" fill="#1e293b">• 独立滚动升级与回滚</text>
+
+              <!-- Pool 2: Egress Pool (Highlighted Core) -->
+              <rect x="268" y="16" width="444" height="202" rx="10" fill="#eff6ff" stroke="#1d4ed8" stroke-width="2"/>
+              <rect x="268" y="16" width="444" height="30" rx="10" fill="#1d4ed8"/>
+              <rect x="268" y="34" width="444" height="12" fill="#1d4ed8"/>
+              <text x="490" y="36" text-anchor="middle" font-size="11.5" font-weight="700" fill="#ffffff">Egress 池（核心生产出站域 · 多副本 HA）</text>
+
+              <rect x="284" y="60" width="128" height="60" rx="7" fill="#ffffff" stroke="#60a5fa" stroke-width="1.4"/>
+              <text x="348" y="81" text-anchor="middle" font-size="10.5" font-weight="700" fill="#1e3a8a">Gateway Pod × N</text>
+              <text x="348" y="97" text-anchor="middle" font-size="9.2" fill="#334155">front + agw 1.7.0+</text>
+              <text x="348" y="111" text-anchor="middle" font-size="9" fill="#1d4ed8">sync-jwks 伴随同步</text>
+
+              <rect x="428" y="60" width="130" height="60" rx="7" fill="#ffffff" stroke="#14b8a6" stroke-width="1.4"/>
+              <text x="493" y="81" text-anchor="middle" font-size="10.5" font-weight="700" fill="#115e59">gateway-authz × N</text>
+              <text x="493" y="97" text-anchor="middle" font-size="9.2" fill="#334155">mTLS PDP + KMS</text>
+              <text x="493" y="111" text-anchor="middle" font-size="9" fill="#0f766e">OAuth2 / 万邦 / 顺丰票</text>
+
+              <rect x="574" y="60" width="124" height="60" rx="7" fill="#ffffff" stroke="#818cf8" stroke-width="1.4"/>
+              <text x="636" y="81" text-anchor="middle" font-size="10.5" font-weight="700" fill="#312e81">provider-signer × N</text>
+              <text x="636" y="97" text-anchor="middle" font-size="9.2" fill="#334155">顺丰密文签名器</text>
+              <text x="636" y="111" text-anchor="middle" font-size="9" fill="#4338ca">独立出口 + 被动熔断</text>
+
+              <rect x="284" y="134" width="414" height="70" rx="7" fill="#ffffff" stroke="#bfdbfe"/>
+              <text x="298" y="154" font-size="10.2" font-weight="700" fill="#1e3a8a">生产上游与网络收口硬规则</text>
+              <text x="298" y="173" font-size="9.6" fill="#334155">• 切换万邦/顺丰生产 HTTPS 地址，PROD 彻底锁死明文 HTTP 例外</text>
+              <text x="298" y="191" font-size="9.6" fill="#334155">• 出口白名单（NetworkPolicy / Egress GW）+ 承运商 IP 变更刷新 SOP</text>
+
+              <!-- Pool 3: AI Pool -->
+              <rect x="730" y="16" width="234" height="202" rx="10" fill="#eef2ff" stroke="#4338ca" stroke-width="1.6"/>
+              <rect x="730" y="16" width="234" height="30" rx="10" fill="#4338ca"/>
+              <rect x="730" y="34" width="234" height="12" fill="#4338ca"/>
+              <text x="847" y="36" text-anchor="middle" font-size="11.5" font-weight="700" fill="#ffffff">AI 池（TELOS 独立故障域）</text>
+              <rect x="744" y="60" width="96" height="48" rx="6" fill="#ffffff" stroke="#a5b4fc"/>
+              <text x="792" y="81" text-anchor="middle" font-size="10.2" font-weight="700" fill="#312e81">Replica #1</text>
+              <text x="792" y="97" text-anchor="middle" font-size="9.2" fill="#475569">LLM/MCP/A2A</text>
+              <rect x="854" y="60" width="96" height="48" rx="6" fill="#ffffff" stroke="#a5b4fc"/>
+              <text x="902" y="81" text-anchor="middle" font-size="10.2" font-weight="700" fill="#312e81">Replica #N</text>
+              <text x="902" y="97" text-anchor="middle" font-size="9.2" fill="#475569">LLM/MCP/A2A</text>
+              <rect x="744" y="122" width="206" height="82" rx="6" fill="#e0e7ff" stroke="#c7d2fe"/>
+              <text x="756" y="142" font-size="9.8" fill="#1e1b4b">• 独立密钥与配额，不串业务</text>
+              <text x="756" y="160" font-size="9.8" fill="#1e1b4b">• LLM/MCP/A2A 强策略绑定</text>
+              <text x="756" y="178" font-size="9.8" fill="#1e1b4b">• 工具权限独立于路由权限</text>
+              <text x="756" y="196" font-size="9.8" fill="#1e1b4b">• 独立限流与审计采样</text>
+
+              <!-- Connectors from Egress to Bottom 3 Coordination Cards -->
+              <line x1="348" y1="218" x2="174" y2="254" stroke="#1d4ed8" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#ha-blue)"/>
+              <line x1="493" y1="218" x2="490" y2="254" stroke="#0f766e" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#ha-teal)"/>
+              <line x1="636" y1="218" x2="806" y2="254" stroke="#1d4ed8" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#ha-blue)"/>
+
+              <!-- Bottom 3 Cards: Solving 3 Known Single-Host Gaps -->
+              <rect x="16" y="258" width="302" height="100" rx="9" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+              <text x="30" y="280" font-size="11" font-weight="700" fill="#92400e">短板治理 ① · 顺丰令牌跨实例协调</text>
+              <text x="30" y="300" font-size="9.6" fill="#334155">• 共享租约存储 + 分布式单飞换票锁</text>
+              <text x="30" y="318" font-size="9.6" fill="#334155">• 多副本扩容/重启不再互相作废线上令牌</text>
+              <text x="30" y="336" font-size="9.6" fill="#78350f">• 协调器不可用按 fail-closed 拒发新票</text>
+
+              <rect x="339" y="258" width="302" height="100" rx="9" fill="#f0fdfa" stroke="#0f766e" stroke-width="1.5"/>
+              <text x="353" y="280" font-size="11" font-weight="700" fill="#115e59">短板治理 ② · 跨节点撤销与限流</text>
+              <text x="353" y="300" font-size="9.6" fill="#334155">• 取代单机 .lock 文件与单进程局部限流桶</text>
+              <text x="353" y="318" font-size="9.6" fill="#334155">• 撤销/封禁多节点同步并实测生效窗口</text>
+              <text x="353" y="336" font-size="9.6" fill="#134e4a">• 共享状态异常回退为严格拒发/保底上限</text>
+
+              <rect x="662" y="258" width="302" height="100" rx="9" fill="#eff6ff" stroke="#1d4ed8" stroke-width="1.5"/>
+              <text x="676" y="280" font-size="11" font-weight="700" fill="#1e3a8a">短板治理 ③ · 证书轮换与观测接入</text>
+              <text x="676" y="300" font-size="9.6" fill="#334155">• authz / signer 工作负载证书热重载（cert-manager）</text>
+              <text x="676" y="318" font-size="9.6" fill="#334155">• OTel / Prometheus / Grafana / Alertmanager 值守人</text>
+              <text x="676" y="336" font-size="9.6" fill="#1e3a8a">• 0600 JSONL 审计安全归集与留存合规</text>
+            </svg>
+          </div>
+          <figcaption>
+            <strong>图 4 · 生产高可用与短板收口：</strong>同时跟进上游包含 <a href="https://github.com/agentgateway/agentgateway/pull/4401" target="_blank" rel="noopener">PR #4401</a>（原生拒绝重复 <code>Host</code>）的 <code>agentgateway</code> 正式 OSS 版本，用 <code>gateway-control reimage</code> 或滚动升级演练无感升级；并评估直连承运商的静态主机被动熔断需求（1.7.0 静态 <code>host:</code> 熔断未生效，见 <code>ADR-0017</code>）。
+          </figcaption>
+        </figure>
+      </section>
+
+      <!-- SECTION 5 -->
+      <section class="section-card" id="sec-5">
+        <div class="section-header">
+          <span class="section-num">§ 05</span>
+          <h2>阶段 3：D3 生产候选真实验证与 11 项故障演练</h2>
+        </div>
+
+        <p>
+          按 <code>docs/G06_Testing_and_Acceptance.md</code> §11.1，生产候选验证必须<strong>在同构预发布环境按 A → F 顺序逐层举证</strong>，不能跳步，也不能用离线静态检查或单机替身结果替代多副本与真实负载证据。所有证据文件必须记录镜像摘要、Gatekeeper/本仓库 commit、策略摘要、环境与时钟元数据。
+        </p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>验证层级（G06）</th>
+                <th>核心验证内容</th>
+                <th>客观退出要求</th>
+                <th>对应标准门禁</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>V4 · 容量与性能三基线</strong></td>
+                <td>同网络/硬件对比：<strong>① 直连 vs ② 纯 L7 代理 vs ③ 全安全链（JWT+ExtAuthZ+凭证+签名器）</strong>；覆盖小 JSON 读、大文件/面单、非幂等写、gRPC/SSE 流式、上游抖动/429 5 类负载</td>
+                <td>产出真实 p50/p95/p99、吞吐、CPU/内存与错误分类；<strong>由仓库所有者基于实测拍板正式数字 SLO 与超时阈值</strong>，替换初始告警阈值</td>
+                <td><span class="pill pill--ops">STD-CP5</span><br><span class="pill pill--muted">GW-GAP-08</span></td>
+              </tr>
+              <tr>
+                <td><strong>V5 · 独立安全与供应链</strong></td>
+                <td>隔离环境渗透测试（SSRF、DNS 重绑定、跨租户/跨环境 JWT、Broker 越权、头/Query 夹带、审计/快照防泄密）；将 <code>verify-signature.sh</code> 与 <code>idp-gateway.cdx.json</code> 固化入 CI</td>
+                <td>零未修复高危安全缺陷；CI 对未验签镜像或含明文密钥快照自动阻断</td>
+                <td><span class="pill pill--danger">STD-CP5</span><br><span class="pill pill--muted">GW-GAP-13</span></td>
+              </tr>
+              <tr>
+                <td><strong>全量验收与协议矩阵</strong></td>
+                <td>逐条跑完 <code>acceptance_matrix.csv</code>（95 条）、<code>protocol-compatibility.csv</code>（12 项，补齐 HEAD/OPTIONS/H2 多路复用/二进制/大 JSON 413/证书轮换）及适用范围 UX 验证</td>
+                <td>除明确裁定不适用项外全部具有可复现运行证据，更新 <code>design-status.json</code> 与 <code>project-manifest.json</code></td>
+                <td><span class="pill pill--gw">STD-CP1..4</span><br><span class="pill pill--muted">GW-GAP-10</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>11 项生产故障与运维演练矩阵（<code>tests/acceptance/operational-exercises.csv</code> + Runbook）</h3>
+        <div class="filter-bar" role="group" aria-label="按类别筛选 11 项故障演练">
+          <button class="filter-btn" type="button" data-filter="all" aria-pressed="true">全部 (11)</button>
+          <button class="filter-btn" type="button" data-filter="infra" aria-pressed="false">实例与网络 (4)</button>
+          <button class="filter-btn" type="button" data-filter="auth" aria-pressed="false">身份、凭证与配额 (3)</button>
+          <button class="filter-btn" type="button" data-filter="rollout" aria-pressed="false">上游、发布与防泄密 (4)</button>
+          <span class="filter-count" id="ex-count">显示 11 / 11 项</span>
+        </div>
+
+        <div class="table-wrap">
+          <table id="exercises-table">
+            <thead>
+              <tr>
+                <th>演练编号</th>
+                <th>Runbook</th>
+                <th>故障注入场景与验证目标</th>
+                <th>绝对禁令（不可妥协）</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr data-cat="infra">
+                <td><code>GATEWAY_INSTANCE_DOWN</code></td>
+                <td><span class="pill pill--gw">RB-06</span></td>
+                <td>强杀单个网关实例，验证同池其他副本持续可用、看守/调度器自动拉起且不跳过配置对账</td>
+                <td>禁止无对账直接恢复对外收流量</td>
+              </tr>
+              <tr data-cat="infra">
+                <td><code>REGION_FAILURE</code></td>
+                <td><span class="pill pill--gw">RB-06</span></td>
+                <td>模拟整个可用区/节点失效，验证故障域隔离、受控切换与指标告警及时触发</td>
+                <td>禁止跨安全域混池承载应急流量</td>
+              </tr>
+              <tr data-cat="infra">
+                <td><code>DNS_REBINDING</code></td>
+                <td><span class="pill pill--danger">RB-05</span></td>
+                <td>在隔离网络将公网域名改解析至私网/回环 IP，验证出口网络策略与网关阻断外发</td>
+                <td>禁止关闭出口白名单或忽略私网阻断</td>
+              </tr>
+              <tr data-cat="infra">
+                <td><code>PROVIDER_429</code></td>
+                <td><span class="pill pill--ops">RB-04</span></td>
+                <td>上游返回 429 与 <code>Retry-After</code>，验证与网关本地限流 429 可清晰区分并按约定冷却</td>
+                <td>禁止将 Provider 429 混淆为本地拒绝</td>
+              </tr>
+              <tr data-cat="auth">
+                <td><code>PDP_UNAVAILABLE</code></td>
+                <td><span class="pill pill--danger">RB-01</span></td>
+                <td>切断 Gatekeeper PDP / OpenFGA，验证高风险出站请求 100% Fail-Closed（503），恢复后自愈</td>
+                <td>禁止跳过授权校验或临时降级为 Allow</td>
+              </tr>
+              <tr data-cat="auth">
+                <td><code>TOKEN_BROKER_UNAVAILABLE</code></td>
+                <td><span class="pill pill--danger">RB-02</span></td>
+                <td>模拟令牌端点/KMS 不可用，验证绝不续用过期凭证、不降级透传内部 JWT</td>
+                <td>禁止用过期令牌提交写操作或打印明文</td>
+              </tr>
+              <tr data-cat="auth">
+                <td><code>QUOTA_COORDINATOR_DOWN</code></td>
+                <td><span class="pill pill--ops">RB-04</span></td>
+                <td>停掉跨实例配额协调器，验证回退到严格本地保底上限或拒绝，且绝不跨账户挤占</td>
+                <td>禁止无上限放开全局配额</td>
+              </tr>
+              <tr data-cat="rollout">
+                <td><code>PROVIDER_504_UNKNOWN</code></td>
+                <td><span class="pill pill--danger">RB-04</span></td>
+                <td>对已外发非幂等写操作制造上游超时，验证网关零自动重放且调用方收到明确超时并走业务对账</td>
+                <td>严禁网关自动重放创建包裹/面单写请求</td>
+              </tr>
+              <tr data-cat="rollout">
+                <td><code>CONFIG_PARTIAL_APPLY</code></td>
+                <td><span class="pill pill--ops">RB-03</span></td>
+                <td>模拟池内仅部分副本应用新快照，验证状态必为 <code>PARTIAL / UNKNOWN</code> 并触发对账回滚</td>
+                <td>禁止部分成功仍标记 <code>ACTIVE</code></td>
+              </tr>
+              <tr data-cat="rollout">
+                <td><code>REVOCATION_DURING_ROLLBACK</code></td>
+                <td><span class="pill pill--danger">RB-07</span></td>
+                <td>撤销账户后立刻执行路由快照回滚，验证被撤销账户仍被 403 拒绝（撤销表独立于快照）</td>
+                <td>严禁配置回滚逆向复活已撤销账户</td>
+              </tr>
+              <tr data-cat="rollout">
+                <td><code>CAPTURE_DATA_EXFILTRATION</code></td>
+                <td><span class="pill pill--muted">一期关闭</span></td>
+                <td>若开启 <code>GW-GAP-07</code> 报文采集，验证租户/角色隔离、采集前脱敏、时间窗与导出审计（未开启须显式记录关闭证据）</td>
+                <td>禁止明文 Body / Token 落盘或导出到工单</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- SECTION 6 -->
+      <section class="section-card" id="sec-6">
+        <div class="section-header">
+          <span class="section-num">§ 06</span>
+          <h2>阶段 4：D4 正式发布波次与交互式 Go/No-Go 放行清单</h2>
+        </div>
+
+        <p>
+          完成阶段 3 全部 D3 证据归档并经你确认 <code>STD-CP1</code>–<code>STD-CP5</code> 后，按“封板 → 只读灰度 → 写操作灰度 → 跨刷新周期扩量”四波次切流生产。
+        </p>
+
+        <figure class="diagram">
+          <div class="diagram-canvas">
+            <svg viewBox="0 0 980 284" role="img" aria-labelledby="fig5-title fig5-desc" xmlns="http://www.w3.org/2000/svg">
+              <title id="fig5-title">图 5：D3 逐层验收门槛与 D4 四波次受控灰度放量图</title>
+              <desc id="fig5-desc">左侧呈现 G06 第 11.1 节 A 至 F 逐层验收阶梯，右侧呈现 D4 生产封板、Canary 1 只读、Canary 2 写操作、分批扩量四步波次及红色自动止损回滚条件。</desc>
+              <defs>
+                <marker id="d4-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#15803d"/>
+                </marker>
+              </defs>
+
+              <!-- Left: D3 Funnel (A -> F) -->
+              <rect x="14" y="14" width="270" height="256" rx="10" fill="#fffbeb" stroke="#b45309" stroke-width="1.6"/>
+              <rect x="14" y="14" width="270" height="30" rx="10" fill="#b45309"/>
+              <rect x="14" y="32" width="270" height="12" fill="#b45309"/>
+              <text x="149" y="34" text-anchor="middle" font-size="11.2" font-weight="700" fill="#ffffff">D3 逐层准入阶梯（不可跳步）</text>
+
+              <rect x="28" y="54" width="242" height="28" rx="5" fill="#ffffff" stroke="#fde68a"/>
+              <text x="38" y="72" font-size="9.8" font-weight="700" fill="#78350f">A. Native Config：摘要校验 + 无内联密钥</text>
+
+              <rect x="28" y="88" width="242" height="28" rx="5" fill="#ffffff" stroke="#fde68a"/>
+              <text x="38" y="106" font-size="9.8" font-weight="700" fill="#78350f">B. Identity/Broker：GK 13/13 + KMS 轮换</text>
+
+              <rect x="28" y="122" width="242" height="28" rx="5" fill="#ffffff" stroke="#fde68a"/>
+              <text x="38" y="140" font-size="9.8" font-weight="700" fill="#78350f">C. Traffic/Protocol：压测 SLO + 12 项协议</text>
+
+              <rect x="28" y="156" width="242" height="28" rx="5" fill="#ffffff" stroke="#fde68a"/>
+              <text x="38" y="174" font-size="9.8" font-weight="700" fill="#78350f">D. Rollout/Resilience：多副本漂移 + 回滚</text>
+
+              <rect x="28" y="190" width="242" height="28" rx="5" fill="#ffffff" stroke="#fde68a"/>
+              <text x="38" y="208" font-size="9.8" font-weight="700" fill="#78350f">E. Observability/Sec：渗透 + 审计脱敏</text>
+
+              <rect x="28" y="224" width="242" height="32" rx="5" fill="#fef3c7" stroke="#d97706" stroke-width="1.4"/>
+              <text x="38" y="244" font-size="10" font-weight="700" fill="#92400e">F. Release Decision：所有者依证据放行</text>
+
+              <!-- Bridge arrow D3 -> D4 -->
+              <line x1="284" y1="142" x2="314" y2="142" stroke="#15803d" stroke-width="2" marker-end="url(#d4-green)"/>
+
+              <!-- Right: D4 4 Waves -->
+              <rect x="318" y="14" width="648" height="256" rx="10" fill="#f0fdf4" stroke="#15803d" stroke-width="1.6"/>
+              <rect x="318" y="14" width="648" height="30" rx="10" fill="#15803d"/>
+              <rect x="318" y="32" width="648" height="12" fill="#15803d"/>
+              <text x="642" y="34" text-anchor="middle" font-size="11.5" font-weight="700" fill="#ffffff">D4 正式发布四波次受控放量与止损护栏</text>
+
+              <!-- Wave 1 -->
+              <rect x="332" y="58" width="142" height="128" rx="8" fill="#ffffff" stroke="#86efac" stroke-width="1.4"/>
+              <text x="403" y="79" text-anchor="middle" font-size="10.5" font-weight="700" fill="#14532d">Wave 1 · 生产封板</text>
+              <text x="342" y="100" font-size="9.3" fill="#334155">• 锁定镜像 digest</text>
+              <text x="342" y="118" font-size="9.3" fill="#334155">• 冻结快照 SHA-256</text>
+              <text x="342" y="136" font-size="9.3" fill="#334155">• 核验 PROD 禁明文</text>
+              <text x="342" y="154" font-size="9.3" fill="#334155">• 确认回滚基线与值守</text>
+              <text x="342" y="174" font-size="9" font-weight="700" fill="#15803d">流量：0%</text>
+
+              <line x1="474" y1="122" x2="490" y2="122" stroke="#15803d" stroke-width="1.6" marker-end="url(#d4-green)"/>
+
+              <!-- Wave 2 -->
+              <rect x="494" y="58" width="142" height="128" rx="8" fill="#ffffff" stroke="#86efac" stroke-width="1.4"/>
+              <text x="565" y="79" text-anchor="middle" font-size="10.5" font-weight="700" fill="#14532d">Wave 2 · 只读灰度</text>
+              <text x="504" y="100" font-size="9.3" fill="#334155">• 仅开查单/探活路由</text>
+              <text x="504" y="118" font-size="9.3" fill="#334155">• 核对全副本 digest</text>
+              <text x="504" y="136" font-size="9.3" fill="#334155">• 核验 Trace 与审计</text>
+              <text x="504" y="154" font-size="9.3" fill="#334155">• 确认零密钥泄漏</text>
+              <text x="504" y="174" font-size="9" font-weight="700" fill="#15803d">流量：极小比例只读</text>
+
+              <line x1="636" y1="122" x2="652" y2="122" stroke="#15803d" stroke-width="1.6" marker-end="url(#d4-green)"/>
+
+              <!-- Wave 3 -->
+              <rect x="656" y="58" width="142" height="128" rx="8" fill="#ffffff" stroke="#86efac" stroke-width="1.4"/>
+              <text x="727" y="79" text-anchor="middle" font-size="10.5" font-weight="700" fill="#14532d">Wave 3 · 写操作灰度</text>
+              <text x="666" y="100" font-size="9.3" fill="#334155">• 开放下单/取消/面单</text>
+              <text x="666" y="118" font-size="9.3" fill="#334155">• 与承运商单号逐笔对</text>
+              <text x="666" y="136" font-size="9.3" fill="#334155">• 确认超时零重放</text>
+              <text x="666" y="154" font-size="9.3" fill="#334155">• 验证错误归因准确</text>
+              <text x="666" y="174" font-size="9" font-weight="700" fill="#15803d">流量：单租户/小批写</text>
+
+              <line x1="798" y1="122" x2="814" y2="122" stroke="#15803d" stroke-width="1.6" marker-end="url(#d4-green)"/>
+
+              <!-- Wave 4 -->
+              <rect x="818" y="58" width="134" height="128" rx="8" fill="#dcfce7" stroke="#15803d" stroke-width="1.6"/>
+              <text x="885" y="79" text-anchor="middle" font-size="10.5" font-weight="700" fill="#14532d">Wave 4 · 全量收口</text>
+              <text x="828" y="100" font-size="9.3" fill="#14532d">• 按业务线分批扩量</text>
+              <text x="828" y="118" font-size="9.3" fill="#14532d">• 观察完整换票周期</text>
+              <text x="828" y="136" font-size="9.3" fill="#14532d">  （顺丰 2h + JWKS）</text>
+              <text x="828" y="154" font-size="9.3" fill="#14532d">• 归档发布后证据</text>
+              <text x="828" y="174" font-size="9" font-weight="700" fill="#166534">闭合 STD-CP6</text>
+
+              <!-- Rollback trigger bar -->
+              <rect x="332" y="202" width="620" height="54" rx="7" fill="#fef2f2" stroke="#fca5a5" stroke-width="1.4"/>
+              <text x="346" y="222" font-size="10.2" font-weight="700" fill="#991b1b">强制止损 / 立即回滚触发条件（任一命中即中止扩量并执行 rollback）</text>
+              <text x="346" y="242" font-size="9.4" fill="#7f1d1d">① 副本摘要漂移 / PARTIAL 无法收敛   ② 任意明文凭证或跨租户越权迹象   ③ 非幂等写重放   ④ 突破已批准错误预算</text>
+            </svg>
+          </div>
+          <figcaption>
+            <strong>图 5 · D3 准入漏斗与 D4 灰度波次：</strong>只有通过左侧 A–F 全层级验证才允许启动右侧放量；放量过程中发现任何安全或漂移红线立即停止扩量并回滚至封板快照（回滚不逆向影响高优撤销表）。
+          </figcaption>
+        </figure>
+
+        <div class="checklist-box" id="gonogo-box">
+          <div class="checklist-head">
+            <div>
+              <strong>生产发布前 Go / No-Go 交互式放行检查单</strong>
+              <div style="font-size: 0.78rem; color: var(--ink-muted);">仅供评审会本地勾选跟踪（不写入远端状态），须全部勾选且附可核验证据方可进入 D4。</div>
+            </div>
+            <span class="pill pill--ok" id="check-progress-label">0 / 10 已核验</span>
+          </div>
+          <div class="progress-track" aria-hidden="true"><div class="progress-fill" id="check-progress-fill"></div></div>
+          <ul class="check-list">
+            <li class="check-item"><label><input type="checkbox"><span><strong>[阶段 0]</strong> 已拍板 <code>ADR-0018</code> / <code>ADR-0019</code> 状态、一期 UI/采集范围、底座形态与顺丰副本策略。</span></label></li>
+            <li class="check-item"><label><input type="checkbox"><span><strong>[轨道 A]</strong> 生产 Gatekeeper 5 项前置（<code>provider_account</code>、专属 <code>aud</code>、mTLS PDP、<code>env</code> 策略、<code>≥10dc843</code> 与换钥规程）在预发环境 13/13 全过。</span></label></li>
+            <li class="check-item"><label><input type="checkbox"><span><strong>[轨道 A]</strong> 正式 KMS / Secret Manager 适配器已上线，生产环境彻底消除手工 <code>0600</code> 凭证文件。</span></label></li>
+            <li class="check-item"><label><input type="checkbox"><span><strong>[轨道 B]</strong> Fabric → <code>gateway-control</code> 发布适配器通过集成测试与安全负向对照，幂等 409 / CAS / 摘要对账闭环。</span></label></li>
+            <li class="check-item"><label><input type="checkbox"><span><strong>[阶段 2]</strong> Ingress / Egress / AI 分池多副本部署完成，顺丰令牌协调、跨节点撤销/限流与证书热轮换验证通过。</span></label></li>
+            <li class="check-item"><label><input type="checkbox"><span><strong>[阶段 2]</strong> 万邦/顺丰已切换生产 HTTPS 地址，<code>PROD</code> 彻底关闭明文 HTTP 例外，证书链与 SNI 校验通过。</span></label></li>
+            <li class="check-item"><label><input type="checkbox"><span><strong>[阶段 3]</strong> V4 三基线压测完成，正式数字 SLO、错误预算与超时配置已由仓库所有者拍板并写入生产告警。</span></label></li>
+            <li class="check-item"><label><input type="checkbox"><span><strong>[阶段 3]</strong> V5 独立安全渗透测试零高危遗留；镜像签名校验与 SBOM 已成为 CI/CD 强制阻断门禁。</span></label></li>
+            <li class="check-item"><label><input type="checkbox"><span><strong>[阶段 3]</strong> 11 项故障与回滚演练（含 <code>REVOCATION_DURING_ROLLBACK</code> 与 <code>PROVIDER_504_UNKNOWN</code>）全部留证通过。</span></label></li>
+            <li class="check-item"><label><input type="checkbox"><span><strong>[阶段 3/4]</strong> 95 条验收矩阵、12 项协议矩阵及 <code>STD-CP1</code>–<code>STD-CP5</code> 证据归档齐备，值守人与回滚基线确认就位。</span></label></li>
+          </ul>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer>
+    <span>IDP Gateway Production Release Plan · 依据 <code>docs/development-plan.md</code>、<code>docs/G03–G06</code>、<code>ADR-0001..0019</code> 与 <code>tests/acceptance/</code> 编制</span>
+    <span>Baseline 2024 单文件离线 HTML · 零外部依赖 · 支持打印导出 PDF</span>
+  </footer>
+
+  <script>
+    (function () {
+      // Accessible tablist switching
+      document.querySelectorAll('[data-tabs]').forEach(function (root) {
+        var tabs = Array.prototype.slice.call(root.querySelectorAll('[role="tab"]'));
+        var panels = Array.prototype.slice.call(root.querySelectorAll('[role="tabpanel"]'));
+
+        function activate(nextTab, focusTab) {
+          tabs.forEach(function (tab, idx) {
+            var selected = tab === nextTab;
+            tab.setAttribute('aria-selected', selected ? 'true' : 'false');
+            tab.tabIndex = selected ? 0 : -1;
+            if (panels[idx]) panels[idx].hidden = !selected;
+          });
+          if (focusTab) nextTab.focus();
+        }
+
+        tabs.forEach(function (tab, idx) {
+          tab.tabIndex = tab.getAttribute('aria-selected') === 'true' ? 0 : -1;
+          tab.addEventListener('click', function () { activate(tab, false); });
+          tab.addEventListener('keydown', function (ev) {
+            var targetIdx = null;
+            if (ev.key === 'ArrowRight') targetIdx = (idx + 1) % tabs.length;
+            else if (ev.key === 'ArrowLeft') targetIdx = (idx - 1 + tabs.length) % tabs.length;
+            else if (ev.key === 'Home') targetIdx = 0;
+            else if (ev.key === 'End') targetIdx = tabs.length - 1;
+            if (targetIdx !== null) {
+              ev.preventDefault();
+              activate(tabs[targetIdx], true);
+            }
+          });
+        });
+      });
+
+      // 11 exercises category filter
+      var filterBtns = Array.prototype.slice.call(document.querySelectorAll('.filter-btn'));
+      var rows = Array.prototype.slice.call(document.querySelectorAll('#exercises-table tbody tr'));
+      var countEl = document.getElementById('ex-count');
+
+      filterBtns.forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var cat = btn.getAttribute('data-filter');
+          filterBtns.forEach(function (b) { b.setAttribute('aria-pressed', b === btn ? 'true' : 'false'); });
+          var visible = 0;
+          rows.forEach(function (row) {
+            var show = cat === 'all' || row.getAttribute('data-cat') === cat;
+            row.hidden = !show;
+            if (show) visible += 1;
+          });
+          if (countEl) countEl.textContent = '显示 ' + visible + ' / ' + rows.length + ' 项';
+        });
+      });
+
+      // Interactive Go/No-Go checklist progress
+      var boxes = Array.prototype.slice.call(document.querySelectorAll('#gonogo-box input[type="checkbox"]'));
+      var progressFill = document.getElementById('check-progress-fill');
+      var progressLabel = document.getElementById('check-progress-label');
+
+      function updateChecklist() {
+        var done = 0;
+        boxes.forEach(function (box) {
+          var li = box.closest('.check-item');
+          if (li) li.classList.toggle('is-checked', box.checked);
+          if (box.checked) done += 1;
+        });
+        var pct = boxes.length ? Math.round((done / boxes.length) * 100) : 0;
+        if (progressFill) progressFill.style.width = pct + '%';
+        if (progressLabel) {
+          progressLabel.textContent = done + ' / ' + boxes.length + (done === boxes.length ? ' · 全部核验通过' : ' 已核验');
+        }
+      }
+      boxes.forEach(function (box) { box.addEventListener('change', updateChecklist); });
+
+      // TOC Scroll-Spy
+      var tocLinks = Array.prototype.slice.call(document.querySelectorAll('.toc a[href^="#"]'));
+      var sections = tocLinks.map(function (l) { return document.querySelector(l.getAttribute('href')); }).filter(Boolean);
+      if ('IntersectionObserver' in window && sections.length > 0) {
+        var observer = new IntersectionObserver(
+          function (entries) {
+            entries.forEach(function (entry) {
+              if (entry.isIntersecting) {
+                var id = '#' + entry.target.id;
+                tocLinks.forEach(function (l) { l.classList.toggle('is-active', l.getAttribute('href') === id); });
+              }
+            });
+          },
+          { rootMargin: '-18% 0px -70% 0px', threshold: 0.01 }
+        );
+        sections.forEach(function (sec) { observer.observe(sec); });
+      }
+    })();
+  </script>
+</body>
+</html>
