@@ -315,6 +315,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
 40. 2026-11-23，从干净的 `9b6d339` 重跑，证据由 `a1e157d` 写入：97 个用例，96 个通过，751 项检查，唯一失败仍是 `P1-SS-04`。与 `d646fa5` 那份（`08c3ca0`）相比，没有一条用例、也没有一项检查在文字或结果上不同。起止是 2026-11-23T11:27:45Z 到 11:28:58Z，相差 72.9 秒。`--check-evidence` 打印 `OK p1-run-agentgateway-1.7.0.json (96/97 passed, commit 9b6d339)`。这是 `gateway-console --ui` 和页面之后的重跑。套件不启动控制台。`P1-CR-04` 仍是 277 行，`P1-OA-08` 里网关仍是 367 行。记下的值里不同的是提交号、时刻、哈希、每次运行不同的编号和耗时，以及 `P1-HD-01` 里同一条调用方 trace id 下网关换过的 span id。
 
 41. 2026-11-23，仓库所有者决定在锁定的 1.7.0 监听上直接接受两个 `Host` 头。`P1-SS-04` 不再要求 400：检查改为 200 且账户是获授的那个、上游收到一次、被禁目标什么也没收到、第二个 `Host` 不到上游、PDP 被问了一次。前置组件的 `P1-FP-01` 仍要求 400。从干净的 `9152cff` 重跑，证据由 `a6f64b4` 写入：97 个用例全部通过，752 项检查。与 `9b6d339` 那份相比，文字或结果不同的检查只有 `P1-SS-04` 这一条。起止是 2026-11-23T15:09:54Z 到 15:11:07Z，相差 72.4 秒。`--check-evidence` 打印 `OK p1-run-agentgateway-1.7.0.json (97/97 passed, commit 9152cff)`。
+42. 2026-11-24，从干净的 `e726ec5` 重跑，证据由 `02115f0` 写入：97 个用例全部通过，752 项检查。与 `9152cff` 那份（`a6f64b4`）相比，没有一条用例、也没有一项检查在文字或结果上不同。起止是 2026-11-24T05:23:19Z 到 05:24:32Z，相差 72.3 秒。`--check-evidence` 打印 `OK p1-run-agentgateway-1.7.0.json (97/97 passed, commit e726ec5)`。这是 `gateway-authz` 登记表热重载和 `--publisher-identity`（`/v1/egress/policy-version`），以及 `internal/fabricpub` 与 `cmd/gateway-fabric`（[ADR-0020](../../../docs/adr/ADR-0020.md) V1.0）之后的重跑；套件不传 `--publisher-identity`，也不启动 `gateway-fabric`。
 
 除第 41 条这一次由仓库所有者改过的期望外，没有任何期望被放宽过。
 
